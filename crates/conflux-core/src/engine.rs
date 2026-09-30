@@ -214,20 +214,37 @@ impl DownloadEngine {
                                 Some(chunk) => {
                                     chunk.status = ChunkStatus::Downloading;
                                     chunk.adapter_ip = adapter_ip.map(|ip| ip.to_string());
-                                    chunk.clone()
+                                    Some(chunk.clone())
                                 }
-                                None => break, // All chunks claimed or completed
+                                None => {
+                                    let has_inflight =
+                                        queue.iter().any(|c| c.status == ChunkStatus::Downloading);
+                                    if has_inflight {
+                                        None // In-flight chunks remain; wait and retry
+                                    } else {
+                                        break; // All chunks finished or failed
+                                    }
+                                }
+                            }
+                        };
+
+                        let chunk_to_dl = match chunk_to_download {
+                            Some(c) => c,
+                            None => {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                continue;
                             }
                         };
 
                         active_workers.fetch_add(1, Ordering::SeqCst);
 
-                        let range_header = chunk_to_download.to_range_header();
+                        let range_header = chunk_to_dl.to_range_header();
+                        let bytes_before = total_downloaded.load(Ordering::Relaxed);
                         let result = Self::download_chunk(
                             &client,
                             &url,
                             &range_header,
-                            chunk_to_download.start,
+                            chunk_to_dl.start,
                             &writer,
                             &total_downloaded,
                         )
@@ -239,22 +256,23 @@ impl DownloadEngine {
                             Ok(_) => {
                                 completed_chunks.fetch_add(1, Ordering::SeqCst);
                                 let mut queue = chunks_queue.lock().await;
-                                if let Some(c) =
-                                    queue.iter_mut().find(|c| c.id == chunk_to_download.id)
-                                {
+                                if let Some(c) = queue.iter_mut().find(|c| c.id == chunk_to_dl.id) {
                                     c.status = ChunkStatus::Completed;
                                 }
                             }
                             Err(e) => {
                                 error!(
                                     "Worker {} on {:?} failed downloading chunk {}: {}. Re-queueing...",
-                                    worker_idx, adapter_ip, chunk_to_download.id, e
+                                    worker_idx, adapter_ip, chunk_to_dl.id, e
                                 );
+                                // Revert partial bytes downloaded in this attempt to avoid double counting
+                                let bytes_after = total_downloaded.load(Ordering::Relaxed);
+                                let bytes_this_attempt = bytes_after.saturating_sub(bytes_before);
+                                total_downloaded.fetch_sub(bytes_this_attempt, Ordering::Relaxed);
+
                                 // Re-queue failed chunk for surviving workers to steal
                                 let mut queue = chunks_queue.lock().await;
-                                if let Some(c) =
-                                    queue.iter_mut().find(|c| c.id == chunk_to_download.id)
-                                {
+                                if let Some(c) = queue.iter_mut().find(|c| c.id == chunk_to_dl.id) {
                                     c.status = ChunkStatus::Pending;
                                 }
                             }
@@ -265,6 +283,9 @@ impl DownloadEngine {
                 worker_handles.push(handle);
             }
         }
+
+        let done_signal = Arc::new(tokio::sync::Notify::new());
+        let done_signal_clone = Arc::clone(&done_signal);
 
         // Spawn progress monitor loop if progress sender provided
         let progress_handle = if let Some(tx) = progress_tx {
@@ -278,7 +299,23 @@ impl DownloadEngine {
                 let mut last_instant = Instant::now();
 
                 loop {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(tokio::time::Duration::from_millis(200)) => {},
+                        _ = done_signal_clone.notified() => {
+                            let current_bytes = total_downloaded.load(Ordering::Relaxed);
+                            let update = ProgressUpdate {
+                                downloaded_bytes: current_bytes,
+                                total_bytes,
+                                speed_bytes_sec: 0.0,
+                                active_chunks: active_workers.load(Ordering::Relaxed) as usize,
+                                completed_chunks: completed_chunks.load(Ordering::Relaxed) as usize,
+                                total_chunks,
+                                eta_seconds: 0,
+                            };
+                            let _ = tx.send(update).await;
+                            break;
+                        }
+                    }
 
                     let current_bytes = total_downloaded.load(Ordering::Relaxed);
                     let now = Instant::now();
@@ -325,11 +362,33 @@ impl DownloadEngine {
 
         // Wait for all worker tasks to finish
         for handle in worker_handles {
-            let _ = handle.await;
+            if let Err(e) = handle.await {
+                error!("Worker task panicked: {:?}", e);
+            }
         }
 
         // Ensure progress loop terminates
-        let _ = progress_handle.await;
+        done_signal.notify_one();
+        if let Err(e) = progress_handle.await {
+            error!("Progress task panicked: {:?}", e);
+        }
+
+        // Verify all chunks completed successfully
+        {
+            let queue = chunks_queue.lock().await;
+            let incomplete: Vec<_> = queue
+                .iter()
+                .filter(|c| c.status != ChunkStatus::Completed)
+                .collect();
+            if !incomplete.is_empty() {
+                bail!(
+                    "Download incomplete: {} of {} chunks failed to complete. Chunk IDs: {:?}",
+                    incomplete.len(),
+                    total_chunks,
+                    incomplete.iter().map(|c| c.id).collect::<Vec<_>>()
+                );
+            }
+        }
 
         // Ensure all bytes flushed to disk
         writer.sync().await.context("Failed syncing file to disk")?;

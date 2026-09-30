@@ -9,8 +9,7 @@ import {
   Smartphone,
   HardDrive,
 } from 'lucide-react';
-import type { CategoryFilter, NetworkAdapterState } from '../types';
-import { formatSpeed } from '../utils/formatters';
+import type { CategoryFilter, AdapterInfo } from '../types';
 
 interface SidebarProps {
   currentCategory: CategoryFilter;
@@ -21,8 +20,7 @@ interface SidebarProps {
     completed: number;
     paused: number;
   };
-  adapters: NetworkAdapterState[];
-  onToggleAdapter: (adapterId: string) => void;
+  adapters: AdapterInfo[];
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -30,19 +28,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectCategory,
   taskCounts,
   adapters,
-  onToggleAdapter,
 }) => {
-  const getAdapterIcon = (type: string) => {
-    switch (type) {
-      case 'ethernet':
-        return <Network className="w-4 h-4 text-cyan-400" />;
-      case 'wifi':
-        return <Wifi className="w-4 h-4 text-fuchsia-400" />;
-      case 'cellular':
-        return <Smartphone className="w-4 h-4 text-amber-400" />;
-      default:
-        return <Network className="w-4 h-4 text-neutral-400" />;
+  const getAdapterIcon = (name: string) => {
+    const lower = name.toLowerCase();
+    if (lower.includes('wi-fi') || lower.includes('wlan') || lower.includes('wireless')) {
+      return <Wifi className="w-4 h-4 text-fuchsia-400" />;
     }
+    if (lower.includes('cellular') || lower.includes('mobile') || lower.includes('ndis') || lower.includes('lte') || lower.includes('5g')) {
+      return <Smartphone className="w-4 h-4 text-amber-400" />;
+    }
+    return <Network className="w-4 h-4 text-cyan-400" />;
   };
 
   const categories = [
@@ -102,61 +97,47 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
           </div>
 
-          <div className="space-y-2">
-            {adapters.map((adapter) => (
-              <div
-                key={adapter.id}
-                className={`p-2.5 rounded-lg border transition ${
-                  adapter.enabled
-                    ? 'bg-fluent-card border-fluent-border shadow-fluent-card'
-                    : 'bg-fluent-card/30 border-fluent-border/40 opacity-50'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center space-x-2">
-                    <div className="p-1 rounded bg-black/40 border border-white/5">
-                      {getAdapterIcon(adapter.type)}
-                    </div>
-                    <div>
-                      <div className="text-xs font-medium text-white truncate max-w-[110px]" title={adapter.name}>
-                        {adapter.name}
-                      </div>
-                      <div className="text-2xs text-neutral-400 font-mono">{adapter.ip}</div>
-                    </div>
-                  </div>
-
-                  {/* Toggle Switch */}
-                  <button
-                    onClick={() => onToggleAdapter(adapter.id)}
-                    className={`relative inline-flex h-4 w-8 items-center rounded-full transition-colors ${
-                      adapter.enabled ? 'bg-cyan-500' : 'bg-neutral-700'
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
-                        adapter.enabled ? 'translate-x-4.5' : 'translate-x-0.5'
-                      }`}
-                    />
-                  </button>
-                </div>
-
-                {/* Speed & Activity row */}
-                <div className="flex items-center justify-between text-2xs pt-1 border-t border-white/5">
-                  <span className="text-neutral-400">Throughput</span>
-                  <span
-                    className={`font-mono font-semibold ${
-                      adapter.type === 'ethernet'
-                        ? 'text-cyan-400'
-                        : adapter.type === 'wifi'
-                        ? 'text-fuchsia-400'
-                        : 'text-amber-400'
-                    }`}
-                  >
-                    {adapter.enabled ? formatSpeed(adapter.currentSpeedBytesSec) : 'Disabled'}
-                  </span>
-                </div>
+          <div className="space-y-2 max-h-56 overflow-y-auto">
+            {adapters.length === 0 ? (
+              <div className="text-2xs text-neutral-500 px-2 py-3 text-center">
+                Discovering network interfaces...
               </div>
-            ))}
+            ) : (
+              adapters.map((adapter) => (
+                <div
+                  key={adapter.id}
+                  className={`p-2.5 rounded-lg border transition ${
+                    adapter.enabled
+                      ? 'bg-fluent-card border-fluent-border shadow-fluent-card'
+                      : 'bg-fluent-card/30 border-fluent-border/40 opacity-50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <div className="p-1 rounded bg-black/40 border border-white/5">
+                        {getAdapterIcon(adapter.name)}
+                      </div>
+                      <div>
+                        <div className="text-xs font-medium text-white truncate max-w-[120px]" title={adapter.name}>
+                          {adapter.name}
+                        </div>
+                        <div className="text-2xs text-neutral-400 font-mono">{adapter.ip}</div>
+                      </div>
+                    </div>
+
+                    <span
+                      className={`text-3xs px-1.5 py-0.5 rounded font-mono ${
+                        adapter.enabled
+                          ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20'
+                          : 'bg-neutral-800 text-neutral-400'
+                      }`}
+                    >
+                      {adapter.enabled ? 'Ready' : 'Ignored'}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -165,14 +146,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="bg-fluent-card p-3 rounded-lg border border-fluent-border">
         <div className="flex items-center space-x-2 text-xs font-medium text-neutral-300 mb-1.5">
           <HardDrive className="w-3.5 h-3.5 text-neutral-400" />
-          <span>Storage (C:)</span>
+          <span>Storage</span>
         </div>
         <div className="w-full bg-neutral-800 rounded-full h-1.5 overflow-hidden mb-1">
           <div className="bg-cyan-500 h-full rounded-full w-2/3" />
         </div>
         <div className="flex justify-between text-3xs text-neutral-400">
-          <span>412 GB free</span>
-          <span>1 TB total</span>
+          <span>Active Drive</span>
+          <span>Ready</span>
         </div>
       </div>
     </aside>

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Plus, Play, Pause, Settings, Minus, Square, X, Zap } from 'lucide-react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { formatSpeed } from '../utils/formatters';
 
 interface TitleBarProps {
@@ -15,10 +16,37 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   onResumeAll,
   onPauseAll,
 }) => {
+  const handleMinimize = async () => {
+    try {
+      await getCurrentWindow().minimize();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleToggleMaximize = async () => {
+    try {
+      await getCurrentWindow().toggleMaximize();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleClose = async () => {
+    try {
+      await getCurrentWindow().close();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   return (
-    <header className="h-12 bg-fluent-subnav border-b border-fluent-border flex items-center justify-between px-3 select-none">
+    <header
+      data-tauri-drag-region
+      className="h-12 bg-fluent-subnav border-b border-fluent-border flex items-center justify-between px-3 select-none"
+    >
       {/* App branding */}
-      <div className="flex items-center space-x-3">
+      <div data-tauri-drag-region className="flex items-center space-x-3 pointer-events-none">
         <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
           <Zap className="w-4 h-4 text-white fill-white" />
         </div>
@@ -64,7 +92,11 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             {totalSpeed > 0 && (
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
             )}
-            <span className={`relative inline-flex rounded-full h-2 w-2 ${totalSpeed > 0 ? 'bg-cyan-500' : 'bg-neutral-600'}`}></span>
+            <span
+              className={`relative inline-flex rounded-full h-2 w-2 ${
+                totalSpeed > 0 ? 'bg-cyan-500' : 'bg-neutral-600'
+              }`}
+            ></span>
           </span>
           <span className="text-xs font-mono text-cyan-300 font-semibold">
             {formatSpeed(totalSpeed)}
@@ -74,16 +106,31 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
       {/* Windows window management buttons */}
       <div className="flex items-center">
-        <button className="p-1.5 hover:bg-white/10 rounded text-neutral-400 hover:text-white transition">
+        <button
+          className="p-1.5 hover:bg-white/10 rounded text-neutral-400 hover:text-white transition"
+          title="Settings"
+        >
           <Settings className="w-4 h-4" />
         </button>
-        <button className="p-1.5 hover:bg-white/10 rounded text-neutral-400 hover:text-white transition ml-2">
+        <button
+          onClick={handleMinimize}
+          className="p-1.5 hover:bg-white/10 rounded text-neutral-400 hover:text-white transition ml-2"
+          title="Minimize"
+        >
           <Minus className="w-3.5 h-3.5" />
         </button>
-        <button className="p-1.5 hover:bg-white/10 rounded text-neutral-400 hover:text-white transition">
+        <button
+          onClick={handleToggleMaximize}
+          className="p-1.5 hover:bg-white/10 rounded text-neutral-400 hover:text-white transition"
+          title="Maximize"
+        >
           <Square className="w-3 h-3" />
         </button>
-        <button className="p-1.5 hover:bg-red-500 rounded text-neutral-400 hover:text-white transition">
+        <button
+          onClick={handleClose}
+          className="p-1.5 hover:bg-red-500 rounded text-neutral-400 hover:text-white transition"
+          title="Close"
+        >
           <X className="w-3.5 h-3.5" />
         </button>
       </div>

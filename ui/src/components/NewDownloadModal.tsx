@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { X, Download, Plus, Folder } from 'lucide-react';
-import type { NetworkAdapterState } from '../types';
+import { open } from '@tauri-apps/plugin-dialog';
+import type { AdapterInfo } from '../types';
 
 interface NewDownloadModalProps {
   isOpen: boolean;
   onClose: () => void;
-  adapters: NetworkAdapterState[];
-  onStartDownload: (url: string, mirrors: string[], selectedAdapterIds: string[]) => void;
+  adapters: AdapterInfo[];
+  onStartDownload: (url: string, mirrors: string[], selectedAdapterIds: string[], saveDir: string) => void;
 }
 
 export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
@@ -18,6 +19,7 @@ export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
   const [url, setUrl] = useState('');
   const [mirrors, setMirrors] = useState<string[]>([]);
   const [newMirror, setNewMirror] = useState('');
+  const [saveDir, setSaveDir] = useState('Downloads');
   const [selectedAdapters, setSelectedAdapters] = useState<string[]>(
     adapters.filter((a) => a.enabled).map((a) => a.id)
   );
@@ -43,10 +45,25 @@ export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
     }
   };
 
+  const handleBrowse = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: 'Select Destination Folder',
+      });
+      if (selected && typeof selected === 'string') {
+        setSaveDir(selected);
+      }
+    } catch (e) {
+      console.error('Failed to open folder picker:', e);
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!url.trim()) return;
-    onStartDownload(url.trim(), mirrors, selectedAdapters);
+    onStartDownload(url.trim(), mirrors, selectedAdapters, saveDir);
     onClose();
   };
 
@@ -124,9 +141,9 @@ export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
           {/* Adapters to Bond */}
           <div>
             <label className="block text-xs font-medium text-neutral-300 mb-1.5">
-              Participating Network Adapters
+              Participating Network Adapters ({adapters.length} found)
             </label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto">
               {adapters.map((a) => {
                 const isChecked = selectedAdapters.includes(a.id);
                 return (
@@ -163,11 +180,12 @@ export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
               <input
                 type="text"
                 readOnly
-                value="C:\Downloads\Conflux"
-                className="flex-1 bg-black/20 border border-fluent-border rounded-lg px-3 py-1.5 text-xs text-neutral-400 font-mono"
+                value={saveDir}
+                className="flex-1 bg-black/20 border border-fluent-border rounded-lg px-3 py-1.5 text-xs text-neutral-300 font-mono truncate"
               />
               <button
                 type="button"
+                onClick={handleBrowse}
                 className="px-3 py-1.5 bg-fluent-card hover:bg-fluent-card-hover border border-fluent-border text-xs rounded-lg text-neutral-300 hover:text-white flex items-center space-x-1"
               >
                 <Folder className="w-3.5 h-3.5" />
@@ -187,7 +205,7 @@ export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={!url.trim() || selectedAdapters.length === 0}
+              disabled={!url.trim()}
               className="px-4 py-2 bg-fluent-accent hover:bg-fluent-accent-hover disabled:opacity-50 text-black font-semibold text-xs rounded-lg transition shadow-sm"
             >
               Start Accelerated Download

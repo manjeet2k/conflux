@@ -1,120 +1,34 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { invoke, Channel } from '@tauri-apps/api/core';
 import { TitleBar } from './components/TitleBar';
 import { Sidebar } from './components/Sidebar';
 import { DownloadList } from './components/DownloadList';
 import { InspectionDrawer } from './components/InspectionDrawer';
 import { NewDownloadModal } from './components/NewDownloadModal';
-import type { CategoryFilter, DownloadTask, NetworkAdapterState } from './types';
-
-// Mock initial data showcasing channel bonding across Ethernet + Wi-Fi + 4G
-const initialAdapters: NetworkAdapterState[] = [
-  {
-    id: 'eth0',
-    name: 'Realtek PCIe GbE Family Controller',
-    ip: '192.168.1.100',
-    type: 'ethernet',
-    enabled: true,
-    currentSpeedBytesSec: 88.5 * 1024 * 1024,
-    totalBytesDownloaded: 14.2 * 1024 * 1024 * 1024,
-    activeSockets: 8,
-  },
-  {
-    id: 'wlan0',
-    name: 'Intel(R) Wi-Fi 6 AX200 160MHz',
-    ip: '192.168.0.50',
-    type: 'wifi',
-    enabled: true,
-    currentSpeedBytesSec: 42.1 * 1024 * 1024,
-    totalBytesDownloaded: 6.8 * 1024 * 1024 * 1024,
-    activeSockets: 4,
-  },
-  {
-    id: 'usb0',
-    name: 'Remote NDIS 5G Cellular Device',
-    ip: '192.168.42.10',
-    type: 'cellular',
-    enabled: true,
-    currentSpeedBytesSec: 24.3 * 1024 * 1024,
-    totalBytesDownloaded: 2.1 * 1024 * 1024 * 1024,
-    activeSockets: 4,
-  },
-];
-
-const generateMockChunks = (totalChunks = 48) => {
-  const chunks = [];
-  const types: ('ethernet' | 'wifi' | 'cellular')[] = ['ethernet', 'wifi', 'cellular'];
-
-  for (let i = 0; i < totalChunks; i++) {
-    const isCompleted = i < 34;
-    const isDownloading = i >= 34 && i < 38;
-    const status = isCompleted ? 'completed' : isDownloading ? 'downloading' : 'pending';
-    const adapterType = isCompleted || isDownloading ? types[i % 3] : undefined;
-
-    chunks.push({
-      id: i,
-      start: i * 100 * 1024 * 1024,
-      end: (i + 1) * 100 * 1024 * 1024 - 1,
-      status: status as 'completed' | 'downloading' | 'pending',
-      adapterType,
-    });
-  }
-  return chunks;
-};
-
-const initialTasks: DownloadTask[] = [
-  {
-    id: 'task-1',
-    filename: 'ubuntu-24.04-desktop-amd64.iso',
-    url: 'https://releases.ubuntu.com/noble/ubuntu-24.04-desktop-amd64.iso',
-    mirrors: ['https://mirror.us.kernel.org/ubuntu/noble.iso', 'https://cloudflare.mirror.org/ubuntu.iso'],
-    totalBytes: 4.8 * 1024 * 1024 * 1024,
-    downloadedBytes: 3.4 * 1024 * 1024 * 1024,
-    status: 'downloading',
-    currentSpeedBytesSec: 154.9 * 1024 * 1024,
-    etaSeconds: 9,
-    chunks: generateMockChunks(48),
-    adapterBreakdown: {
-      ethernet: 88.5 * 1024 * 1024,
-      wifi: 42.1 * 1024 * 1024,
-      cellular: 24.3 * 1024 * 1024,
-    },
-    savePath: 'C:\\Downloads\\ubuntu-24.04-desktop-amd64.iso',
-    sha256: '2a6a199e1031a5c279cb346646d594993f35b1c03dd4a82aaa0323980dd92451',
-  },
-  {
-    id: 'task-2',
-    filename: 'unreal_engine_5.5_setup.exe',
-    url: 'https://launcher-public-service-prod.ol.epicgames.com/UE5.exe',
-    mirrors: [],
-    totalBytes: 18.5 * 1024 * 1024 * 1024,
-    downloadedBytes: 18.5 * 1024 * 1024 * 1024,
-    status: 'completed',
-    currentSpeedBytesSec: 0,
-    etaSeconds: 0,
-    chunks: generateMockChunks(60).map((c) => ({ ...c, status: 'completed' })),
-    adapterBreakdown: {
-      ethernet: 0,
-      wifi: 0,
-      cellular: 0,
-    },
-    savePath: 'C:\\Downloads\\unreal_engine_5.5_setup.exe',
-    sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
-  },
-];
+import type { AdapterInfo, CategoryFilter, DownloadTask, ProgressEvent, ProbeResult } from './types';
 
 export const App: React.FC = () => {
-  const [adapters, setAdapters] = useState<NetworkAdapterState[]>(initialAdapters);
-  const [tasks, setTasks] = useState<DownloadTask[]>(initialTasks);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>('task-1');
+  const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
+  const [tasks, setTasks] = useState<DownloadTask[]>([]);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [currentCategory, setCurrentCategory] = useState<CategoryFilter>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Calculate global total speed across all active downloads
+  // Fetch real adapters from Rust backend on startup
+  useEffect(() => {
+    invoke<AdapterInfo[]>('discover_adapters')
+      .then((data) => {
+        setAdapters(data);
+      })
+      .catch((e) => {
+        console.error('Failed to discover network adapters:', e);
+      });
+  }, []);
+
   const totalSpeed = tasks
     .filter((t) => t.status === 'downloading')
     .reduce((sum, t) => sum + t.currentSpeedBytesSec, 0);
 
-  // Category counts
   const taskCounts = {
     all: tasks.length,
     downloading: tasks.filter((t) => t.status === 'downloading').length,
@@ -122,7 +36,6 @@ export const App: React.FC = () => {
     paused: tasks.filter((t) => t.status === 'paused').length,
   };
 
-  // Filter tasks based on selected category
   const filteredTasks = tasks.filter((t) => {
     if (currentCategory === 'all') return true;
     return t.status === currentCategory;
@@ -130,98 +43,132 @@ export const App: React.FC = () => {
 
   const selectedTask = tasks.find((t) => t.id === selectedTaskId) || null;
 
-  // Toggle adapter enablement
-  const handleToggleAdapter = (adapterId: string) => {
-    setAdapters((prev) =>
-      prev.map((a) => {
-        if (a.id === adapterId) {
-          const nextEnabled = !a.enabled;
-          return {
-            ...a,
-            enabled: nextEnabled,
-            currentSpeedBytesSec: nextEnabled ? a.currentSpeedBytesSec : 0,
-          };
-        }
-        return a;
-      })
-    );
-  };
+  const handleStartDownload = async (
+    url: string,
+    _mirrors: string[],
+    _selectedAdapterIds: string[],
+    saveDir: string
+  ) => {
+    try {
+      // 1. Probe target URL to obtain file metadata immediately
+      const probe = await invoke<ProbeResult>('probe_url', { url });
 
-  // Pause a task
-  const handlePauseTask = (taskId: string) => {
-    setTasks((prev) =>
-      prev.map((t) => (t.id === taskId ? { ...t, status: 'paused', currentSpeedBytesSec: 0 } : t))
-    );
-  };
+      // 2. Set up high-frequency streaming channel for real-time chunk progress
+      const onProgress = new Channel<ProgressEvent>();
 
-  // Resume a task
-  const handleResumeTask = (taskId: string) => {
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === taskId
-          ? {
-              ...t,
-              status: 'downloading',
-              currentSpeedBytesSec: 154.9 * 1024 * 1024,
+      onProgress.onmessage = (event) => {
+        setTasks((prev) =>
+          prev.map((t) => {
+            if (t.id !== event.task_id) return t;
+
+            if (event.status === 'completed') {
+              return {
+                ...t,
+                status: 'completed',
+                downloadedBytes: t.totalBytes,
+                currentSpeedBytesSec: 0,
+                etaSeconds: 0,
+                completedChunks: event.total_chunks || t.totalChunks,
+                sha256: event.sha256 || t.sha256,
+              };
             }
-          : t
-      )
-    );
-  };
 
-  // Delete a task
-  const handleDeleteTask = (taskId: string) => {
-    setTasks((prev) => prev.filter((t) => t.id !== taskId));
-    if (selectedTaskId === taskId) {
-      setSelectedTaskId(null);
+            if (event.status === 'error') {
+              return {
+                ...t,
+                status: 'error',
+                currentSpeedBytesSec: 0,
+                error: event.error || 'Download failed',
+              };
+            }
+
+            return {
+              ...t,
+              downloadedBytes: event.downloaded_bytes,
+              currentSpeedBytesSec: event.speed_bytes_sec,
+              etaSeconds: event.eta_seconds,
+              activeChunks: event.active_chunks,
+              completedChunks: event.completed_chunks,
+              totalChunks: event.total_chunks,
+            };
+          })
+        );
+      };
+
+      // 3. Initiate accelerated multi-adapter download
+      const taskId = await invoke<string>('start_download', {
+        url,
+        saveDir,
+        onProgress,
+      });
+
+      const newTask: DownloadTask = {
+        id: taskId,
+        filename: probe.filename,
+        url,
+        totalBytes: probe.total_bytes,
+        downloadedBytes: 0,
+        status: 'downloading',
+        currentSpeedBytesSec: 0,
+        etaSeconds: 0,
+        activeChunks: 0,
+        completedChunks: 0,
+        totalChunks: 0,
+        savePath: `${saveDir}/${probe.filename}`,
+      };
+
+      setTasks((prev) => [newTask, ...prev]);
+      setSelectedTaskId(taskId);
+    } catch (e) {
+      console.error('Failed to start download:', e);
     }
   };
 
-  // Global pause/resume all
+  const handlePauseTask = async (taskId: string) => {
+    try {
+      await invoke('pause_download', { taskId });
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === taskId
+            ? { ...t, status: 'paused', currentSpeedBytesSec: 0 }
+            : t
+        )
+      );
+    } catch (e) {
+      console.error('Failed to pause download:', e);
+    }
+  };
+
+  const handleResumeTask = async (taskId: string) => {
+    try {
+      await invoke('resume_download', { taskId });
+    } catch (e) {
+      console.warn('Resume notice:', e);
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    try {
+      await invoke('cancel_download', { taskId });
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      if (selectedTaskId === taskId) {
+        setSelectedTaskId(null);
+      }
+    } catch (e) {
+      console.error('Failed to cancel download:', e);
+    }
+  };
+
   const handlePauseAll = () => {
-    setTasks((prev) =>
-      prev.map((t) => (t.status === 'downloading' ? { ...t, status: 'paused', currentSpeedBytesSec: 0 } : t))
-    );
+    tasks
+      .filter((t) => t.status === 'downloading')
+      .forEach((t) => handlePauseTask(t.id));
   };
 
   const handleResumeAll = () => {
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.status === 'paused'
-          ? { ...t, status: 'downloading', currentSpeedBytesSec: 120 * 1024 * 1024 }
-          : t
-      )
-    );
-  };
-
-  // Start a new download
-  const handleStartDownload = (url: string, mirrors: string[]) => {
-    const filename = url.split('/').pop() || 'download.bin';
-    const newTask: DownloadTask = {
-      id: `task-${Date.now()}`,
-      filename,
-      url,
-      mirrors,
-      totalBytes: 2.4 * 1024 * 1024 * 1024,
-      downloadedBytes: 0,
-      status: 'downloading',
-      currentSpeedBytesSec: 110.5 * 1024 * 1024,
-      etaSeconds: 22,
-      chunks: generateMockChunks(32).map((c, i) => ({
-        ...c,
-        status: i < 2 ? 'downloading' : 'pending',
-        adapterType: i < 2 ? 'ethernet' : undefined,
-      })),
-      adapterBreakdown: {
-        ethernet: 75 * 1024 * 1024,
-        wifi: 35.5 * 1024 * 1024,
-        cellular: 0,
-      },
-      savePath: `C:\\Downloads\\${filename}`,
-    };
-
-    setTasks((prev) => [newTask, ...prev]);
-    setSelectedTaskId(newTask.id);
+    tasks
+      .filter((t) => t.status === 'paused')
+      .forEach((t) => handleResumeTask(t.id));
   };
 
   return (
@@ -242,7 +189,6 @@ export const App: React.FC = () => {
           onSelectCategory={setCurrentCategory}
           taskCounts={taskCounts}
           adapters={adapters}
-          onToggleAdapter={handleToggleAdapter}
         />
 
         {/* Central Stage & Inspection Drawer */}

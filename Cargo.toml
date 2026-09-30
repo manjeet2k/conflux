@@ -2,6 +2,7 @@
 members = [
     "crates/conflux-core",
     "crates/conflux-cli",
+    "crates/conflux-desktop",
 ]
 resolver = "2"
 
@@ -15,14 +16,13 @@ repository = "https://github.com/manjeet/conflux"
 [workspace.dependencies]
 tokio = { version = "1.43", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
-socket2 = { version = "0.5", features = ["all"] }
 sha2 = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
-thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4.5", features = ["derive"] }
 local-ip-address = "0.6"
 futures-util = "0.3"
+uuid = { version = "1", features = ["v4"] }

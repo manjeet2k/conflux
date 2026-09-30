@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, Trash2, FileText, CheckCircle2 } from 'lucide-react';
+import { Play, Pause, Trash2, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
 import type { DownloadTask } from '../types';
 import { formatBytes, formatSpeed, formatEta } from '../utils/formatters';
 
@@ -111,13 +111,15 @@ export const DownloadList: React.FC<DownloadListProps> = ({
                     ? 'bg-emerald-500'
                     : task.status === 'paused'
                     ? 'bg-amber-500'
+                    : task.status === 'error'
+                    ? 'bg-rose-500'
                     : 'bg-gradient-to-r from-cyan-500 to-fuchsia-500'
                 }`}
-                style={{ width: `${percent}%` }}
+                style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
               />
             </div>
 
-            {/* Metrics & Adapter Breakdown row */}
+            {/* Metrics row */}
             <div className="flex items-center justify-between text-2xs text-neutral-400">
               <div className="flex items-center space-x-3">
                 <span className="font-semibold text-white font-mono">{percent.toFixed(1)}%</span>
@@ -138,26 +140,17 @@ export const DownloadList: React.FC<DownloadListProps> = ({
                     <span>Finished</span>
                   </span>
                 )}
+                {task.status === 'error' && (
+                  <span className="text-rose-400 font-medium flex items-center space-x-1">
+                    <AlertCircle className="w-3 h-3" />
+                    <span>{task.error || 'Failed'}</span>
+                  </span>
+                )}
               </div>
 
-              {/* Per-Adapter Throughput Breakdown Pills */}
-              {task.status === 'downloading' && (
-                <div className="flex items-center space-x-1.5 font-mono text-3xs">
-                  {task.adapterBreakdown.ethernet > 0 && (
-                    <span className="px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                      ETH: {formatSpeed(task.adapterBreakdown.ethernet)}
-                    </span>
-                  )}
-                  {task.adapterBreakdown.wifi > 0 && (
-                    <span className="px-1.5 py-0.5 rounded bg-fuchsia-500/10 text-fuchsia-400 border border-fuchsia-500/20">
-                      WIFI: {formatSpeed(task.adapterBreakdown.wifi)}
-                    </span>
-                  )}
-                  {task.adapterBreakdown.cellular > 0 && (
-                    <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                      4G: {formatSpeed(task.adapterBreakdown.cellular)}
-                    </span>
-                  )}
+              {task.totalChunks > 0 && (
+                <div className="font-mono text-3xs text-neutral-500">
+                  Chunks: {task.completedChunks}/{task.totalChunks} (Active: {task.activeChunks})
                 </div>
               )}
             </div>

@@ -1,7 +1,7 @@
 import React from 'react';
 import type { DownloadTask } from '../types';
-import { Layers, ShieldCheck, HardDrive, Link2 } from 'lucide-react';
-import { formatBytes } from '../utils/formatters';
+import { Layers, ShieldCheck, HardDrive, ExternalLink } from 'lucide-react';
+import { openPath } from '@tauri-apps/plugin-opener';
 
 interface InspectionDrawerProps {
   task: DownloadTask | null;
@@ -16,24 +16,17 @@ export const InspectionDrawer: React.FC<InspectionDrawerProps> = ({ task }) => {
     );
   }
 
-  const getChunkColor = (status: string, adapterType?: string) => {
-    if (status === 'completed') {
-      switch (adapterType) {
-        case 'ethernet':
-          return 'bg-cyan-400 border-cyan-300 shadow-sm shadow-cyan-500/30';
-        case 'wifi':
-          return 'bg-fuchsia-400 border-fuchsia-300 shadow-sm shadow-fuchsia-500/30';
-        case 'cellular':
-          return 'bg-amber-400 border-amber-300 shadow-sm shadow-amber-500/30';
-        default:
-          return 'bg-emerald-400 border-emerald-300';
-      }
+  const handleOpenFolder = async () => {
+    try {
+      await openPath(task.savePath);
+    } catch (e) {
+      console.error('Failed to open file path:', e);
     }
-    if (status === 'downloading') {
-      return 'bg-white animate-pulse border-white';
-    }
-    return 'bg-neutral-800/80 border-white/5';
   };
+
+  const totalChunks = Math.max(1, task.totalChunks || 16);
+  const completedCount = task.completedChunks;
+  const activeCount = task.activeChunks;
 
   return (
     <div className="h-52 bg-fluent-subnav/95 border-t border-fluent-border p-3.5 flex flex-col justify-between select-none">
@@ -44,7 +37,7 @@ export const InspectionDrawer: React.FC<InspectionDrawerProps> = ({ task }) => {
             <Layers className="w-4 h-4 text-cyan-400" />
             <span className="text-xs font-semibold text-white">Visual Chunk Map</span>
             <span className="text-2xs text-neutral-400 font-mono">
-              ({task.chunks.filter((c) => c.status === 'completed').length}/{task.chunks.length} blocks completed)
+              ({task.status === 'completed' ? totalChunks : completedCount}/{totalChunks} blocks completed)
             </span>
           </div>
 
@@ -52,19 +45,15 @@ export const InspectionDrawer: React.FC<InspectionDrawerProps> = ({ task }) => {
           <div className="flex items-center space-x-3 text-3xs">
             <div className="flex items-center space-x-1">
               <span className="w-2.5 h-2.5 rounded-sm bg-cyan-400" />
-              <span className="text-neutral-300">Ethernet</span>
-            </div>
-            <div className="flex items-center space-x-1">
-              <span className="w-2.5 h-2.5 rounded-sm bg-fuchsia-400" />
-              <span className="text-neutral-300">Wi-Fi</span>
-            </div>
-            <div className="flex items-center space-x-1">
-              <span className="w-2.5 h-2.5 rounded-sm bg-amber-400" />
-              <span className="text-neutral-300">4G Cellular</span>
+              <span className="text-neutral-300">Completed</span>
             </div>
             <div className="flex items-center space-x-1">
               <span className="w-2.5 h-2.5 rounded-sm bg-white animate-pulse" />
               <span className="text-neutral-300">Active</span>
+            </div>
+            <div className="flex items-center space-x-1">
+              <span className="w-2.5 h-2.5 rounded-sm bg-neutral-800/80 border border-white/10" />
+              <span className="text-neutral-300">Pending</span>
             </div>
           </div>
         </div>
@@ -72,48 +61,52 @@ export const InspectionDrawer: React.FC<InspectionDrawerProps> = ({ task }) => {
         {/* The Visual Segmented Chunk Grid */}
         <div className="p-2 rounded-lg bg-black/50 border border-white/5 overflow-hidden">
           <div className="grid grid-flow-col auto-cols-fr gap-1 h-9 items-center">
-            {task.chunks.map((chunk) => (
-              <div
-                key={chunk.id}
-                className={`h-full rounded-sm border transition-all duration-200 ${getChunkColor(
-                  chunk.status,
-                  chunk.adapterType
-                )}`}
-                title={`Chunk #${chunk.id} (${formatBytes(chunk.end - chunk.start + 1)}) - ${chunk.status} ${
-                  chunk.adapterType ? `via ${chunk.adapterType.toUpperCase()}` : ''
-                }`}
-              />
-            ))}
+            {Array.from({ length: totalChunks }).map((_, idx) => {
+              const isCompleted = task.status === 'completed' || idx < completedCount;
+              const isActive = !isCompleted && idx < completedCount + activeCount && task.status === 'downloading';
+
+              return (
+                <div
+                  key={idx}
+                  className={`h-full rounded-sm border transition-all duration-200 ${
+                    isCompleted
+                      ? 'bg-cyan-400 border-cyan-300 shadow-sm shadow-cyan-500/30'
+                      : isActive
+                      ? 'bg-white animate-pulse border-white'
+                      : 'bg-neutral-800/80 border-white/5'
+                  }`}
+                  title={`Chunk #${idx} - ${isCompleted ? 'Completed' : isActive ? 'Downloading' : 'Pending'}`}
+                />
+              );
+            })}
           </div>
         </div>
       </div>
 
-      {/* Detail Footer: File location, Mirrors, Hash */}
+      {/* Detail Footer: File location & Hash */}
       <div className="flex items-center justify-between text-2xs pt-2 border-t border-white/5 text-neutral-400">
         <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-1 font-mono truncate max-w-xs">
-            <HardDrive className="w-3 h-3 text-neutral-400" />
-            <span className="truncate" title={task.savePath}>
-              {task.savePath}
-            </span>
-          </div>
-
-          <div className="flex items-center space-x-1">
-            <Link2 className="w-3 h-3 text-neutral-400" />
-            <span>{task.mirrors.length + 1} mirror endpoint(s)</span>
-          </div>
+          <button
+            onClick={handleOpenFolder}
+            className="flex items-center space-x-1.5 font-mono truncate max-w-md hover:text-cyan-400 transition"
+            title="Open folder in File Explorer"
+          >
+            <HardDrive className="w-3.5 h-3.5 text-neutral-400" />
+            <span className="truncate">{task.savePath}</span>
+            <ExternalLink className="w-3 h-3 text-neutral-500" />
+          </button>
         </div>
 
         {task.sha256 ? (
           <div className="flex items-center space-x-1 text-emerald-400 font-mono text-3xs">
             <ShieldCheck className="w-3.5 h-3.5" />
-            <span className="truncate max-w-[200px]" title={task.sha256}>
+            <span className="truncate max-w-[280px]" title={task.sha256}>
               SHA-256: {task.sha256}
             </span>
           </div>
-        ) : (
-          <span className="text-neutral-500 font-mono text-3xs">Streaming SHA-256 verification...</span>
-        )}
+        ) : task.status === 'downloading' ? (
+          <span className="text-neutral-500 font-mono text-3xs">Verifying chunks in real-time...</span>
+        ) : null}
       </div>
     </div>
   );
