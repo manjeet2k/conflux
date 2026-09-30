@@ -11,18 +11,13 @@ All agents, contributors, and automated tooling operating within this repository
 ### Rule 1: First Principles & Deep Understanding
 - Never write boilerplate or cargo-cult code. Understand every layer:
   - How the Windows TCP/IP stack routes packets according to interface metrics.
-  - How explicit socket binding to an adapter's local IP address (`socket2::Socket::bind` / `tokio::net::TcpSocket`) forces the OS to bypass the default gateway single-adapter metric.
+  - How explicit socket binding to an adapter's local IP address (`socket2::Socket::bind`) forces the OS to bypass the default gateway single-adapter metric.
   - How HTTP Range requests (`Range: bytes=X-Y`) split files into non-overlapping byte chunks.
-  - How sparse file pre-allocation (`SetFileInformationByHandle` / `tokio::fs::File::set_len`) avoids disk fragmentation and eliminates post-download file merging overhead.
+  - How sparse file pre-allocation (`SparseFileWriter` / `set_len`) avoids disk fragmentation and eliminates post-download file merging overhead.
 
 ### Rule 2: Minimal Working Baseline First
-- Never build complex, multi-threaded GUI systems before proving the simplest end-to-end path.
-- Workflow:
-  1. Build a simple single-socket byte-range downloader and verify the downloaded file's SHA-256 hash.
-  2. Scale to multiple concurrent chunks on a single interface.
-  3. Introduce socket binding across multiple local IP adapters.
-  4. Integrate the work-stealing queue and dynamic EMA speed balancing.
-  5. Connect the Tauri v2 desktop UI.
+- Never introduce speculative complexity, complex state machines, or deep trait hierarchies before validating the simplest end-to-end path.
+- Keep components focused and modular: engine, state, scheduler, writer, and UI.
 
 ### Rule 3: Inspect the Data (Never Guess)
 - Never assume an adapter is working or packets are flowing without verifying.
@@ -35,11 +30,10 @@ All agents, contributors, and automated tooling operating within this repository
 ### Rule 4: Make It Work, Make It Right, Make It Fast
 - **Make It Work**: Get the end-to-end functionality running and byte-level correctness verified.
 - **Make It Right**: Handle edge cases (adapter disconnect, timeout, 404 mirrors, unseekable files, server doesn't support ranges).
-- **Make It Fast**: Profile memory, zero-copy buffers, lock-free work-stealing channels.
+- **Make It Fast**: Benchmark before optimizing; eliminate unnecessary allocations and lock contention.
 
 ### Rule 5: Simplicity Over Cleverness
 - Write clean, idiomatic, explicit Rust.
-- Avoid unnecessary macros, over-engineered trait hierarchies, or premature abstractions until a concrete need arises.
 - Clear mental model > clever syntax.
 
 ---
@@ -69,20 +63,24 @@ All agents, contributors, and automated tooling operating within this repository
 - **Never make unilateral design or architectural decisions.**
 - When a fork in the road is encountered (UI frameworks, dependency choices, API contracts, defaults), present the options clearly to the user with pros/cons and a recommendation, and ask for their input.
 
-### Superpower 5: Quality Gates
+### Superpower 5: Targeted Quality Gates (Fast Dev Loop)
 Before any commit:
 - `cargo fmt --check` (clean formatting)
-- `cargo clippy -- -D warnings` (zero compiler warnings)
-- `cargo test` (all unit & integration tests pass)
+- `cargo clippy -p conflux-core -- -D warnings` (clean core linting)
+- `cargo clippy -p conflux-desktop --target x86_64-pc-windows-gnu -- -D warnings` (clean desktop linting)
+- `cargo test -p conflux-core` (all unit & integration tests pass on Linux host)
+- `npm --prefix ui run lint && npm --prefix ui run build` (clean frontend types and bundle)
 
-### Superpower 6: Strict Version Incrementation
-- On every iteration/release, increment the version across:
+*(Note: Do not run bare `cargo test` without `-p conflux-core` on Linux/WSL2, as `conflux-desktop` targets Windows and requires cross-compilation).*
+
+### Superpower 6: Version Incrementation on Release
+- When packaging an installer or preparing a release, increment the version across:
   - `Cargo.toml` (`[workspace.package.version]`)
   - `crates/conflux-desktop/tauri.conf.json` (`version`)
   - `ui/package.json` (`version`)
-- Ensure the installer bundle reflects the newly incremented version when built.
+- Ensure the installer bundle reflects the newly incremented version.
 
 ### Superpower 7: On-Demand Installer & Binary Bundling
 - **DO NOT build the release `.exe` or NSIS installer bundle automatically on every change or commit.**
 - Run release compilation and installer packaging **ONLY when the user explicitly and specifically asks for an installer or executable build**.
-- Routine iterations should verify code quality gates (`cargo fmt`, `cargo clippy`, `cargo test`, and frontend builds), commit cleanly, and omit the installer packaging step until requested.
+- Routine iterations should verify code quality gates (Superpower 5), commit cleanly, and omit the installer packaging step until requested.
