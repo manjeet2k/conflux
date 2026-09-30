@@ -2,12 +2,11 @@ import React from 'react';
 import {
   Download,
   CheckCircle2,
-  PauseCircle,
+  CircleStop,
   FolderOpen,
   Network,
   Wifi,
   Smartphone,
-  HardDrive,
 } from 'lucide-react';
 import type { CategoryFilter, AdapterInfo } from '../types';
 
@@ -18,7 +17,7 @@ interface SidebarProps {
     all: number;
     downloading: number;
     completed: number;
-    paused: number;
+    stopped: number;
   };
   adapters: AdapterInfo[];
 }
@@ -44,11 +43,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'all' as CategoryFilter, label: 'All Downloads', icon: FolderOpen, count: taskCounts.all },
     { id: 'downloading' as CategoryFilter, label: 'Downloading', icon: Download, count: taskCounts.downloading },
     { id: 'completed' as CategoryFilter, label: 'Completed', icon: CheckCircle2, count: taskCounts.completed },
-    { id: 'paused' as CategoryFilter, label: 'Paused', icon: PauseCircle, count: taskCounts.paused },
+    { id: 'stopped' as CategoryFilter, label: 'Stopped', icon: CircleStop, count: taskCounts.stopped },
   ];
 
   return (
-    <aside className="w-64 bg-fluent-subnav/80 border-r border-fluent-border flex flex-col justify-between p-3 select-none">
+    <aside className="w-64 bg-fluent-subnav/80 border-r border-fluent-border flex flex-col p-3 select-none">
       <div className="space-y-6">
         {/* Categories Rail */}
         <div>
@@ -139,21 +138,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               ))
             )}
           </div>
-        </div>
-      </div>
-
-      {/* Storage Indicator */}
-      <div className="bg-fluent-card p-3 rounded-lg border border-fluent-border">
-        <div className="flex items-center space-x-2 text-xs font-medium text-neutral-300 mb-1.5">
-          <HardDrive className="w-3.5 h-3.5 text-neutral-400" />
-          <span>Storage</span>
-        </div>
-        <div className="w-full bg-neutral-800 rounded-full h-1.5 overflow-hidden mb-1">
-          <div className="bg-cyan-500 h-full rounded-full w-2/3" />
-        </div>
-        <div className="flex justify-between text-3xs text-neutral-400">
-          <span>Active Drive</span>
-          <span>Ready</span>
         </div>
       </div>
     </aside>

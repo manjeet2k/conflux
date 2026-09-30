@@ -1,48 +1,57 @@
-import React, { useState } from 'react';
-import { X, Download, Plus, Folder } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, Download, Folder } from 'lucide-react';
 import { open } from '@tauri-apps/plugin-dialog';
+import { downloadDir } from '@tauri-apps/api/path';
 import type { AdapterInfo } from '../types';
 
 interface NewDownloadModalProps {
   isOpen: boolean;
   onClose: () => void;
   adapters: AdapterInfo[];
-  onStartDownload: (url: string, mirrors: string[], selectedAdapterIds: string[], saveDir: string) => void;
+  /** Resolves to an error message on failure, or null on success. */
+  onStartDownload: (url: string, selectedAdapterIds: string[], saveDir: string) => Promise<string | null>;
 }
 
-export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
-  isOpen,
-  onClose,
-  adapters,
-  onStartDownload,
-}) => {
+/** Wrapper: the form is mounted only while open, so every open starts from a fresh state. */
+export const NewDownloadModal: React.FC<NewDownloadModalProps> = (props) => {
+  if (!props.isOpen) return null;
+  return <NewDownloadForm {...props} />;
+};
+
+const NewDownloadForm: React.FC<NewDownloadModalProps> = ({ onClose, adapters, onStartDownload }) => {
   const [url, setUrl] = useState('');
-  const [mirrors, setMirrors] = useState<string[]>([]);
-  const [newMirror, setNewMirror] = useState('');
-  const [saveDir, setSaveDir] = useState('Downloads');
-  const [selectedAdapters, setSelectedAdapters] = useState<string[]>(
-    adapters.filter((a) => a.enabled).map((a) => a.id)
-  );
+  const [saveDir, setSaveDir] = useState('');
+  // null = user hasn't touched the selection yet -> follow the discovery defaults.
+  const [userSelection, setUserSelection] = useState<string[] | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
-  if (!isOpen) return null;
+  // Default destination: the OS Downloads folder (fetched on every open).
+  useEffect(() => {
+    let cancelled = false;
+    downloadDir()
+      .then((dir) => {
+        if (!cancelled) setSaveDir((current) => current || dir);
+      })
+      .catch((e) => console.error('Failed to resolve Downloads folder:', e));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  const handleAddMirror = () => {
-    if (newMirror.trim() && !mirrors.includes(newMirror.trim())) {
-      setMirrors([...mirrors, newMirror.trim()]);
-      setNewMirror('');
-    }
-  };
-
-  const handleRemoveMirror = (index: number) => {
-    setMirrors(mirrors.filter((_, i) => i !== index));
-  };
+  // Derived from the current adapter list, so it stays valid when adapters (re)load.
+  const adapterIds = new Set(adapters.map((a) => a.id));
+  const selectedAdapters =
+    userSelection === null
+      ? adapters.filter((a) => a.enabled).map((a) => a.id)
+      : userSelection.filter((id) => adapterIds.has(id));
 
   const toggleAdapterSelection = (id: string) => {
-    if (selectedAdapters.includes(id)) {
-      setSelectedAdapters(selectedAdapters.filter((a) => a !== id));
-    } else {
-      setSelectedAdapters([...selectedAdapters, id]);
-    }
+    setUserSelection(
+      selectedAdapters.includes(id)
+        ? selectedAdapters.filter((a) => a !== id)
+        : [...selectedAdapters, id]
+    );
   };
 
   const handleBrowse = async () => {
@@ -51,6 +60,7 @@ export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
         directory: true,
         multiple: false,
         title: 'Select Destination Folder',
+        defaultPath: saveDir || undefined,
       });
       if (selected && typeof selected === 'string') {
         setSaveDir(selected);
@@ -60,11 +70,21 @@ export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const noAdapterSelected = adapters.length > 0 && selectedAdapters.length === 0;
+  const canSubmit = !!url.trim() && !!saveDir && !noAdapterSelected && !submitting;
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!url.trim()) return;
-    onStartDownload(url.trim(), mirrors, selectedAdapters, saveDir);
-    onClose();
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    const error = await onStartDownload(url.trim(), selectedAdapters, saveDir);
+    setSubmitting(false);
+    if (error) {
+      setSubmitError(error);
+    } else {
+      onClose();
+    }
   };
 
   return (
@@ -101,41 +121,17 @@ export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
             />
           </div>
 
-          {/* Mirror URLs */}
-          <div>
+          {/* Mirror URLs (not supported by the engine yet) */}
+          <div className="opacity-50" title="Mirror aggregation is coming soon">
             <label className="block text-xs font-medium text-neutral-300 mb-1">
-              Alternative Mirror URLs (Optional)
+              Alternative Mirror URLs <span className="text-neutral-500">(coming soon)</span>
             </label>
-            <div className="flex space-x-2 mb-2">
-              <input
-                type="url"
-                placeholder="https://mirror.cdn.com/file.iso"
-                value={newMirror}
-                onChange={(e) => setNewMirror(e.target.value)}
-                className="flex-1 bg-black/40 border border-fluent-border focus:border-cyan-400 rounded-lg px-3 py-1.5 text-xs text-white placeholder-neutral-500 outline-none font-mono"
-              />
-              <button
-                type="button"
-                onClick={handleAddMirror}
-                className="px-3 py-1.5 bg-fluent-card hover:bg-fluent-card-hover border border-fluent-border text-xs rounded-lg text-neutral-300 hover:text-white flex items-center space-x-1"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add</span>
-              </button>
-            </div>
-
-            {mirrors.length > 0 && (
-              <div className="space-y-1 max-h-24 overflow-y-auto">
-                {mirrors.map((m, idx) => (
-                  <div key={idx} className="flex items-center justify-between p-1.5 rounded bg-black/20 text-3xs font-mono text-neutral-300">
-                    <span className="truncate max-w-sm">{m}</span>
-                    <button type="button" onClick={() => handleRemoveMirror(idx)} className="text-neutral-500 hover:text-red-400">
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
+            <input
+              type="url"
+              disabled
+              placeholder="Multi-mirror downloads are not supported yet"
+              className="w-full bg-black/20 border border-fluent-border rounded-lg px-3 py-1.5 text-xs text-neutral-500 placeholder-neutral-600 outline-none font-mono cursor-not-allowed"
+            />
           </div>
 
           {/* Adapters to Bond */}
@@ -143,6 +139,9 @@ export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
             <label className="block text-xs font-medium text-neutral-300 mb-1.5">
               Participating Network Adapters ({adapters.length} found)
             </label>
+            {noAdapterSelected && (
+              <p className="text-3xs text-amber-400 mb-1.5">Select at least one adapter.</p>
+            )}
             <div className="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto">
               {adapters.map((a) => {
                 const isChecked = selectedAdapters.includes(a.id);
@@ -181,6 +180,7 @@ export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
                 type="text"
                 readOnly
                 value={saveDir}
+                placeholder="Resolving Downloads folder..."
                 className="flex-1 bg-black/20 border border-fluent-border rounded-lg px-3 py-1.5 text-xs text-neutral-300 font-mono truncate"
               />
               <button
@@ -194,6 +194,12 @@ export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
             </div>
           </div>
 
+          {submitError && (
+            <div role="alert" className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 break-words select-text">
+              {submitError}
+            </div>
+          )}
+
           {/* Action buttons */}
           <div className="flex items-center justify-end space-x-2 pt-3 border-t border-fluent-border">
             <button
@@ -205,10 +211,10 @@ export const NewDownloadModal: React.FC<NewDownloadModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={!url.trim()}
+              disabled={!canSubmit}
               className="px-4 py-2 bg-fluent-accent hover:bg-fluent-accent-hover disabled:opacity-50 text-black font-semibold text-xs rounded-lg transition shadow-sm"
             >
-              Start Accelerated Download
+              {submitting ? 'Probing...' : 'Start Accelerated Download'}
             </button>
           </div>
         </form>

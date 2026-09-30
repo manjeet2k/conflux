@@ -1,20 +1,24 @@
 import React from 'react';
-import { Plus, Play, Pause, Settings, Minus, Square, X, Zap } from 'lucide-react';
+import { Plus, RotateCcw, Square as StopIcon, Settings, Minus, Square, X, Zap } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { formatSpeed } from '../utils/formatters';
 
 interface TitleBarProps {
   totalSpeed: number;
   onOpenNewModal: () => void;
-  onResumeAll: () => void;
-  onPauseAll: () => void;
+  onRestartAll: () => void;
+  onStopAll: () => void;
+  canRestartAll: boolean;
+  canStopAll: boolean;
 }
 
 export const TitleBar: React.FC<TitleBarProps> = ({
   totalSpeed,
   onOpenNewModal,
-  onResumeAll,
-  onPauseAll,
+  onRestartAll,
+  onStopAll,
+  canRestartAll,
+  canStopAll,
 }) => {
   const handleMinimize = async () => {
     try {
@@ -67,21 +71,23 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         </button>
 
         <button
-          onClick={onResumeAll}
-          title="Resume all downloads"
-          className="flex items-center space-x-1 bg-fluent-card hover:bg-fluent-card-hover border border-fluent-border px-2.5 py-1.5 rounded-md text-xs text-neutral-300 hover:text-white transition"
+          onClick={onRestartAll}
+          disabled={!canRestartAll}
+          title="Restart all stopped downloads from the beginning"
+          className="flex items-center space-x-1 bg-fluent-card hover:bg-fluent-card-hover border border-fluent-border px-2.5 py-1.5 rounded-md text-xs text-neutral-300 hover:text-white transition disabled:opacity-40 disabled:pointer-events-none"
         >
-          <Play className="w-3 h-3 text-emerald-400 fill-emerald-400" />
-          <span>Resume All</span>
+          <RotateCcw className="w-3 h-3 text-emerald-400" />
+          <span>Restart All</span>
         </button>
 
         <button
-          onClick={onPauseAll}
-          title="Pause all downloads"
-          className="flex items-center space-x-1 bg-fluent-card hover:bg-fluent-card-hover border border-fluent-border px-2.5 py-1.5 rounded-md text-xs text-neutral-300 hover:text-white transition"
+          onClick={onStopAll}
+          disabled={!canStopAll}
+          title="Stop all active downloads (they can be restarted from the beginning)"
+          className="flex items-center space-x-1 bg-fluent-card hover:bg-fluent-card-hover border border-fluent-border px-2.5 py-1.5 rounded-md text-xs text-neutral-300 hover:text-white transition disabled:opacity-40 disabled:pointer-events-none"
         >
-          <Pause className="w-3 h-3 text-amber-400 fill-amber-400" />
-          <span>Pause All</span>
+          <StopIcon className="w-3 h-3 text-amber-400 fill-amber-400" />
+          <span>Stop All</span>
         </button>
 
         <div className="h-4 w-px bg-fluent-border mx-1" />
@@ -107,8 +113,9 @@ export const TitleBar: React.FC<TitleBarProps> = ({
       {/* Windows window management buttons */}
       <div className="flex items-center">
         <button
-          className="p-1.5 hover:bg-white/10 rounded text-neutral-400 hover:text-white transition"
-          title="Settings"
+          disabled
+          className="p-1.5 rounded text-neutral-600 cursor-not-allowed"
+          title="Settings (coming soon)"
         >
           <Settings className="w-4 h-4" />
         </button>

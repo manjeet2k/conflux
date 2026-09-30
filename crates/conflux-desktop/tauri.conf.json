@@ -52,7 +52,6 @@
     }
   },
   "plugins": {
-    "opener": {},
-    "dialog": {}
+    "opener": {}
   }
 }

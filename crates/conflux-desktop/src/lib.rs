@@ -19,8 +19,8 @@ pub fn run() {
             commands::probe_url,
             commands::start_download,
             commands::pause_download,
-            commands::resume_download,
             commands::cancel_download,
+            commands::list_tasks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Conflux desktop");

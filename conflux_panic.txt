@@ -1,0 +1,2 @@
+PANIC: panicked at crates/conflux-desktop/src/lib.rs:26:10:
+error while running Conflux desktop: PluginInitialization("dialog", "Error deserializing 'plugins.dialog' within your Tauri configuration: invalid type: map, expected unit")

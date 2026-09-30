@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, Trash2, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Square, RotateCcw, Trash2, FileText, CheckCircle2, AlertCircle, CircleStop } from 'lucide-react';
 import type { DownloadTask } from '../types';
 import { formatBytes, formatSpeed, formatEta } from '../utils/formatters';
 
@@ -7,8 +7,8 @@ interface DownloadListProps {
   tasks: DownloadTask[];
   selectedTaskId: string | null;
   onSelectTask: (taskId: string) => void;
-  onPauseTask: (taskId: string) => void;
-  onResumeTask: (taskId: string) => void;
+  onStopTask: (taskId: string) => void;
+  onRestartTask: (taskId: string) => void;
   onDeleteTask: (taskId: string) => void;
 }
 
@@ -16,8 +16,8 @@ export const DownloadList: React.FC<DownloadListProps> = ({
   tasks,
   selectedTaskId,
   onSelectTask,
-  onPauseTask,
-  onResumeTask,
+  onStopTask,
+  onRestartTask,
   onDeleteTask,
 }) => {
   if (tasks.length === 0) {
@@ -68,25 +68,26 @@ export const DownloadList: React.FC<DownloadListProps> = ({
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      onPauseTask(task.id);
+                      onStopTask(task.id);
                     }}
                     className="p-1.5 hover:bg-white/10 rounded-md text-amber-400 transition"
-                    title="Pause"
+                    title="Stop (no resume yet; restart downloads from the beginning)"
                   >
-                    <Pause className="w-3.5 h-3.5" />
+                    <Square className="w-3.5 h-3.5 fill-amber-400" />
                   </button>
                 )}
 
-                {task.status === 'paused' && (
+                {(task.status === 'stopped' || task.status === 'error') && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      onResumeTask(task.id);
+                      onRestartTask(task.id);
                     }}
-                    className="p-1.5 hover:bg-white/10 rounded-md text-emerald-400 transition"
-                    title="Resume"
+                    className="flex items-center space-x-1 px-2 py-1 hover:bg-white/10 rounded-md text-emerald-400 text-2xs font-medium transition"
+                    title="Restart from the beginning"
                   >
-                    <Play className="w-3.5 h-3.5" />
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Restart</span>
                   </button>
                 )}
 
@@ -96,7 +97,7 @@ export const DownloadList: React.FC<DownloadListProps> = ({
                     onDeleteTask(task.id);
                   }}
                   className="p-1.5 hover:bg-white/10 rounded-md text-neutral-400 hover:text-red-400 transition"
-                  title="Remove"
+                  title={task.status === 'completed' ? 'Remove from list (keeps the file)' : 'Remove and delete partial file'}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
@@ -109,7 +110,7 @@ export const DownloadList: React.FC<DownloadListProps> = ({
                 className={`h-full transition-all duration-300 rounded-full ${
                   task.status === 'completed'
                     ? 'bg-emerald-500'
-                    : task.status === 'paused'
+                    : task.status === 'stopped'
                     ? 'bg-amber-500'
                     : task.status === 'error'
                     ? 'bg-rose-500'
@@ -138,6 +139,12 @@ export const DownloadList: React.FC<DownloadListProps> = ({
                   <span className="text-emerald-400 font-medium flex items-center space-x-1">
                     <CheckCircle2 className="w-3 h-3" />
                     <span>Finished</span>
+                  </span>
+                )}
+                {task.status === 'stopped' && (
+                  <span className="text-amber-400 font-medium flex items-center space-x-1">
+                    <CircleStop className="w-3 h-3" />
+                    <span>Stopped</span>
                   </span>
                 )}
                 {task.status === 'error' && (

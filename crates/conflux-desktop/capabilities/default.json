@@ -1,7 +1,9 @@
 {
   "identifier": "default",
   "description": "Default capabilities for Conflux main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -13,6 +15,7 @@
     "core:window:allow-start-dragging",
     "core:window:allow-set-focus",
     "opener:default",
+    "opener:allow-reveal-item-in-dir",
     "dialog:default"
   ]
 }

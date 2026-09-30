@@ -13,6 +13,12 @@
   --color-fluent-ethernet: #00f2fe;
   --color-fluent-wifi: #f355da;
   --color-fluent-cellular: #ffb703;
+
+  --font-sans: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "Consolas", monospace;
+
+  --shadow-fluent-card: 0 4px 12px rgba(0, 0, 0, 0.25);
+  --shadow-fluent-elevated: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
 :root {
