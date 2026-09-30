@@ -10,6 +10,7 @@ build/
 out/
 bin/
 *.exe
+*.dll
 
 # Conflux temporary files, active downloads, and sparse files
 downloads/
