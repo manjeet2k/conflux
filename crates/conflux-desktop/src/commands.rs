@@ -67,6 +67,7 @@ impl Shared {
         f(task);
         let snapshot = task.clone();
         emit(&self.app, &snapshot);
+        crate::tray::update_tray_tooltip(&self.app, &tasks);
         Some(snapshot)
     }
 
@@ -188,6 +189,7 @@ pub async fn start_download(
         let mut tasks = state.tasks.write().await;
         tasks.insert(task_id.clone(), task.clone());
         emit(&app, &task);
+        crate::tray::update_tray_tooltip(&app, &tasks);
     }
 
     let shared = Shared::new(&app, &state);
@@ -363,6 +365,10 @@ pub async fn remove_download(
     let Some(task) = removed else {
         return Ok(());
     };
+    {
+        let tasks = state.tasks.read().await;
+        crate::tray::update_tray_tooltip(&app, &tasks);
+    }
     shared.save_history().await;
 
     let completed = task.status == TaskStatus::Completed;

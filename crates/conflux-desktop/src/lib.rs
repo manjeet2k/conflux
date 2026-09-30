@@ -49,6 +49,11 @@ pub fn run() {
 
             if let Err(e) = tray::setup_tray(app.handle()) {
                 warn!("Failed to setup system tray: {e}");
+            } else {
+                let state = app.state::<AppState>();
+                if let Ok(tasks) = state.tasks.try_read() {
+                    tray::update_tray_tooltip(app.handle(), &tasks);
+                };
             }
 
             Ok(())
