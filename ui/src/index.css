@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@theme {
+  --color-fluent-bg: #141414;
+  --color-fluent-subnav: #1c1c1c;
+  --color-fluent-card: #242424;
+  --color-fluent-card-hover: #2d2d2d;
+  --color-fluent-card-selected: #333333;
+  --color-fluent-border: rgba(255, 255, 255, 0.08);
+  --color-fluent-border-focus: rgba(255, 255, 255, 0.2);
+  --color-fluent-accent: #60cdff;
+  --color-fluent-accent-hover: #78d4ff;
+  --color-fluent-ethernet: #00f2fe;
+  --color-fluent-wifi: #f355da;
+  --color-fluent-cellular: #ffb703;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #141414;
+  color: #f3f3f3;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* Custom Windows 11 style smooth scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
