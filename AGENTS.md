@@ -80,4 +80,9 @@ Before any commit:
   - `Cargo.toml` (`[workspace.package.version]`)
   - `crates/conflux-desktop/tauri.conf.json` (`version`)
   - `ui/package.json` (`version`)
-- Ensure the installer bundle reflects the newly incremented version (e.g. `Conflux_<version>_x64-setup.exe`).
+- Ensure the installer bundle reflects the newly incremented version when built.
+
+### Superpower 7: On-Demand Installer & Binary Bundling
+- **DO NOT build the release `.exe` or NSIS installer bundle automatically on every change or commit.**
+- Run release compilation and installer packaging **ONLY when the user explicitly and specifically asks for an installer or executable build**.
+- Routine iterations should verify code quality gates (`cargo fmt`, `cargo clippy`, `cargo test`, and frontend builds), commit cleanly, and omit the installer packaging step until requested.
