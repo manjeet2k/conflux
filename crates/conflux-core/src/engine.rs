@@ -10,15 +10,16 @@ use crate::writer::SparseFileWriter;
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::StreamExt;
 use reqwest::{header, StatusCode};
+use std::collections::HashMap;
 use std::fmt;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, watch, Notify};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tracing::{debug, error, info, warn};
 
 /// Maximum attempts per chunk before it is marked `Failed`.
@@ -84,6 +85,15 @@ pub struct AdapterProgress {
     pub active_connections: usize,
     /// The engine stopped using this adapter after repeated consecutive failures.
     pub dropped: bool,
+}
+
+/// Dynamic adapter events that can be sent to an in-flight chunked download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdapterUpdate {
+    /// A new usable network adapter appeared and should be hot-plugged into the worker pool.
+    Add(NetworkAdapter),
+    /// A network adapter disconnected and its workers should be retired.
+    Remove(IpAddr),
 }
 
 #[derive(Debug, Clone)]
@@ -471,6 +481,14 @@ impl DownloadEngine {
     ///
     /// Chunked downloads keep a resume sidecar (see [`resume_sidecar_path`]) while running
     /// and after a cancel or failure; it is deleted on success.
+    /// Downloads `probe.url` into `output_path` (created/truncated), returning the SHA-256 hex.
+    ///
+    /// Uses parallel ranged GETs across `adapters` when the probe verified range support and
+    /// a known size; otherwise a single stream. When `cancel` becomes `true`, all workers stop
+    /// (no write is in flight when this returns) and the result is `Err(DownloadCancelled)`.
+    ///
+    /// Chunked downloads keep a resume sidecar (see [`resume_sidecar_path`]) while running
+    /// and after a cancel or failure; it is deleted on success.
     pub async fn download(
         &self,
         probe: &DownloadProbe,
@@ -479,8 +497,31 @@ impl DownloadEngine {
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         cancel: watch::Receiver<bool>,
     ) -> Result<String> {
-        self.run(probe, output_path, adapters, progress_tx, cancel, false)
+        self.download_with_updates(probe, output_path, adapters, None, progress_tx, cancel)
             .await
+    }
+
+    /// Like [`download`](Self::download), but accepts an optional receiver of [`AdapterUpdate`]s
+    /// allowing newly connected adapters to be hot-plugged mid-download into active chunk workers.
+    pub async fn download_with_updates(
+        &self,
+        probe: &DownloadProbe,
+        output_path: &Path,
+        adapters: &[NetworkAdapter],
+        adapter_rx: Option<mpsc::Receiver<AdapterUpdate>>,
+        progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
+        cancel: watch::Receiver<bool>,
+    ) -> Result<String> {
+        self.run(
+            probe,
+            output_path,
+            adapters,
+            adapter_rx,
+            progress_tx,
+            cancel,
+            false,
+        )
+        .await
     }
 
     /// Like [`download`](Self::download), but continues from the chunks recorded in the
@@ -495,15 +536,40 @@ impl DownloadEngine {
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         cancel: watch::Receiver<bool>,
     ) -> Result<String> {
-        self.run(probe, output_path, adapters, progress_tx, cancel, true)
+        self.resume_with_updates(probe, output_path, adapters, None, progress_tx, cancel)
             .await
     }
 
+    /// Like [`resume`](Self::resume), but accepts an optional receiver of [`AdapterUpdate`]s
+    /// allowing newly connected adapters to be hot-plugged mid-download into active chunk workers.
+    pub async fn resume_with_updates(
+        &self,
+        probe: &DownloadProbe,
+        output_path: &Path,
+        adapters: &[NetworkAdapter],
+        adapter_rx: Option<mpsc::Receiver<AdapterUpdate>>,
+        progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
+        cancel: watch::Receiver<bool>,
+    ) -> Result<String> {
+        self.run(
+            probe,
+            output_path,
+            adapters,
+            adapter_rx,
+            progress_tx,
+            cancel,
+            true,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn run(
         &self,
         probe: &DownloadProbe,
         output_path: &Path,
         adapters: &[NetworkAdapter],
+        adapter_rx: Option<mpsc::Receiver<AdapterUpdate>>,
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         mut cancel: watch::Receiver<bool>,
         resume: bool,
@@ -539,8 +605,16 @@ impl DownloadEngine {
                 .await;
         }
 
-        self.download_chunked(probe, output_path, &bind_ips, progress_tx, cancel, resume)
-            .await
+        self.download_chunked(
+            probe,
+            output_path,
+            &bind_ips,
+            adapter_rx,
+            progress_tx,
+            cancel,
+            resume,
+        )
+        .await
     }
 
     /// Opens `output_path` for resuming from its sidecar. Returns the chunk plan (with
@@ -563,19 +637,21 @@ impl DownloadEngine {
         Ok((chunks, state.chunk_size, writer))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn download_chunked(
         &self,
         probe: &DownloadProbe,
         output_path: &Path,
         bind_ips: &[Option<IpAddr>],
+        mut adapter_rx: Option<mpsc::Receiver<AdapterUpdate>>,
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         mut cancel: watch::Receiver<bool>,
         resume: bool,
     ) -> Result<String> {
-        let mut adapter_states = Vec::new();
+        let mut initial_states = Vec::new();
         for ip in bind_ips {
             match build_bound_http_client(*ip, self.stall_timeout) {
-                Ok(client) => adapter_states.push(Arc::new(AdapterWorkerState::new(*ip, client))),
+                Ok(client) => initial_states.push(Arc::new(AdapterWorkerState::new(*ip, client))),
                 Err(e) => error!(
                     "Failed to build HTTP client bound to {}: {:#}",
                     Self::bind_label(*ip),
@@ -583,9 +659,10 @@ impl DownloadEngine {
                 ),
             }
         }
-        if adapter_states.is_empty() {
+        if initial_states.is_empty() {
             bail!("Could not build an HTTP client for any selected network adapter");
         }
+        let adapter_states = Arc::new(RwLock::new(initial_states));
 
         let resumed = if resume {
             match self.open_for_resume(probe, output_path).await {
@@ -678,37 +755,106 @@ impl DownloadEngine {
         let (progress_handle, progress_done) = spawn_progress_reporter(
             progress_tx,
             Arc::clone(&counters),
-            adapter_states.clone(),
+            Arc::clone(&adapter_states),
             Some(Arc::clone(&shared)),
             probe.total_bytes,
             total_chunks,
         );
 
-        let mut handles = Vec::new();
-        for adapter in &adapter_states {
-            for worker_idx in 0..self.connections_per_adapter {
-                handles.push(tokio::spawn(run_chunk_worker(
-                    Arc::clone(&shared),
-                    Arc::clone(adapter),
-                    worker_idx,
-                    stop_rx.clone(),
-                )));
+        let mut worker_set = JoinSet::new();
+        {
+            let states = adapter_states.read().unwrap();
+            for adapter in states.iter() {
+                for worker_idx in 0..self.connections_per_adapter {
+                    worker_set.spawn(run_chunk_worker(
+                        Arc::clone(&shared),
+                        Arc::clone(adapter),
+                        worker_idx,
+                        stop_rx.clone(),
+                    ));
+                }
             }
         }
 
-        let workers = futures_util::future::join_all(handles);
-        tokio::pin!(workers);
-        let (results, user_cancelled) = tokio::select! {
-            results = &mut workers => (results, false),
-            _ = wait_for_true(&mut cancel) => {
-                info!("Cancel requested; stopping all workers");
-                shared.stop_tx.send_replace(true);
-                ((&mut workers).await, true)
+        let mut user_cancelled = false;
+        loop {
+            if worker_set.is_empty() {
+                break;
             }
-        };
-        for r in results {
-            if let Err(e) = r {
-                error!("Worker task panicked: {:?}", e);
+            tokio::select! {
+                biased;
+                _ = wait_for_true(&mut cancel) => {
+                    info!("Cancel requested; stopping all workers");
+                    user_cancelled = true;
+                    shared.stop_tx.send_replace(true);
+                    break;
+                }
+                maybe_update = async {
+                    match &mut adapter_rx {
+                        Some(rx) => rx.recv().await,
+                        None => futures_util::future::pending().await,
+                    }
+                } => {
+                    match maybe_update {
+                        Some(AdapterUpdate::Add(adapter)) => {
+                            if adapter.enabled && adapter.is_ipv4 && !adapter.is_loopback && adapter.ip.is_ipv4() {
+                                let already_exists = {
+                                    let states = adapter_states.read().unwrap();
+                                    states.iter().any(|s| s.ip == Some(adapter.ip))
+                                };
+                                if !already_exists {
+                                    info!(
+                                        "Dynamically aggregating new network adapter {} ({}) into download",
+                                        adapter.id, adapter.ip
+                                    );
+                                    match build_bound_http_client(Some(adapter.ip), self.stall_timeout) {
+                                        Ok(client) => {
+                                            let new_state = Arc::new(AdapterWorkerState::new(Some(adapter.ip), client));
+                                            adapter_states.write().unwrap().push(Arc::clone(&new_state));
+                                            for worker_idx in 0..self.connections_per_adapter {
+                                                worker_set.spawn(run_chunk_worker(
+                                                    Arc::clone(&shared),
+                                                    Arc::clone(&new_state),
+                                                    worker_idx,
+                                                    stop_rx.clone(),
+                                                ));
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to build client for newly added adapter {}: {:#}", adapter.id, e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Some(AdapterUpdate::Remove(ip)) => {
+                            info!("Network adapter {} disconnected; dropping workers", ip);
+                            let states = adapter_states.read().unwrap();
+                            if let Some(target) = states.iter().find(|s| s.ip == Some(ip)) {
+                                target.dropped.store(true, Ordering::SeqCst);
+                            }
+                        }
+                        None => {
+                            // Adapter updates stream closed
+                        }
+                    }
+                }
+                Some(join_res) = worker_set.join_next() => {
+                    if let Err(e) = join_res {
+                        error!("Worker task panicked: {:?}", e);
+                    }
+                }
+            }
+        }
+
+        if user_cancelled {
+            worker_set.abort_all();
+        }
+        while let Some(res) = worker_set.join_next().await {
+            if let Err(e) = res {
+                if !e.is_cancelled() {
+                    error!("Worker task panicked during shutdown: {:?}", e);
+                }
             }
         }
         // A cancel that raced with the last chunk finishing still counts as cancelled.
@@ -741,7 +887,8 @@ impl DownloadEngine {
                     .unwrap_or_else(|p| p.into_inner())
                     .clone()
                     .unwrap_or_else(|| "none recorded".to_string());
-                let dropped: Vec<&str> = adapter_states
+                let states = adapter_states.read().unwrap();
+                let dropped: Vec<&str> = states
                     .iter()
                     .filter(|a| a.dropped.load(Ordering::SeqCst))
                     .map(|a| a.label.as_str())
@@ -756,7 +903,7 @@ impl DownloadEngine {
                         last_error
                     );
                 }
-                if dropped.len() == adapter_states.len() {
+                if dropped.len() == states.len() {
                     bail!(
                         "Download failed: all network adapters {:?} were dropped after {} consecutive failures; {} of {} chunks incomplete (ids {:?}). Last error: {}",
                         dropped,
@@ -854,7 +1001,7 @@ impl DownloadEngine {
         let (progress_handle, progress_done) = spawn_progress_reporter(
             progress_tx,
             Arc::clone(&counters),
-            vec![Arc::clone(&adapter)],
+            Arc::new(RwLock::new(vec![Arc::clone(&adapter)])),
             None,
             total_for_progress,
             1,
@@ -1195,7 +1342,7 @@ fn ema(prev: Option<f64>, sample: f64) -> f64 {
 fn spawn_progress_reporter(
     progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
     counters: Arc<Counters>,
-    adapters: Vec<Arc<AdapterWorkerState>>,
+    adapters: Arc<RwLock<Vec<Arc<AdapterWorkerState>>>>,
     chunked: Option<Arc<ChunkedShared>>,
     total_bytes: u64,
     total_chunks: usize,
@@ -1208,40 +1355,48 @@ fn spawn_progress_reporter(
 
     let handle = tokio::spawn(async move {
         let chunk_map = || chunked.as_ref().map(|c| c.scheduler().chunk_map());
-        let snapshot =
-            |speed: f64, eta: u64, adapter_speeds: &[f64], map: Option<String>| ProgressUpdate {
-                downloaded_bytes: counters.downloaded.load(Ordering::SeqCst),
-                total_bytes,
-                speed_bytes_sec: speed,
-                active_chunks: counters.active.load(Ordering::SeqCst),
-                completed_chunks: counters.completed.load(Ordering::SeqCst),
-                total_chunks,
-                eta_seconds: eta,
-                adapters: adapters
-                    .iter()
-                    .zip(adapter_speeds)
-                    .map(|(a, s)| a.progress(*s))
-                    .collect(),
-                chunk_map: map,
-            };
+        let snapshot = |speed: f64,
+                        eta: u64,
+                        active_adapters: &[Arc<AdapterWorkerState>],
+                        adapter_speeds: &[f64],
+                        map: Option<String>| ProgressUpdate {
+            downloaded_bytes: counters.downloaded.load(Ordering::SeqCst),
+            total_bytes,
+            speed_bytes_sec: speed,
+            active_chunks: counters.active.load(Ordering::SeqCst),
+            completed_chunks: counters.completed.load(Ordering::SeqCst),
+            total_chunks,
+            eta_seconds: eta,
+            adapters: active_adapters
+                .iter()
+                .zip(adapter_speeds)
+                .map(|(a, s)| a.progress(*s))
+                .collect(),
+            chunk_map: map,
+        };
 
         // Start from the current counts so resumed bytes don't show up as a speed spike.
         let mut last_bytes = counters.downloaded.load(Ordering::SeqCst);
         let mut last_instant = Instant::now();
         let mut speed_ema: Option<f64> = None;
-        let mut adapter_last: Vec<u64> = adapters
-            .iter()
-            .map(|a| a.received.load(Ordering::SeqCst))
-            .collect();
-        let mut adapter_ema: Vec<Option<f64>> = vec![None; adapters.len()];
+        let mut adapter_last: HashMap<String, u64> = HashMap::new();
+        let mut adapter_ema: HashMap<String, Option<f64>> = HashMap::new();
+        {
+            let init = adapters.read().unwrap();
+            for a in init.iter() {
+                adapter_last.insert(a.label.clone(), a.received.load(Ordering::SeqCst));
+                adapter_ema.insert(a.label.clone(), None);
+            }
+        }
         let mut tick: u32 = 0;
 
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(PROGRESS_INTERVAL) => {}
                 _ = done_rx.notified() => {
-                    let zeros = vec![0.0; adapters.len()];
-                    let final_update = snapshot(0.0, 0, &zeros, chunk_map());
+                    let active = adapters.read().unwrap().clone();
+                    let zeros = vec![0.0; active.len()];
+                    let final_update = snapshot(0.0, 0, &active, &zeros, chunk_map());
                     let _ = tokio::time::timeout(Duration::from_secs(1), tx.send(final_update)).await;
                     return;
                 }
@@ -1250,14 +1405,26 @@ fn spawn_progress_reporter(
             let now = Instant::now();
             let current = counters.downloaded.load(Ordering::SeqCst);
             let elapsed = now.duration_since(last_instant).as_secs_f64();
+            let active = adapters.read().unwrap().clone();
+            let mut adapter_speeds = Vec::with_capacity(active.len());
+
             if elapsed > 0.0 {
                 let instant_speed = current.saturating_sub(last_bytes) as f64 / elapsed;
                 speed_ema = Some(ema(speed_ema, instant_speed));
-                for (i, a) in adapters.iter().enumerate() {
+                for a in &active {
                     let received = a.received.load(Ordering::SeqCst);
-                    let sample = received.saturating_sub(adapter_last[i]) as f64 / elapsed;
-                    adapter_ema[i] = Some(ema(adapter_ema[i], sample));
-                    adapter_last[i] = received;
+                    let prev = *adapter_last.get(&a.label).unwrap_or(&received);
+                    let sample = received.saturating_sub(prev) as f64 / elapsed;
+                    let prev_ema = adapter_ema.get(&a.label).copied().flatten();
+                    let new_ema = ema(prev_ema, sample);
+                    adapter_ema.insert(a.label.clone(), Some(new_ema));
+                    adapter_last.insert(a.label.clone(), received);
+                    adapter_speeds.push(new_ema);
+                }
+            } else {
+                for a in &active {
+                    let s = adapter_ema.get(&a.label).copied().flatten().unwrap_or(0.0);
+                    adapter_speeds.push(s);
                 }
             }
             last_bytes = current;
@@ -1269,7 +1436,6 @@ fn spawn_progress_reporter(
             } else {
                 0
             };
-            let adapter_speeds: Vec<f64> = adapter_ema.iter().map(|s| s.unwrap_or(0.0)).collect();
             let map = if tick.is_multiple_of(CHUNK_MAP_EVERY_N_UPDATES) {
                 chunk_map()
             } else {
@@ -1277,7 +1443,7 @@ fn spawn_progress_reporter(
             };
             tick = tick.wrapping_add(1);
 
-            match tx.try_send(snapshot(speed, eta, &adapter_speeds, map)) {
+            match tx.try_send(snapshot(speed, eta, &active, &adapter_speeds, map)) {
                 Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
                 Err(mpsc::error::TrySendError::Closed(_)) => return,
             }

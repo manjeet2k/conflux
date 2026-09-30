@@ -4,6 +4,7 @@ pub mod chunk;
 pub mod engine;
 pub mod filename;
 pub mod resume;
+pub mod watcher;
 pub mod writer;
 
 pub use adapter::{
@@ -12,8 +13,10 @@ pub use adapter::{
 pub use checksum::compute_sha256;
 pub use chunk::{plan_chunks, Chunk, ChunkStatus};
 pub use engine::{
-    AdapterProgress, DownloadCancelled, DownloadEngine, DownloadProbe, ProgressUpdate,
+    AdapterProgress, AdapterUpdate, DownloadCancelled, DownloadEngine, DownloadProbe,
+    ProgressUpdate,
 };
 pub use filename::{sanitize_filename, unique_path};
 pub use resume::{remove_resume_sidecar, resume_sidecar_path};
+pub use watcher::{diff_adapters, NetworkWatcher, DEFAULT_DEBOUNCE};
 pub use writer::SparseFileWriter;

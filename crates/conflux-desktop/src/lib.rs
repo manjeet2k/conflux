@@ -7,7 +7,7 @@ mod tray;
 
 use history::HistoryStore;
 use state::AppState;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -54,6 +54,46 @@ pub fn run() {
                 if let Ok(tasks) = state.tasks.try_read() {
                     tray::update_tray_tooltip(app.handle(), &tasks);
                 };
+            }
+
+            // Start background non-polling network adapter watcher
+            match conflux_core::NetworkWatcher::start(conflux_core::DEFAULT_DEBOUNCE) {
+                Ok(watcher) => {
+                    let app_handle = app.handle().clone();
+                    let mut rx = watcher.receiver();
+                    let mut last_adapters = rx.borrow().clone();
+
+                    tauri::async_runtime::spawn(async move {
+                        // Keep watcher alive inside this task
+                        let _watcher = watcher;
+                        while rx.changed().await.is_ok() {
+                            let current_adapters = rx.borrow().clone();
+                            let (added, removed) =
+                                conflux_core::diff_adapters(&last_adapters, &current_adapters);
+                            last_adapters = current_adapters.clone();
+
+                            // 1. Emit updated adapter list to UI
+                            let infos: Vec<adapters::AdapterInfo> = current_adapters
+                                .into_iter()
+                                .map(adapters::to_info)
+                                .collect();
+                            if let Err(e) = app_handle.emit("network-adapters-changed", &infos) {
+                                warn!("Failed to emit network-adapters-changed: {e}");
+                            }
+
+                            // 2. Hot-plug into active downloads if enabled in settings
+                            let state = app_handle.state::<AppState>();
+                            let auto_aggregate =
+                                state.settings.read().await.auto_aggregate_adapters;
+                            if auto_aggregate && (!added.is_empty() || !removed.is_empty()) {
+                                commands::handle_network_change(&state, &added, &removed).await;
+                            }
+                        }
+                    });
+                }
+                Err(e) => {
+                    warn!("Could not start NetworkWatcher: {e:#}");
+                }
             }
 
             Ok(())

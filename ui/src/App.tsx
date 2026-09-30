@@ -20,6 +20,7 @@ import {
 import { listen } from '@tauri-apps/api/event';
 import { api, errorText } from './api';
 import type { AdapterInfo, DownloadTask, TaskStatus, ViewId } from './types';
+import { NETWORK_ADAPTERS_CHANGED_EVENT } from './types';
 import { darkTheme, lightTheme, surfaceVars } from './theme';
 import { useDownloads } from './hooks/useDownloads';
 import { useSettings } from './hooks/useSettings';
@@ -133,6 +134,21 @@ export const App: React.FC = () => {
       .catch((e) => onError(`Failed to discover network adapters: ${errorText(e)}`));
   }, [onError]);
   useEffect(refreshAdapters, [refreshAdapters]);
+
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+    listen<AdapterInfo[]>(NETWORK_ADAPTERS_CHANGED_EVENT, (event) => {
+      setAdapters(event.payload);
+    })
+      .then((fn) => {
+        unlistenFn = fn;
+      })
+      .catch((e) => console.error('Failed to listen for network changes:', e));
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
 
   const openAdd = useCallback(
     (url = '') => {

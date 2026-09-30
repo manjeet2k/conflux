@@ -4,8 +4,8 @@ mod support;
 
 use anyhow::Result;
 use conflux_core::{
-    resume_sidecar_path, DownloadCancelled, DownloadEngine, DownloadProbe, NetworkAdapter,
-    ProgressUpdate,
+    resume_sidecar_path, AdapterUpdate, DownloadCancelled, DownloadEngine, DownloadProbe,
+    NetworkAdapter, ProgressUpdate,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -735,4 +735,62 @@ async fn probe_captures_etag() {
     let probe = test_engine().probe(&server.url("/e.bin")).await.unwrap();
     assert_eq!(probe.etag.as_deref(), Some("\"abc\""));
     assert_eq!(probe.last_modified, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dynamic_adapter_joins_mid_download_and_aggregates_bandwidth() {
+    let data = payload(PAYLOAD_LEN, 27);
+    let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let probe = engine.probe(&server.url("/dynamic.bin")).await.unwrap();
+    let path = dir.path().join(&probe.suggested_filename);
+
+    let (progress_tx, mut progress_rx) = mpsc::channel(1024);
+    let collector = tokio::spawn(async move {
+        let mut all = Vec::new();
+        while let Some(p) = progress_rx.recv().await {
+            all.push(p);
+        }
+        all
+    });
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (adapter_tx, adapter_rx) = mpsc::channel(16);
+
+    let initial_adapters: Vec<NetworkAdapter> = Vec::new();
+
+    let adapter_tx_clone = adapter_tx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let new_adapter = NetworkAdapter {
+            id: "eth_hotplug:127.0.0.1".into(),
+            ip: "127.0.0.1".parse().unwrap(),
+            is_ipv4: true,
+            is_loopback: false,
+            enabled: true,
+        };
+        let _ = adapter_tx_clone.send(AdapterUpdate::Add(new_adapter)).await;
+    });
+
+    let result = engine
+        .download_with_updates(
+            &probe,
+            &path,
+            &initial_adapters,
+            Some(adapter_rx),
+            Some(progress_tx),
+            cancel_rx,
+        )
+        .await;
+
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+    assert!(std::fs::read(&path).unwrap() == *data);
+
+    let progress = collector.await.unwrap();
+    assert!(!progress.is_empty());
+    let last = progress.last().unwrap();
+    assert!(last
+        .adapters
+        .iter()
+        .any(|a| a.label == "127.0.0.1" || a.label == "default-route"));
 }

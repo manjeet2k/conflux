@@ -4,7 +4,8 @@ use crate::settings::{self, Settings};
 use crate::state::{AppState, DownloadTaskState, TaskHandle, TaskStatus};
 use conflux_core::{
     discover_adapters as core_discover, remove_resume_sidecar, sanitize_filename, unique_path,
-    DownloadCancelled, DownloadEngine, DownloadProbe, NetworkAdapter, ProgressUpdate,
+    AdapterUpdate, DownloadCancelled, DownloadEngine, DownloadProbe, NetworkAdapter,
+    ProgressUpdate,
 };
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -536,6 +537,8 @@ async fn spawn_task(
     resume: bool,
 ) {
     let (cancel_tx, cancel_rx) = watch::channel(false);
+    let (adapter_tx, adapter_rx) = mpsc::channel(16);
+    let names = Arc::new(RwLock::new(adapter_names(&adapters)));
     // Hold the handles lock across spawn + insert: the task removes its own handle when it
     // finishes, and that removal must not run before the handle has been inserted.
     let mut handles = shared.handles.lock().await;
@@ -546,6 +549,8 @@ async fn spawn_task(
         probe,
         output_path.clone(),
         adapters,
+        adapter_rx,
+        names.clone(),
         cancel_rx,
         resume,
     ));
@@ -553,6 +558,8 @@ async fn spawn_task(
         task_id,
         TaskHandle {
             cancel_tx,
+            adapter_tx: Some(adapter_tx),
+            names,
             join_handle,
             output_path,
         },
@@ -567,19 +574,26 @@ async fn run_download(
     probe: DownloadProbe,
     output_path: PathBuf,
     adapters: Vec<NetworkAdapter>,
+    adapter_rx: mpsc::Receiver<AdapterUpdate>,
+    names: Arc<RwLock<HashMap<std::net::IpAddr, (String, String)>>>,
     cancel_rx: watch::Receiver<bool>,
     resume: bool,
 ) {
     let (tx, mut rx) = mpsc::channel::<ProgressUpdate>(100);
-    let names = adapter_names(&adapters);
 
     let mut forwarder = {
         let shared = shared.clone();
         let id = task_id.clone();
+        let names = names.clone();
         tokio::spawn(async move {
             let mut last_save = Instant::now();
             while let Some(p) = rx.recv().await {
-                let stats = p.adapters.iter().map(|a| adapter_stat(a, &names)).collect();
+                let current_names = names.read().await;
+                let stats = p
+                    .adapters
+                    .iter()
+                    .map(|a| adapter_stat(a, &current_names))
+                    .collect();
                 let exists = shared
                     .update(&id, |task| {
                         // A late tick must never undo a final status set elsewhere.
@@ -612,11 +626,25 @@ async fn run_download(
 
     let result = if resume {
         engine
-            .resume(&probe, &output_path, &adapters, Some(tx), cancel_rx.clone())
+            .resume_with_updates(
+                &probe,
+                &output_path,
+                &adapters,
+                Some(adapter_rx),
+                Some(tx),
+                cancel_rx.clone(),
+            )
             .await
     } else {
         engine
-            .download(&probe, &output_path, &adapters, Some(tx), cancel_rx.clone())
+            .download_with_updates(
+                &probe,
+                &output_path,
+                &adapters,
+                Some(adapter_rx),
+                Some(tx),
+                cancel_rx.clone(),
+            )
             .await
     };
 
@@ -711,6 +739,7 @@ async fn stop_task(shared: &Shared, task_id: &str) -> Option<DownloadTaskState> 
         cancel_tx,
         mut join_handle,
         output_path,
+        ..
     }) = handle
     {
         let _ = cancel_tx.send(true);
@@ -743,6 +772,61 @@ async fn stop_task(shared: &Shared, task_id: &str) -> Option<DownloadTaskState> 
             }
         })
         .await
+}
+
+/// Dynamically aggregates newly joined network adapters into active downloads,
+/// and retires workers for disconnected adapters.
+pub async fn handle_network_change(
+    state: &AppState,
+    added: &[NetworkAdapter],
+    removed: &[NetworkAdapter],
+) {
+    let handles = state.handles.lock().await;
+    let mut tasks = state.tasks.write().await;
+
+    for (task_id, handle) in handles.iter() {
+        if let Some(task) = tasks.get_mut(task_id) {
+            if task.status != TaskStatus::Downloading {
+                continue;
+            }
+            // Auto-aggregate if the task was started with all adapters (empty adapter_ids)
+            let uses_all = task.adapter_ids.is_empty();
+
+            if uses_all {
+                for new_adapter in added {
+                    if let Some(tx) = &handle.adapter_tx {
+                        info!(
+                            task_id = %task_id,
+                            adapter = %new_adapter.id,
+                            "Auto-aggregating newly connected adapter into download"
+                        );
+                        {
+                            let mut names = handle.names.write().await;
+                            names.insert(
+                                new_adapter.ip,
+                                (
+                                    new_adapter.id.clone(),
+                                    crate::adapters::adapter_name(new_adapter),
+                                ),
+                            );
+                        }
+                        let _ = tx.send(AdapterUpdate::Add(new_adapter.clone())).await;
+                    }
+                }
+            }
+
+            for drop_adapter in removed {
+                if let Some(tx) = &handle.adapter_tx {
+                    info!(
+                        task_id = %task_id,
+                        adapter = %drop_adapter.id,
+                        "Retiring disconnected adapter from download"
+                    );
+                    let _ = tx.send(AdapterUpdate::Remove(drop_adapter.ip)).await;
+                }
+            }
+        }
+    }
 }
 
 // ─── Helpers ────────────────────────────────────────────────

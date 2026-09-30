@@ -79,6 +79,7 @@ export interface Settings {
   chunk_size_mb: number;
   notify_on_complete: boolean;
   close_to_tray: boolean;
+  auto_aggregate_adapters: boolean;
 }
 
 // Matches Rust WindowBackdrop (returned by apply_window_theme)
@@ -87,5 +88,7 @@ export interface WindowBackdrop {
 }
 
 export const PROGRESS_EVENT = 'download-progress';
+export const NETWORK_ADAPTERS_CHANGED_EVENT = 'network-adapters-changed';
 
 export type ViewId = 'all' | 'active' | 'paused' | 'completed' | 'failed' | 'network' | 'settings';
+

@@ -79,6 +79,8 @@ impl DownloadTaskState {
 
 pub struct TaskHandle {
     pub cancel_tx: watch::Sender<bool>,
+    pub adapter_tx: Option<tokio::sync::mpsc::Sender<conflux_core::AdapterUpdate>>,
+    pub names: Arc<RwLock<HashMap<std::net::IpAddr, (String, String)>>>,
     pub join_handle: tokio::task::JoinHandle<()>,
     pub output_path: PathBuf,
 }

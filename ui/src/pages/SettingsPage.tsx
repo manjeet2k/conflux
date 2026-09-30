@@ -127,18 +127,32 @@ export const SettingsPage: React.FC<{ settings: Settings; onChange: (patch: Part
       </div>
 
       <SectionHeader>Application</SectionHeader>
-      <SettingsCard
-        icon={<Navigation20Regular />}
-        title="Close to system tray"
-        description="Keep Conflux running in the notification area and continue downloading when the window is closed"
-      >
-        <Switch
-          checked={settings.close_to_tray}
-          onChange={(_, d) => onChange({ close_to_tray: d.checked })}
-          label={settings.close_to_tray ? 'On' : 'Off'}
-          labelPosition="before"
-        />
-      </SettingsCard>
+      <div className={styles.stack}>
+        <SettingsCard
+          icon={<PlugConnected20Regular />}
+          title="Auto-aggregate new connections"
+          description="Automatically detect and utilize newly connected network interfaces (Wi-Fi, Ethernet, USB mobile tethering) in active downloads"
+        >
+          <Switch
+            checked={settings.auto_aggregate_adapters}
+            onChange={(_, d) => onChange({ auto_aggregate_adapters: d.checked })}
+            label={settings.auto_aggregate_adapters ? 'On' : 'Off'}
+            labelPosition="before"
+          />
+        </SettingsCard>
+        <SettingsCard
+          icon={<Navigation20Regular />}
+          title="Close to system tray"
+          description="Keep Conflux running in the notification area and continue downloading when the window is closed"
+        >
+          <Switch
+            checked={settings.close_to_tray}
+            onChange={(_, d) => onChange({ close_to_tray: d.checked })}
+            label={settings.close_to_tray ? 'On' : 'Off'}
+            labelPosition="before"
+          />
+        </SettingsCard>
+      </div>
 
       <SectionHeader>Notifications</SectionHeader>
       <SettingsCard
