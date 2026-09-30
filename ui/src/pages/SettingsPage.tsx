@@ -7,6 +7,7 @@ import {
   PlugConnected20Regular,
   PuzzlePiece20Regular,
   Info20Regular,
+  Navigation20Regular,
 } from '@fluentui/react-icons';
 import { open } from '@tauri-apps/plugin-dialog';
 import { downloadDir } from '@tauri-apps/api/path';
@@ -124,6 +125,20 @@ export const SettingsPage: React.FC<{ settings: Settings; onChange: (patch: Part
           its original chunk size.
         </Text>
       </div>
+
+      <SectionHeader>Application</SectionHeader>
+      <SettingsCard
+        icon={<Navigation20Regular />}
+        title="Close to system tray"
+        description="Keep Conflux running in the notification area and continue downloading when the window is closed"
+      >
+        <Switch
+          checked={settings.close_to_tray}
+          onChange={(_, d) => onChange({ close_to_tray: d.checked })}
+          label={settings.close_to_tray ? 'On' : 'Off'}
+          labelPosition="before"
+        />
+      </SettingsCard>
 
       <SectionHeader>Notifications</SectionHeader>
       <SettingsCard

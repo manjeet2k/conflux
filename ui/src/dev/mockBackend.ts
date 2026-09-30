@@ -23,6 +23,7 @@ let settings: Settings = {
   connections_per_adapter: 4,
   chunk_size_mb: 4,
   notify_on_complete: true,
+  close_to_tray: true,
 };
 
 const now = Date.now();

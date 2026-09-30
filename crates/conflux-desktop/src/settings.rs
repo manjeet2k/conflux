@@ -27,6 +27,7 @@ pub struct Settings {
     pub connections_per_adapter: u32,
     pub chunk_size_mb: u32,
     pub notify_on_complete: bool,
+    pub close_to_tray: bool,
 }
 
 impl Default for Settings {
@@ -37,6 +38,7 @@ impl Default for Settings {
             connections_per_adapter: 4,
             chunk_size_mb: 4,
             notify_on_complete: true,
+            close_to_tray: true,
         }
     }
 }
@@ -139,6 +141,7 @@ mod tests {
         assert_eq!(json["connections_per_adapter"], 4);
         assert_eq!(json["chunk_size_mb"], 4);
         assert_eq!(json["notify_on_complete"], true);
+        assert_eq!(json["close_to_tray"], true);
         assert!(json["default_save_dir"].is_null());
 
         let partial: Settings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();

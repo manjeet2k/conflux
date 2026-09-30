@@ -9,6 +9,8 @@ export const api = {
     invoke<DownloadTask>('start_download', args),
   pauseDownload: (taskId: string) => invoke<DownloadTask>('pause_download', { taskId }),
   resumeDownload: (taskId: string) => invoke<DownloadTask>('resume_download', { taskId }),
+  pauseAll: () => invoke<void>('pause_all'),
+  resumeAll: () => invoke<void>('resume_all'),
   removeDownload: (taskId: string, deleteFile: boolean) =>
     invoke<void>('remove_download', { taskId, deleteFile }),
   listTasks: () => invoke<DownloadTask[]>('list_tasks'),

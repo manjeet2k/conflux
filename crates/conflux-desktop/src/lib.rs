@@ -3,6 +3,7 @@ mod commands;
 mod history;
 mod settings;
 mod state;
+mod tray;
 
 use history::HistoryStore;
 use state::AppState;
@@ -45,7 +46,27 @@ pub fn run() {
             let tasks = history.load();
             info!(restored = tasks.len(), "Loaded download history");
             app.manage(AppState::new(settings, settings_path, history, tasks));
+
+            if let Err(e) = tray::setup_tray(app.handle()) {
+                warn!("Failed to setup system tray: {e}");
+            }
+
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                let state = app.state::<AppState>();
+                let close_to_tray = state
+                    .settings
+                    .try_read()
+                    .map(|s| s.close_to_tray)
+                    .unwrap_or(true);
+                if close_to_tray {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::discover_adapters,
@@ -53,6 +74,8 @@ pub fn run() {
             commands::start_download,
             commands::pause_download,
             commands::resume_download,
+            commands::pause_all,
+            commands::resume_all,
             commands::remove_download,
             commands::list_tasks,
             commands::get_settings,

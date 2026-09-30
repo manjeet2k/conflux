@@ -17,6 +17,7 @@ import {
   PauseCircle48Regular,
   Search48Regular,
 } from '@fluentui/react-icons';
+import { listen } from '@tauri-apps/api/event';
 import { api, errorText } from './api';
 import type { AdapterInfo, DownloadTask, TaskStatus, ViewId } from './types';
 import { darkTheme, lightTheme, surfaceVars } from './theme';
@@ -230,6 +231,16 @@ export const App: React.FC = () => {
       document.removeEventListener('contextmenu', onContext);
     };
   }, [addOpen, openAdd, refreshAdapters, notify]);
+
+  // ─── System tray context menu events ───
+  useEffect(() => {
+    const unlistenAdd = listen('open-add-dialog', () => openAdd());
+    const unlistenSettings = listen('open-settings', () => setView('settings'));
+    return () => {
+      unlistenAdd.then((fn) => fn());
+      unlistenSettings.then((fn) => fn());
+    };
+  }, [openAdd]);
 
   const handleStart = async (args: Parameters<typeof start>[0]) => {
     const task = await start(args);

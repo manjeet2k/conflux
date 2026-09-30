@@ -78,6 +78,7 @@ export interface Settings {
   connections_per_adapter: number;
   chunk_size_mb: number;
   notify_on_complete: boolean;
+  close_to_tray: boolean;
 }
 
 // Matches Rust WindowBackdrop (returned by apply_window_theme)

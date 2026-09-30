@@ -213,20 +213,16 @@ pub async fn pause_download(
     Ok(task)
 }
 
-// ─── 5. Resume ──────────────────────────────────────────────
-/// Continues a paused or failed download from its completed chunks (or from zero if the
-/// engine finds its resume data unusable).
-#[tauri::command]
-pub async fn resume_download(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    task_id: String,
+pub async fn resume_task_internal(
+    app: &AppHandle,
+    state: &AppState,
+    task_id: &str,
 ) -> Result<DownloadTaskState, String> {
     let task = state
         .tasks
         .read()
         .await
-        .get(&task_id)
+        .get(task_id)
         .cloned()
         .ok_or_else(|| format!("Unknown task: {task_id}"))?;
     match task.status {
@@ -234,7 +230,7 @@ pub async fn resume_download(
         TaskStatus::Downloading => return Ok(task),
         TaskStatus::Completed => return Err("Download is already complete".to_string()),
     }
-    if state.handles.lock().await.contains_key(&task_id) {
+    if state.handles.lock().await.contains_key(task_id) {
         return Err("Download is still stopping; try again in a moment".to_string());
     }
 
@@ -261,11 +257,11 @@ pub async fn resume_download(
     }
 
     info!(task_id = %task_id, url = %probe.url, output = %task.save_path, "Resuming download");
-    let shared = Shared::new(&app, &state);
+    let shared = Shared::new(app, state);
     let total_bytes = probe.total_bytes;
     let supports_ranges = probe.supports_ranges;
     let snapshot = shared
-        .update(&task_id, |t| {
+        .update(task_id, |t| {
             t.status = TaskStatus::Downloading;
             t.total_bytes = total_bytes;
             t.supports_ranges = supports_ranges;
@@ -281,8 +277,73 @@ pub async fn resume_download(
         return Err(format!("Unknown task: {task_id}"));
     };
     shared.save_history().await;
-    spawn_task(shared, task_id, engine, probe, output_path, adapters, true).await;
+    spawn_task(
+        shared,
+        task_id.to_string(),
+        engine,
+        probe,
+        output_path,
+        adapters,
+        true,
+    )
+    .await;
     Ok(snapshot)
+}
+
+pub async fn pause_all_internal(app: &AppHandle, state: &AppState) {
+    let running_ids: Vec<String> = {
+        let tasks = state.tasks.read().await;
+        tasks
+            .values()
+            .filter(|t| t.status == TaskStatus::Downloading)
+            .map(|t| t.id.clone())
+            .collect()
+    };
+    let shared = Shared::new(app, state);
+    for id in running_ids {
+        stop_task(&shared, &id).await;
+    }
+    shared.save_history().await;
+}
+
+pub async fn resume_all_internal(app: &AppHandle, state: &AppState) {
+    let paused_ids: Vec<String> = {
+        let tasks = state.tasks.read().await;
+        tasks
+            .values()
+            .filter(|t| t.status == TaskStatus::Paused || t.status == TaskStatus::Error)
+            .map(|t| t.id.clone())
+            .collect()
+    };
+    for id in paused_ids {
+        if let Err(e) = resume_task_internal(app, state, &id).await {
+            warn!(task_id = %id, "Failed to resume task in resume_all: {e}");
+        }
+    }
+}
+
+// ─── 5. Resume ──────────────────────────────────────────────
+/// Continues a paused or failed download from its completed chunks (or from zero if the
+/// engine finds its resume data unusable).
+#[tauri::command]
+pub async fn resume_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<DownloadTaskState, String> {
+    resume_task_internal(&app, &state, &task_id).await
+}
+
+#[tauri::command]
+pub async fn pause_all(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    pause_all_internal(&app, &state).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn resume_all(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    resume_all_internal(&app, &state).await;
+    Ok(())
 }
 
 // ─── 6. Remove ──────────────────────────────────────────────
