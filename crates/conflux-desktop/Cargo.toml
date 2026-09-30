@@ -24,3 +24,5 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
+tauri-plugin-notification = "2"
+window-vibrancy = "0.8"

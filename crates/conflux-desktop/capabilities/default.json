@@ -16,6 +16,9 @@
     "core:window:allow-set-focus",
     "opener:default",
     "opener:allow-reveal-item-in-dir",
-    "dialog:default"
+    "dialog:default",
+    "core:window:allow-set-theme",
+    "core:event:default",
+    "notification:default"
   ]
 }

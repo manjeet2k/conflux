@@ -212,6 +212,24 @@ impl ChunkScheduler {
         }
     }
 
+    /// Ids of all `Completed` chunks, ascending by position.
+    pub(crate) fn completed_ids(&self) -> Vec<usize> {
+        self.ids_with_status(ChunkStatus::Completed)
+    }
+
+    /// One char per chunk in plan order: `.` pending, `>` downloading, `#` completed, `!` failed.
+    pub(crate) fn chunk_map(&self) -> String {
+        self.slots
+            .iter()
+            .map(|s| match s.chunk.status {
+                ChunkStatus::Pending => '.',
+                ChunkStatus::Downloading => '>',
+                ChunkStatus::Completed => '#',
+                ChunkStatus::Failed => '!',
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.slots.len()
@@ -486,5 +504,44 @@ mod tests {
                 assert!(slot.chunk.attempts <= 5);
             }
         }
+    }
+
+    #[test]
+    fn test_scheduler_skips_precompleted_chunks_and_maps_states() {
+        let mut chunks = plan_chunks(4 * 10, 10);
+        chunks[1].status = ChunkStatus::Completed;
+        chunks[1].downloaded = chunks[1].size;
+        chunks[3].status = ChunkStatus::Completed;
+        chunks[3].downloaded = chunks[3].size;
+        let mut s = ChunkScheduler::new(chunks, 2, Duration::from_millis(10));
+        assert_eq!(s.chunk_map(), ".#.#");
+        assert_eq!(s.completed_ids(), vec![1, 3]);
+
+        let now = Instant::now();
+        let Claim::Chunk(a) = s.claim(now, None) else {
+            panic!("expected a chunk")
+        };
+        assert_eq!(a.id, 0);
+        assert_eq!(s.chunk_map(), ">#.#");
+        let Claim::Chunk(b) = s.claim(now, None) else {
+            panic!("expected a chunk")
+        };
+        assert_eq!(b.id, 2, "pre-completed chunk 1 must never be claimed");
+        s.complete(0);
+        s.complete(2);
+        assert!(s.all_completed());
+        assert_eq!(s.chunk_map(), "####");
+        assert_eq!(s.claim(now, None), Claim::Finished);
+    }
+
+    #[test]
+    fn test_chunk_map_marks_failed() {
+        let mut s = scheduler(2, 1, 1);
+        let now = Instant::now();
+        let Claim::Chunk(c) = s.claim(now, None) else {
+            panic!("expected a chunk")
+        };
+        assert_eq!(s.fail(c.id, now), FailOutcome::Failed);
+        assert_eq!(s.chunk_map(), "!.");
     }
 }

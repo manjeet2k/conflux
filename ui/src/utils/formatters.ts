@@ -26,3 +26,16 @@ export function formatEta(seconds: number): string {
   const remMins = mins % 60;
   return `${hours}h ${remMins}m`;
 }
+
+const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'short' });
+
+export function formatDate(ms: number | null | undefined): string {
+  if (!ms) return '--';
+  return dateFormat.format(new Date(ms));
+}
+
+/** Fraction downloaded in [0, 1]; 0 when the size is unknown. */
+export function progressOf(downloaded: number, total: number): number {
+  if (total <= 0) return 0;
+  return Math.min(1, Math.max(0, downloaded / total));
+}

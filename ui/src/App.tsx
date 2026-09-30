@@ -1,359 +1,374 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { invoke, Channel } from '@tauri-apps/api/core';
-import { AlertCircle, X } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  FluentProvider,
+  Toast,
+  ToastTitle,
+  Toaster,
+  makeStyles,
+  tokens,
+  useId,
+  useToastController,
+} from '@fluentui/react-components';
+import type { ToastIntent } from '@fluentui/react-components';
+import {
+  ArrowDownload48Regular,
+  CheckmarkCircle48Regular,
+  ErrorCircle48Regular,
+  PauseCircle48Regular,
+  Search48Regular,
+} from '@fluentui/react-icons';
+import { api, errorText } from './api';
+import type { AdapterInfo, DownloadTask, TaskStatus, ViewId } from './types';
+import { darkTheme, lightTheme, surfaceVars } from './theme';
+import { useDownloads } from './hooks/useDownloads';
+import { useSettings } from './hooks/useSettings';
+import { useWindowTheme } from './hooks/useWindowTheme';
+import { useSpeedHistory } from './hooks/useSpeedHistory';
 import { TitleBar } from './components/TitleBar';
-import { Sidebar } from './components/Sidebar';
-import { DownloadList } from './components/DownloadList';
-import { InspectionDrawer } from './components/InspectionDrawer';
-import { NewDownloadModal } from './components/NewDownloadModal';
-import type {
-  AdapterInfo,
-  CategoryFilter,
-  DownloadTask,
-  DownloadTaskState,
-  ProgressEvent,
-  StartedDownload,
-  TaskStatus,
-} from './types';
+import { NavPane } from './components/NavPane';
+import { CommandBar } from './components/CommandBar';
+import { DownloadTable, GRID_ID } from './components/DownloadTable';
+import type { RowActions } from './components/DownloadTable';
+import { sortTasks } from './utils/sort';
+import type { SortState } from './utils/sort';
+import { DetailsPane } from './components/DetailsPane';
+import { AddDownloadDialog } from './components/AddDownloadDialog';
+import { RemoveDialog } from './components/RemoveDialog';
+import { StatusBar } from './components/StatusBar';
+import { EmptyState } from './components/EmptyState';
+import { NetworkPage } from './pages/NetworkPage';
+import { SettingsPage } from './pages/SettingsPage';
+import { copyText, extractUrl } from './utils/files';
 
-const isFinalStatus = (status: TaskStatus) => status !== 'downloading';
+const useStyles = makeStyles({
+  root: {
+    height: '100vh',
+    display: 'flex',
+    flexDirection: 'column',
+    backgroundColor: 'var(--cfx-window)',
+    color: tokens.colorNeutralForeground1,
+    overflow: 'hidden',
+  },
+  body: { flex: 1, display: 'flex', minHeight: 0 },
+  // Win11 layering: the content "layer" sits on the backdrop with a rounded top-left corner.
+  layer: {
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    backgroundColor: 'var(--cfx-layer)',
+    borderTop: '1px solid var(--cfx-stroke)',
+    borderLeft: '1px solid var(--cfx-stroke)',
+    borderTopLeftRadius: tokens.borderRadiusXLarge,
+    overflow: 'hidden',
+  },
+  content: { flex: 1, display: 'flex', minHeight: 0 },
+  list: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' },
+});
 
-/** Pure reducer: fold one backend progress event into a task. */
-function applyProgressEvent(task: DownloadTask, event: ProgressEvent): DownloadTask {
-  switch (event.status) {
-    case 'completed': {
-      const total = event.total_bytes || task.totalBytes;
-      const totalChunks = event.total_chunks || task.totalChunks;
-      return {
-        ...task,
-        status: 'completed',
-        totalBytes: total,
-        downloadedBytes: event.downloaded_bytes || total,
-        currentSpeedBytesSec: 0,
-        etaSeconds: 0,
-        activeChunks: 0,
-        totalChunks,
-        completedChunks: event.completed_chunks || totalChunks,
-        sha256: event.sha256 ?? task.sha256,
-        error: undefined,
-      };
-    }
-    case 'error':
-      return {
-        ...task,
-        status: 'error',
-        currentSpeedBytesSec: 0,
-        etaSeconds: 0,
-        activeChunks: 0,
-        error: event.error || 'Download failed',
-      };
-    case 'stopped':
-      return {
-        ...task,
-        status: 'stopped',
-        downloadedBytes: event.downloaded_bytes || task.downloadedBytes,
-        currentSpeedBytesSec: 0,
-        etaSeconds: 0,
-        activeChunks: 0,
-      };
-    case 'downloading':
-      return {
-        ...task,
-        status: 'downloading',
-        totalBytes: event.total_bytes || task.totalBytes,
-        downloadedBytes: event.downloaded_bytes,
-        currentSpeedBytesSec: event.speed_bytes_sec,
-        etaSeconds: event.eta_seconds,
-        activeChunks: event.active_chunks,
-        completedChunks: event.completed_chunks,
-        totalChunks: event.total_chunks,
-      };
-  }
-}
+const viewStatuses: Partial<Record<ViewId, TaskStatus>> = {
+  active: 'downloading',
+  paused: 'paused',
+  completed: 'completed',
+  failed: 'error',
+};
 
-function taskFromState(s: DownloadTaskState): DownloadTask {
-  return {
-    id: s.id,
-    filename: s.filename,
-    url: s.url,
-    totalBytes: s.total_bytes,
-    downloadedBytes: s.downloaded_bytes,
-    status: s.status,
-    currentSpeedBytesSec: s.speed_bytes_sec,
-    etaSeconds: s.eta_seconds,
-    activeChunks: s.active_chunks,
-    completedChunks: s.completed_chunks,
-    totalChunks: s.total_chunks,
-    savePath: s.save_path,
-    saveDir: s.save_dir,
-    adapterIds: s.adapter_ids,
-    sha256: s.sha256 ?? undefined,
-    error: s.error ?? undefined,
-  };
-}
+const emptyStates = {
+  all: { icon: ArrowDownload48Regular, title: 'No downloads yet', body: 'Add a link, or copy one and press Ctrl+V anywhere in Conflux.' },
+  active: { icon: ArrowDownload48Regular, title: 'Nothing downloading', body: 'Active downloads show up here with live speed per adapter.' },
+  paused: { icon: PauseCircle48Regular, title: 'No paused downloads', body: 'Paused downloads keep their finished chunks and resume where they left off.' },
+  completed: { icon: CheckmarkCircle48Regular, title: 'No completed downloads', body: 'Finished files are verified with a SHA-256 checksum.' },
+  failed: { icon: ErrorCircle48Regular, title: 'No failed downloads', body: 'Downloads that fail after retries on every adapter appear here.' },
+} as const;
+
+const isEditable = (el: EventTarget | null) =>
+  el instanceof HTMLElement && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
+
+const readPref = (key: string, fallback: boolean) => {
+  const v = localStorage.getItem(key);
+  return v === null ? fallback : v === '1';
+};
 
 export const App: React.FC = () => {
-  const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
-  const [tasks, setTasks] = useState<DownloadTask[]>([]);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [currentCategory, setCurrentCategory] = useState<CategoryFilter>('all');
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const toasterId = useId('toaster');
+  const { dispatchToast } = useToastController(toasterId);
+  const notify = useCallback(
+    (intent: ToastIntent, title: string) =>
+      dispatchToast(
+        <Toast>
+          <ToastTitle>{title}</ToastTitle>
+        </Toast>,
+        { intent, timeout: intent === 'error' ? 8000 : 3000 }
+      ),
+    [dispatchToast]
+  );
+  const onError = useCallback((message: string) => notify('error', message), [notify]);
 
-  // Task ids that exist in `tasks`. Progress events can arrive before `start_download`
-  // resolves (i.e. before the task is inserted), so events for unknown ids are buffered
-  // in `pendingEvents` (latest per id; a final event is never overwritten) and applied
-  // when the task is inserted.
-  const knownTaskIds = useRef(new Set<string>());
-  const pendingEvents = useRef(new Map<string, ProgressEvent>());
-  // Ids removed by the user; late events for them are dropped instead of buffered forever.
-  const removedTaskIds = useRef(new Set<string>());
+  const { settings, update: updateSettings } = useSettings(onError);
+  const { dark, mica } = useWindowTheme(settings.theme);
+  const { tasks, start, pause, resume, remove } = useDownloads(onError);
+  const history = useSpeedHistory(tasks);
+  const styles = useStyles();
+
+  const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
+  const [view, setView] = useState<ViewId>('all');
+  const [compactNav, setCompactNav] = useState(() => readPref('cfx.compactNav', window.innerWidth < 1100));
+  const [detailsOpen, setDetailsOpen] = useState(() => readPref('cfx.details', true));
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<SortState>({ key: 'added', direction: 'descending' });
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [addOpen, setAddOpen] = useState(false);
+  const [addUrl, setAddUrl] = useState('');
+  const [removeIds, setRemoveIds] = useState<string[]>([]);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => localStorage.setItem('cfx.compactNav', compactNav ? '1' : '0'), [compactNav]);
+  useEffect(() => localStorage.setItem('cfx.details', detailsOpen ? '1' : '0'), [detailsOpen]);
 
   const refreshAdapters = useCallback(() => {
-    invoke<AdapterInfo[]>('discover_adapters')
+    api
+      .discoverAdapters()
       .then(setAdapters)
-      .catch((e) => {
-        console.error('Failed to discover network adapters:', e);
-        setErrorMessage(`Failed to discover network adapters: ${String(e)}`);
-      });
-  }, []);
+      .catch((e) => onError(`Failed to discover network adapters: ${errorText(e)}`));
+  }, [onError]);
+  useEffect(refreshAdapters, [refreshAdapters]);
 
-  // Startup: discover adapters and restore any tasks the backend already knows about
-  // (e.g. after a webview reload).
-  useEffect(() => {
-    refreshAdapters();
-    invoke<DownloadTaskState[]>('list_tasks')
-      .then((states) => {
-        const restored = states.map(taskFromState);
-        restored.forEach((t) => knownTaskIds.current.add(t.id));
-        setTasks((prev) => {
-          const existing = new Set(prev.map((t) => t.id));
-          return [...prev, ...restored.filter((t) => !existing.has(t.id))];
-        });
-      })
-      .catch((e) => console.error('Failed to list tasks:', e));
-  }, [refreshAdapters]);
-
-  const handleProgressEvent = useCallback((event: ProgressEvent) => {
-    if (removedTaskIds.current.has(event.task_id)) return;
-    if (!knownTaskIds.current.has(event.task_id)) {
-      const buffered = pendingEvents.current.get(event.task_id);
-      if (!buffered || !isFinalStatus(buffered.status)) {
-        pendingEvents.current.set(event.task_id, event);
-      }
-      return;
-    }
-    setTasks((prev) => prev.map((t) => (t.id === event.task_id ? applyProgressEvent(t, event) : t)));
-  }, []);
-
-  /** Starts a download and inserts its task. Throws the backend error message on failure. */
-  const startTask = useCallback(
-    async (url: string, saveDir: string, adapterIds: string[]): Promise<string> => {
-      const onProgress = new Channel<ProgressEvent>();
-      onProgress.onmessage = handleProgressEvent;
-
-      const started = await invoke<StartedDownload>('start_download', {
-        url,
-        saveDir,
-        adapterIds,
-        onProgress,
-      });
-
-      let newTask: DownloadTask = {
-        id: started.task_id,
-        filename: started.filename,
-        url,
-        totalBytes: started.total_bytes,
-        downloadedBytes: 0,
-        status: 'downloading',
-        currentSpeedBytesSec: 0,
-        etaSeconds: 0,
-        activeChunks: 0,
-        completedChunks: 0,
-        totalChunks: 0,
-        savePath: started.save_path,
-        saveDir,
-        adapterIds,
-      };
-
-      const buffered = pendingEvents.current.get(started.task_id);
-      if (buffered) {
-        pendingEvents.current.delete(started.task_id);
-        newTask = applyProgressEvent(newTask, buffered);
-      }
-      knownTaskIds.current.add(started.task_id);
-      setTasks((prev) => [newTask, ...prev]);
-      return started.task_id;
+  const openAdd = useCallback(
+    (url = '') => {
+      refreshAdapters();
+      setAddUrl(url);
+      setAddOpen(true);
     },
-    [handleProgressEvent]
+    [refreshAdapters]
   );
 
-  const totalSpeed = tasks
-    .filter((t) => t.status === 'downloading')
-    .reduce((sum, t) => sum + t.currentSpeedBytesSec, 0);
+  // ─── Derived lists ───
+  const counts = useMemo(
+    () => ({
+      all: tasks.length,
+      active: tasks.filter((t) => t.status === 'downloading').length,
+      paused: tasks.filter((t) => t.status === 'paused').length,
+      completed: tasks.filter((t) => t.status === 'completed').length,
+      failed: tasks.filter((t) => t.status === 'error').length,
+    }),
+    [tasks]
+  );
 
-  const taskCounts = {
-    all: tasks.length,
-    downloading: tasks.filter((t) => t.status === 'downloading').length,
-    completed: tasks.filter((t) => t.status === 'completed').length,
-    stopped: tasks.filter((t) => t.status === 'stopped').length,
+  const visible = useMemo(() => {
+    const status = viewStatuses[view];
+    const q = search.trim().toLowerCase();
+    const filtered = tasks.filter(
+      (t) =>
+        (!status || t.status === status) &&
+        (!q || t.filename.toLowerCase().includes(q) || t.url.toLowerCase().includes(q))
+    );
+    return sortTasks(filtered, sort);
+  }, [tasks, view, search, sort]);
+
+  // Selection is always a subset of what's visible.
+  const selectedTasks = visible.filter((t) => selected.has(t.id));
+  const single = selectedTasks.length === 1 ? selectedTasks[0] : null;
+  const totalSpeed = tasks.reduce((s, t) => s + (t.status === 'downloading' ? t.speed_bytes_sec : 0), 0);
+
+  const idsWhere = (list: DownloadTask[], pred: (t: DownloadTask) => boolean) => list.filter(pred).map((t) => t.id);
+  const isResumable = (t: DownloadTask) => t.status === 'paused' || t.status === 'error';
+  const isRunning = (t: DownloadTask) => t.status === 'downloading';
+
+  // ─── Actions ───
+  const actions: RowActions = {
+    onOpen: (t) => api.openFile(t.id).catch((e) => onError(`Couldn't open ${t.filename}: ${errorText(e)}`)),
+    onReveal: (t) => api.revealFile(t.id).catch((e) => onError(`Couldn't show ${t.filename}: ${errorText(e)}`)),
+    onResume: (ids) => ids.length > 0 && resume(ids),
+    onPause: (ids) => ids.length > 0 && pause(ids),
+    onRemove: (ids) => ids.length > 0 && setRemoveIds(ids),
+    onCopyLink: (list) =>
+      copyText(list.map((t) => t.url).join('\n')).then(() =>
+        notify('success', list.length === 1 ? 'Link copied' : `${list.length} links copied`)
+      ),
+    onAdd: () => openAdd(),
   };
 
-  const filteredTasks = tasks.filter((t) => {
-    if (currentCategory === 'all') return true;
-    return t.status === currentCategory;
-  });
+  const copy = (text: string, what: string) => copyText(text).then(() => notify('success', `${what} copied`));
 
-  const selectedTask = tasks.find((t) => t.id === selectedTaskId) || null;
+  // ─── Global keyboard shortcuts & paste-to-add ───
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      if (e.ctrlKey && key === 'n') {
+        e.preventDefault();
+        openAdd();
+      } else if (e.ctrlKey && key === 'f') {
+        e.preventDefault();
+        setView((v) => (v === 'network' || v === 'settings' ? 'all' : v));
+        setTimeout(() => searchRef.current?.focus());
+      } else if (e.key === 'F5' || (e.ctrlKey && key === 'r')) {
+        // Never reload the webview; refresh adapters instead.
+        e.preventDefault();
+        refreshAdapters();
+      }
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      if (addOpen || isEditable(e.target)) return;
+      const url = extractUrl(e.clipboardData?.getData('text') ?? '');
+      if (url) {
+        e.preventDefault();
+        openAdd(url);
+      } else {
+        notify('info', 'The clipboard does not contain a link');
+      }
+    };
+    // Suppress the browser's context menu outside text fields; our own menus handle right-click.
+    const onContext = (e: MouseEvent) => {
+      if (!isEditable(e.target)) e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('paste', onPaste);
+    document.addEventListener('contextmenu', onContext);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('paste', onPaste);
+      document.removeEventListener('contextmenu', onContext);
+    };
+  }, [addOpen, openAdd, refreshAdapters, notify]);
 
-  /** Returns an error message for the modal to display, or null on success. */
-  const handleStartDownload = async (
-    url: string,
-    adapterIds: string[],
-    saveDir: string
-  ): Promise<string | null> => {
-    try {
-      const taskId = await startTask(url, saveDir, adapterIds);
-      setSelectedTaskId(taskId);
-      return null;
-    } catch (e) {
-      console.error('Failed to start download:', e);
-      return `Failed to start download: ${String(e)}`;
-    }
+  const handleStart = async (args: Parameters<typeof start>[0]) => {
+    const task = await start(args);
+    if (view !== 'all' && view !== 'active') setView('all');
+    setSelected(new Set([task.id]));
+    notify('success', `Downloading ${task.filename}`);
   };
 
-  const handleStopTask = async (taskId: string) => {
-    try {
-      const status = await invoke<TaskStatus>('pause_download', { taskId });
-      setTasks((prev) =>
-        prev.map((t) =>
-          t.id === taskId && t.status === 'downloading'
-            ? { ...t, status, currentSpeedBytesSec: 0, etaSeconds: 0, activeChunks: 0 }
-            : t
-        )
-      );
-    } catch (e) {
-      console.error('Failed to stop download:', e);
-      setErrorMessage(`Failed to stop download: ${String(e)}`);
-    }
-  };
+  const chunkColors = useMemo(
+    () =>
+      dark
+        ? { done: '#60CDFF', active: '#C5A8F0', failed: '#FF99A4', pending: 'rgba(255,255,255,0.10)' }
+        : { done: '#005FB8', active: '#8764B8', failed: '#C42B1C', pending: 'rgba(0,0,0,0.08)' },
+    [dark]
+  );
 
-  const removeTaskLocally = (taskId: string) => {
-    knownTaskIds.current.delete(taskId);
-    removedTaskIds.current.add(taskId);
-    pendingEvents.current.delete(taskId);
-    setTasks((prev) => prev.filter((t) => t.id !== taskId));
-    setSelectedTaskId((sel) => (sel === taskId ? null : sel));
-  };
-
-  /** No resume yet: drop the old task (and its partial file), then download again from zero. */
-  const handleRestartTask = async (taskId: string) => {
-    const old = tasks.find((t) => t.id === taskId);
-    if (!old) return;
-    try {
-      await invoke('cancel_download', { taskId });
-    } catch (e) {
-      setErrorMessage(`Failed to restart download: ${String(e)}`);
-      return;
-    }
-    removeTaskLocally(taskId);
-    try {
-      const newId = await startTask(old.url, old.saveDir, old.adapterIds);
-      setSelectedTaskId((sel) => (sel === null || sel === taskId ? newId : sel));
-    } catch (e) {
-      console.error('Failed to restart download:', e);
-      setErrorMessage(`Failed to restart ${old.filename}: ${String(e)}`);
-    }
-  };
-
-  const handleDeleteTask = async (taskId: string) => {
-    try {
-      await invoke('cancel_download', { taskId });
-      removeTaskLocally(taskId);
-    } catch (e) {
-      console.error('Failed to remove download:', e);
-      setErrorMessage(`Failed to remove download: ${String(e)}`);
-    }
-  };
-
-  const handleStopAll = () => {
-    tasks.filter((t) => t.status === 'downloading').forEach((t) => handleStopTask(t.id));
-  };
-
-  const handleRestartAll = () => {
-    tasks.filter((t) => t.status === 'stopped').forEach((t) => handleRestartTask(t.id));
-  };
-
-  const handleOpenModal = () => {
-    refreshAdapters();
-    setIsModalOpen(true);
-  };
+  const isListView = view !== 'network' && view !== 'settings';
+  const empty = emptyStates[view as keyof typeof emptyStates];
 
   return (
-    <div className="flex flex-col h-screen bg-fluent-bg text-neutral-100 font-sans overflow-hidden">
-      {/* TitleBar */}
-      <TitleBar
-        totalSpeed={totalSpeed}
-        onOpenNewModal={handleOpenModal}
-        onRestartAll={handleRestartAll}
-        onStopAll={handleStopAll}
-        canRestartAll={taskCounts.stopped > 0}
-        canStopAll={taskCounts.downloading > 0}
-      />
-
-      {/* Inline error banner */}
-      {errorMessage && (
-        <div
-          role="alert"
-          className="flex items-start justify-between gap-3 px-4 py-2 bg-rose-500/10 border-b border-rose-500/30 text-xs text-rose-300"
-        >
-          <div className="flex items-start gap-2 min-w-0">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-px" />
-            <span className="break-words select-text">{errorMessage}</span>
-          </div>
-          <button
-            onClick={() => setErrorMessage(null)}
-            className="p-0.5 rounded hover:bg-white/10 text-rose-300 hover:text-white shrink-0"
-            title="Dismiss"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
-
-      {/* Main Workspace Layout */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <Sidebar
-          currentCategory={currentCategory}
-          onSelectCategory={setCurrentCategory}
-          taskCounts={taskCounts}
-          adapters={adapters}
-        />
-
-        {/* Central Stage & Inspection Drawer */}
-        <main className="flex-1 flex flex-col bg-fluent-bg overflow-hidden">
-          <DownloadList
-            tasks={filteredTasks}
-            selectedTaskId={selectedTaskId}
-            onSelectTask={setSelectedTaskId}
-            onStopTask={handleStopTask}
-            onRestartTask={handleRestartTask}
-            onDeleteTask={handleDeleteTask}
+    // Layout lives on an inner div: FluentProvider's className is also applied to portal
+    // mount nodes (menus, dialogs, toasts), which must not become full-screen boxes.
+    <FluentProvider theme={dark ? darkTheme : lightTheme} style={surfaceVars(dark, mica)}>
+      <div className={styles.root}>
+        <TitleBar />
+        <div className={styles.body}>
+          <NavPane
+            view={view}
+            onSelect={(v) => {
+              setView(v);
+              setSelected(new Set());
+            }}
+            counts={counts}
+            compact={compactNav}
+            onToggleCompact={() => setCompactNav((c) => !c)}
           />
-
-          <InspectionDrawer task={selectedTask} />
-        </main>
+          <main className={styles.layer}>
+            {isListView && (
+              <>
+                <CommandBar
+                  canResume={selectedTasks.some(isResumable)}
+                  canPause={selectedTasks.some(isRunning)}
+                  canRemove={selectedTasks.length > 0}
+                  canOpen={single?.status === 'completed'}
+                  canReveal={!!single}
+                  canCopyLink={selectedTasks.length > 0}
+                  anyPaused={tasks.some(isResumable)}
+                  anyActive={tasks.some(isRunning)}
+                  anyCompleted={counts.completed > 0}
+                  onAdd={() => openAdd()}
+                  onResume={() => resume(idsWhere(selectedTasks, isResumable))}
+                  onPause={() => pause(idsWhere(selectedTasks, isRunning))}
+                  onRemove={() => setRemoveIds(selectedTasks.map((t) => t.id))}
+                  onOpen={() => single && actions.onOpen(single)}
+                  onReveal={() => single && actions.onReveal(single)}
+                  onCopyLink={() => actions.onCopyLink(selectedTasks)}
+                  onResumeAll={() => resume(idsWhere(tasks, isResumable))}
+                  onPauseAll={() => pause(idsWhere(tasks, isRunning))}
+                  onClearCompleted={() =>
+                    remove(
+                      idsWhere(tasks, (t) => t.status === 'completed'),
+                      false
+                    )
+                  }
+                  search={search}
+                  onSearch={setSearch}
+                  searchRef={searchRef}
+                  detailsOpen={detailsOpen}
+                  onToggleDetails={() => setDetailsOpen((d) => !d)}
+                />
+                <div className={styles.content}>
+                  <div className={styles.list}>
+                    {visible.length === 0 ? (
+                      search.trim() ? (
+                        <EmptyState icon={Search48Regular} title="No matches" body={`Nothing matches "${search.trim()}".`} />
+                      ) : (
+                        <EmptyState
+                          {...empty}
+                          onAdd={view === 'all' || view === 'active' ? () => openAdd() : undefined}
+                        />
+                      )
+                    ) : (
+                      <DownloadTable
+                        tasks={visible}
+                        sort={sort}
+                        onSort={setSort}
+                        selected={selected}
+                        onSelectionChange={setSelected}
+                        actions={actions}
+                      />
+                    )}
+                  </div>
+                  {detailsOpen && (
+                    <DetailsPane
+                      selection={selectedTasks}
+                      adapters={adapters}
+                      dark={dark}
+                      chunkColors={chunkColors}
+                      onResume={(ids) => resume(ids)}
+                      onPause={(ids) => pause(ids)}
+                      onOpen={actions.onOpen}
+                      onReveal={actions.onReveal}
+                      onCopy={copy}
+                    />
+                  )}
+                </div>
+                <StatusBar items={visible.length} selected={selectedTasks.length} active={counts.active} speed={totalSpeed} />
+              </>
+            )}
+            {view === 'network' && (
+              <NetworkPage adapters={adapters} tasks={tasks} history={history} dark={dark} onRefresh={refreshAdapters} />
+            )}
+            {view === 'settings' && <SettingsPage settings={settings} onChange={updateSettings} />}
+          </main>
+        </div>
       </div>
 
-      {/* New Download Modal */}
-      <NewDownloadModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
+      <AddDownloadDialog
+        open={addOpen}
+        initialUrl={addUrl}
         adapters={adapters}
-        onStartDownload={handleStartDownload}
+        defaultSaveDir={settings.default_save_dir}
+        onRefreshAdapters={refreshAdapters}
+        onStart={handleStart}
+        onClose={() => {
+          setAddOpen(false);
+          document.getElementById(GRID_ID)?.focus();
+        }}
       />
-    </div>
+      <RemoveDialog
+        tasks={tasks.filter((t) => removeIds.includes(t.id))}
+        onConfirm={(ids, deleteFiles) => {
+          remove(ids, deleteFiles);
+          setSelected(new Set());
+        }}
+        onClose={() => setRemoveIds([])}
+      />
+      <Toaster toasterId={toasterId} position="bottom-end" offset={{ vertical: 40 }} />
+    </FluentProvider>
   );
 };
 

@@ -51,6 +51,8 @@ pub struct ServerConfig {
     pub all_status: Option<u16>,
     /// Respond 405 to every GET (HEAD still works).
     pub get_status_405: bool,
+    /// `ETag` header sent with every 200/206 response (including HEAD).
+    pub etag: Option<String>,
 }
 
 impl ServerConfig {
@@ -68,6 +70,7 @@ impl ServerConfig {
             content_disposition: None,
             all_status: None,
             get_status_405: false,
+            etag: None,
         }
     }
 }
@@ -253,6 +256,9 @@ async fn send_full(
     if let Some(cd) = &config.content_disposition {
         headers.push(("Content-Disposition".to_string(), cd.clone()));
     }
+    if let Some(etag) = &config.etag {
+        headers.push(("ETag".to_string(), etag.clone()));
+    }
     write_head(sock, 200, &headers).await?;
     if with_body {
         write_body(sock, data, config, stats).await?;
@@ -372,6 +378,9 @@ async fn handle(
     ));
     if let Some(cd) = &config.content_disposition {
         headers.push(("Content-Disposition".to_string(), cd.clone()));
+    }
+    if let Some(etag) = &config.etag {
+        headers.push(("ETag".to_string(), etag.clone()));
     }
     let overlong = config.range_mode == RangeMode::Overlong && !is_probe;
     if !overlong {

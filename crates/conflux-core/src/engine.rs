@@ -2,13 +2,17 @@ use crate::adapter::{build_bound_http_client, NetworkAdapter, DEFAULT_STALL_TIME
 use crate::checksum::compute_sha256;
 use crate::chunk::{plan_chunks, Chunk, ChunkScheduler, ChunkStatus, Claim, FailOutcome};
 use crate::filename::derive_filename;
+use crate::resume::{
+    decode_ranges, encode_ranges, read_sidecar, remove_resume_sidecar, resume_sidecar_path,
+    validate, write_sidecar, ResumeState, SIDECAR_VERSION,
+};
 use crate::writer::SparseFileWriter;
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::StreamExt;
 use reqwest::{header, StatusCode};
 use std::fmt;
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -33,6 +37,12 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Interval between progress updates.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
 
+/// The chunk map is included in every Nth progress update (~1/s) and in the final one.
+const CHUNK_MAP_EVERY_N_UPDATES: u32 = 5;
+
+/// How often the resume sidecar is refreshed (only when the completed set changed).
+const SIDECAR_INTERVAL: Duration = Duration::from_secs(2);
+
 /// Returned (wrapped in `anyhow::Error`) when a download was cancelled via the cancel channel.
 /// Detect with `err.downcast_ref::<DownloadCancelled>().is_some()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -55,6 +65,25 @@ pub struct DownloadProbe {
     pub supports_ranges: bool,
     /// Already sanitized, bare file name.
     pub suggested_filename: String,
+    /// `ETag` validator, used to detect a changed resource before resuming.
+    pub etag: Option<String>,
+    /// `Last-Modified` validator, used to detect a changed resource before resuming.
+    pub last_modified: Option<String>,
+}
+
+/// Live statistics of one bound adapter (or the unbound default route) in one download run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdapterProgress {
+    /// Bound local IP as a string, or `"default-route"`.
+    pub label: String,
+    pub ip: Option<IpAddr>,
+    /// Gross body bytes received through this adapter in this run, including bytes of
+    /// attempts that later failed and were retried (so it measures real traffic).
+    pub downloaded_bytes: u64,
+    pub speed_bytes_sec: f64,
+    pub active_connections: usize,
+    /// The engine stopped using this adapter after repeated consecutive failures.
+    pub dropped: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +95,11 @@ pub struct ProgressUpdate {
     pub completed_chunks: usize,
     pub total_chunks: usize,
     pub eta_seconds: u64,
+    pub adapters: Vec<AdapterProgress>,
+    /// One char per chunk: `.` pending, `>` downloading, `#` completed, `!` failed.
+    /// Only present in about one update per second and in the final update (`None` means
+    /// "unchanged since the last map"); always `None` for single-stream downloads.
+    pub chunk_map: Option<String>,
 }
 
 pub struct DownloadEngine {
@@ -161,9 +195,45 @@ struct Counters {
 /// Per-adapter state shared by that adapter's workers.
 struct AdapterWorkerState {
     label: String,
+    ip: Option<IpAddr>,
     client: reqwest::Client,
     consecutive_failures: AtomicU32,
     dropped: AtomicBool,
+    /// Gross body bytes received (never decremented; see `AdapterProgress`).
+    received: AtomicU64,
+    active: AtomicUsize,
+}
+
+impl AdapterWorkerState {
+    fn new(ip: Option<IpAddr>, client: reqwest::Client) -> Self {
+        Self {
+            label: DownloadEngine::bind_label(ip),
+            ip,
+            client,
+            consecutive_failures: AtomicU32::new(0),
+            dropped: AtomicBool::new(false),
+            received: AtomicU64::new(0),
+            active: AtomicUsize::new(0),
+        }
+    }
+
+    fn progress(&self, speed_bytes_sec: f64) -> AdapterProgress {
+        AdapterProgress {
+            label: self.label.clone(),
+            ip: self.ip,
+            downloaded_bytes: self.received.load(Ordering::SeqCst),
+            speed_bytes_sec,
+            active_connections: self.active.load(Ordering::SeqCst),
+            dropped: self.dropped.load(Ordering::SeqCst),
+        }
+    }
+}
+
+/// Where and what to write for the resume sidecar of one chunked download.
+struct SidecarTarget {
+    path: PathBuf,
+    /// Everything except `completed`.
+    template: ResumeState,
 }
 
 /// State shared by every worker of one chunked download.
@@ -306,6 +376,8 @@ impl DownloadEngine {
             header_str(&headers, header::CONTENT_DISPOSITION),
             &final_url,
         );
+        let etag = header_str(&headers, header::ETAG).map(str::to_string);
+        let last_modified = header_str(&headers, header::LAST_MODIFIED).map(str::to_string);
 
         let (total_bytes, supports_ranges) = if status == StatusCode::PARTIAL_CONTENT {
             match header_str(&headers, header::CONTENT_RANGE).and_then(parse_content_range) {
@@ -336,6 +408,8 @@ impl DownloadEngine {
             total_bytes,
             supports_ranges,
             suggested_filename,
+            etag,
+            last_modified,
         })
     }
 
@@ -364,6 +438,8 @@ impl DownloadEngine {
                 header_str(headers, header::CONTENT_DISPOSITION),
                 resp.url(),
             ),
+            etag: header_str(headers, header::ETAG).map(str::to_string),
+            last_modified: header_str(headers, header::LAST_MODIFIED).map(str::to_string),
         })
     }
 
@@ -392,13 +468,45 @@ impl DownloadEngine {
     /// Uses parallel ranged GETs across `adapters` when the probe verified range support and
     /// a known size; otherwise a single stream. When `cancel` becomes `true`, all workers stop
     /// (no write is in flight when this returns) and the result is `Err(DownloadCancelled)`.
+    ///
+    /// Chunked downloads keep a resume sidecar (see [`resume_sidecar_path`]) while running
+    /// and after a cancel or failure; it is deleted on success.
     pub async fn download(
         &self,
         probe: &DownloadProbe,
         output_path: &Path,
         adapters: &[NetworkAdapter],
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
+        cancel: watch::Receiver<bool>,
+    ) -> Result<String> {
+        self.run(probe, output_path, adapters, progress_tx, cancel, false)
+            .await
+    }
+
+    /// Like [`download`](Self::download), but continues from the chunks recorded in the
+    /// resume sidecar of `output_path`. Falls back to a fresh download (logging why) when
+    /// there is no valid sidecar, the remote resource changed (size / ETag / Last-Modified),
+    /// the file on disk has the wrong length, or the server no longer supports ranges.
+    pub async fn resume(
+        &self,
+        probe: &DownloadProbe,
+        output_path: &Path,
+        adapters: &[NetworkAdapter],
+        progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
+        cancel: watch::Receiver<bool>,
+    ) -> Result<String> {
+        self.run(probe, output_path, adapters, progress_tx, cancel, true)
+            .await
+    }
+
+    async fn run(
+        &self,
+        probe: &DownloadProbe,
+        output_path: &Path,
+        adapters: &[NetworkAdapter],
+        progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         mut cancel: watch::Receiver<bool>,
+        resume: bool,
     ) -> Result<String> {
         if *cancel.borrow_and_update() {
             return Err(cancelled_error());
@@ -419,13 +527,40 @@ impl DownloadEngine {
 
         if !probe.supports_ranges || probe.total_bytes == 0 {
             info!("Using single-stream download (no verified range support or unknown/zero size)");
+            if resume {
+                info!("Single-stream downloads cannot resume; starting from zero");
+            }
+            // A stale sidecar must never outlive the file it described.
+            remove_resume_sidecar(output_path).with_context(|| {
+                format!("Failed to remove stale resume data for {:?}", output_path)
+            })?;
             return self
                 .download_single_stream(probe, output_path, bind_ips[0], progress_tx, cancel)
                 .await;
         }
 
-        self.download_chunked(probe, output_path, &bind_ips, progress_tx, cancel)
+        self.download_chunked(probe, output_path, &bind_ips, progress_tx, cancel, resume)
             .await
+    }
+
+    /// Opens `output_path` for resuming from its sidecar. Returns the chunk plan (with
+    /// recorded chunks marked `Completed`), the chunk size used, and the writer.
+    async fn open_for_resume(
+        &self,
+        probe: &DownloadProbe,
+        output_path: &Path,
+    ) -> Result<(Vec<Chunk>, u64, SparseFileWriter)> {
+        let state = read_sidecar(&resume_sidecar_path(output_path))?;
+        validate(&state, probe)?;
+        let mut chunks = plan_chunks(probe.total_bytes, state.chunk_size);
+        let done = decode_ranges(&state.completed, chunks.len())?;
+        let writer = SparseFileWriter::open_existing(output_path, probe.total_bytes).await?;
+        for id in done {
+            // `plan_chunks` ids are their positions.
+            chunks[id].status = ChunkStatus::Completed;
+            chunks[id].downloaded = chunks[id].size;
+        }
+        Ok((chunks, state.chunk_size, writer))
     }
 
     async fn download_chunked(
@@ -435,30 +570,12 @@ impl DownloadEngine {
         bind_ips: &[Option<IpAddr>],
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         mut cancel: watch::Receiver<bool>,
+        resume: bool,
     ) -> Result<String> {
-        let chunks = plan_chunks(probe.total_bytes, self.chunk_size);
-        if chunks.is_empty() {
-            bail!(
-                "Refusing to download: planned zero chunks for {} bytes (chunk size {})",
-                probe.total_bytes,
-                self.chunk_size
-            );
-        }
-        let total_chunks = chunks.len();
-        info!(
-            "Planned {} chunks of up to {} bytes each",
-            total_chunks, self.chunk_size
-        );
-
         let mut adapter_states = Vec::new();
         for ip in bind_ips {
             match build_bound_http_client(*ip, self.stall_timeout) {
-                Ok(client) => adapter_states.push(Arc::new(AdapterWorkerState {
-                    label: Self::bind_label(*ip),
-                    client,
-                    consecutive_failures: AtomicU32::new(0),
-                    dropped: AtomicBool::new(false),
-                })),
+                Ok(client) => adapter_states.push(Arc::new(AdapterWorkerState::new(*ip, client))),
                 Err(e) => error!(
                     "Failed to build HTTP client bound to {}: {:#}",
                     Self::bind_label(*ip),
@@ -470,8 +587,59 @@ impl DownloadEngine {
             bail!("Could not build an HTTP client for any selected network adapter");
         }
 
-        let writer = SparseFileWriter::create(output_path, probe.total_bytes).await?;
-        let counters = Arc::new(Counters::default());
+        let resumed = if resume {
+            match self.open_for_resume(probe, output_path).await {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    warn!(
+                        "Cannot resume {:?} ({:#}); starting from zero",
+                        output_path, e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let (chunks, chunk_size, writer) = match resumed {
+            Some(r) => r,
+            None => {
+                // Remove any stale sidecar *before* truncating, so it can never describe
+                // the new, empty file.
+                remove_resume_sidecar(output_path).with_context(|| {
+                    format!("Failed to remove stale resume data for {:?}", output_path)
+                })?;
+                let chunks = plan_chunks(probe.total_bytes, self.chunk_size);
+                if chunks.is_empty() {
+                    bail!(
+                        "Refusing to download: planned zero chunks for {} bytes (chunk size {})",
+                        probe.total_bytes,
+                        self.chunk_size
+                    );
+                }
+                let writer = SparseFileWriter::create(output_path, probe.total_bytes).await?;
+                (chunks, self.chunk_size, writer)
+            }
+        };
+        let total_chunks = chunks.len();
+        let resumed_chunks: Vec<&Chunk> = chunks
+            .iter()
+            .filter(|c| c.status == ChunkStatus::Completed)
+            .collect();
+        let resumed_bytes: u64 = resumed_chunks.iter().map(|c| c.size).sum();
+        info!(
+            "Planned {} chunks of up to {} bytes each; {} chunks ({} bytes) already on disk",
+            total_chunks,
+            chunk_size,
+            resumed_chunks.len(),
+            resumed_bytes
+        );
+
+        let counters = Arc::new(Counters {
+            downloaded: AtomicU64::new(resumed_bytes),
+            active: AtomicUsize::new(0),
+            completed: AtomicUsize::new(resumed_chunks.len()),
+        });
         let (stop_tx, stop_rx) = watch::channel(false);
         let shared = Arc::new(ChunkedShared {
             url: probe.url.clone(),
@@ -488,10 +656,30 @@ impl DownloadEngine {
         });
         let _stop_guard = StopOnDrop(Arc::clone(&shared));
 
+        let sidecar = Arc::new(SidecarTarget {
+            path: resume_sidecar_path(output_path),
+            template: ResumeState {
+                version: SIDECAR_VERSION,
+                total_bytes: probe.total_bytes,
+                chunk_size,
+                etag: probe.etag.clone(),
+                last_modified: probe.last_modified.clone(),
+                completed: String::new(),
+            },
+        });
+        let persister_done = Arc::new(Notify::new());
+        let persister = tokio::spawn(run_sidecar_persister(
+            Arc::clone(&shared),
+            Arc::clone(&sidecar),
+            Arc::clone(&persister_done),
+        ));
+
         let start_time = Instant::now();
         let (progress_handle, progress_done) = spawn_progress_reporter(
             progress_tx,
             Arc::clone(&counters),
+            adapter_states.clone(),
+            Some(Arc::clone(&shared)),
             probe.total_bytes,
             total_chunks,
         );
@@ -527,6 +715,16 @@ impl DownloadEngine {
         let user_cancelled = user_cancelled || *cancel.borrow();
 
         finish_progress(progress_handle, progress_done).await;
+
+        persister_done.notify_one();
+        let mut last_persisted = persister.await.unwrap_or_else(|e| {
+            error!("Resume sidecar task panicked: {:?}", e);
+            None
+        });
+        if user_cancelled || !shared.scheduler().all_completed() {
+            // Record the final state so a later `resume` loses at most in-flight chunks.
+            persist_sidecar(&shared, &sidecar, &mut last_persisted).await;
+        }
 
         if user_cancelled {
             return Err(cancelled_error());
@@ -589,6 +787,12 @@ impl DownloadEngine {
         }
 
         writer.sync().await.context("Failed syncing file to disk")?;
+        if let Err(e) = remove_resume_sidecar(output_path) {
+            warn!(
+                "Failed to remove resume sidecar for {:?}: {}",
+                output_path, e
+            );
+        }
 
         let duration = start_time.elapsed().as_secs_f64();
         info!(
@@ -611,12 +815,13 @@ impl DownloadEngine {
         mut cancel: watch::Receiver<bool>,
     ) -> Result<String> {
         let client = build_bound_http_client(bind_ip, self.stall_timeout)?;
-        let label = Self::bind_label(bind_ip);
+        let adapter = Arc::new(AdapterWorkerState::new(bind_ip, client));
+        let label = adapter.label.clone();
 
         let resp = tokio::select! {
             biased;
             _ = wait_for_true(&mut cancel) => return Err(cancelled_error()),
-            r = client.get(&probe.url).send() => r.with_context(|| format!("Single-stream request to {} via {} failed", probe.url, label))?,
+            r = adapter.client.get(&probe.url).send() => r.with_context(|| format!("Single-stream request to {} via {} failed", probe.url, label))?,
         };
         let status = resp.status();
         info!(
@@ -645,8 +850,15 @@ impl DownloadEngine {
 
         let counters = Arc::new(Counters::default());
         counters.active.store(1, Ordering::SeqCst);
-        let (progress_handle, progress_done) =
-            spawn_progress_reporter(progress_tx, Arc::clone(&counters), total_for_progress, 1);
+        adapter.active.store(1, Ordering::SeqCst);
+        let (progress_handle, progress_done) = spawn_progress_reporter(
+            progress_tx,
+            Arc::clone(&counters),
+            vec![Arc::clone(&adapter)],
+            None,
+            total_for_progress,
+            1,
+        );
 
         let result: Result<u64> = async {
             let mut stream = resp.bytes_stream();
@@ -671,6 +883,7 @@ impl DownloadEngine {
                     .with_context(|| format!("Failed writing to {:?}", output_path))?;
                 received += len;
                 counters.downloaded.fetch_add(len, Ordering::SeqCst);
+                adapter.received.fetch_add(len, Ordering::SeqCst);
             }
             if let Some(expected) = expected {
                 if received != expected {
@@ -693,6 +906,7 @@ impl DownloadEngine {
         let _ = file.flush().await;
 
         counters.active.store(0, Ordering::SeqCst);
+        adapter.active.store(0, Ordering::SeqCst);
         if result.is_ok() {
             counters.completed.store(1, Ordering::SeqCst);
         }
@@ -740,8 +954,10 @@ async fn run_chunk_worker(
         );
 
         shared.counters.active.fetch_add(1, Ordering::SeqCst);
+        adapter.active.fetch_add(1, Ordering::SeqCst);
         let mut counted = 0u64;
         let result = fetch_chunk(&adapter, &shared, &chunk, &mut counted, &mut stop).await;
+        adapter.active.fetch_sub(1, Ordering::SeqCst);
         shared.counters.active.fetch_sub(1, Ordering::SeqCst);
 
         match result {
@@ -897,6 +1113,7 @@ async fn fetch_chunk(
         offset += len;
         *counted += len;
         shared.counters.downloaded.fetch_add(len, Ordering::SeqCst);
+        adapter.received.fetch_add(len, Ordering::SeqCst);
     }
 
     if *counted != chunk.size {
@@ -910,11 +1127,76 @@ async fn fetch_chunk(
     Ok(())
 }
 
+/// Writes the sidecar if the completed set changed since `last` (updating `last`).
+///
+/// Order matters for durability: snapshot the completed ids (their writes have all
+/// returned), sync the data file, and only then record them.
+async fn persist_sidecar(
+    shared: &ChunkedShared,
+    sidecar: &SidecarTarget,
+    last: &mut Option<Vec<usize>>,
+) {
+    let ids = shared.scheduler().completed_ids();
+    if last.as_ref() == Some(&ids) {
+        return;
+    }
+    if let Err(e) = shared.writer.sync().await {
+        warn!("Not updating resume sidecar: data sync failed: {:#}", e);
+        return;
+    }
+    let state = ResumeState {
+        completed: encode_ranges(&ids),
+        ..sidecar.template.clone()
+    };
+    let path = sidecar.path.clone();
+    match tokio::task::spawn_blocking(move || write_sidecar(&path, &state)).await {
+        Ok(Ok(())) => {
+            debug!(
+                "Resume sidecar {:?} records {} completed chunks",
+                sidecar.path,
+                ids.len()
+            );
+            *last = Some(ids);
+        }
+        Ok(Err(e)) => warn!("Failed to write resume sidecar {:?}: {:#}", sidecar.path, e),
+        Err(e) => warn!("Resume sidecar write task panicked: {:?}", e),
+    }
+}
+
+/// Writes the sidecar immediately and then every [`SIDECAR_INTERVAL`] until `done` is
+/// notified. Returns the last completed set it recorded.
+async fn run_sidecar_persister(
+    shared: Arc<ChunkedShared>,
+    sidecar: Arc<SidecarTarget>,
+    done: Arc<Notify>,
+) -> Option<Vec<usize>> {
+    let mut last = None;
+    persist_sidecar(&shared, &sidecar, &mut last).await;
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(SIDECAR_INTERVAL) => {}
+            _ = done.notified() => return last,
+        }
+        persist_sidecar(&shared, &sidecar, &mut last).await;
+    }
+}
+
+/// Exponential moving average used for all displayed speeds.
+fn ema(prev: Option<f64>, sample: f64) -> f64 {
+    match prev {
+        Some(prev) => 0.3 * sample + 0.7 * prev,
+        None => sample,
+    }
+}
+
 /// Spawns the periodic progress reporter (if a sender was provided).
 /// Periodic updates use `try_send` so a slow consumer can never stall the download.
+/// `chunked` provides the chunk map; `None` for single-stream downloads.
 fn spawn_progress_reporter(
     progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
     counters: Arc<Counters>,
+    adapters: Vec<Arc<AdapterWorkerState>>,
+    chunked: Option<Arc<ChunkedShared>>,
     total_bytes: u64,
     total_chunks: usize,
 ) -> (Option<JoinHandle<()>>, Arc<Notify>) {
@@ -925,25 +1207,41 @@ fn spawn_progress_reporter(
     let done_rx = Arc::clone(&done);
 
     let handle = tokio::spawn(async move {
-        let snapshot = |speed: f64, eta: u64| ProgressUpdate {
-            downloaded_bytes: counters.downloaded.load(Ordering::SeqCst),
-            total_bytes,
-            speed_bytes_sec: speed,
-            active_chunks: counters.active.load(Ordering::SeqCst),
-            completed_chunks: counters.completed.load(Ordering::SeqCst),
-            total_chunks,
-            eta_seconds: eta,
-        };
+        let chunk_map = || chunked.as_ref().map(|c| c.scheduler().chunk_map());
+        let snapshot =
+            |speed: f64, eta: u64, adapter_speeds: &[f64], map: Option<String>| ProgressUpdate {
+                downloaded_bytes: counters.downloaded.load(Ordering::SeqCst),
+                total_bytes,
+                speed_bytes_sec: speed,
+                active_chunks: counters.active.load(Ordering::SeqCst),
+                completed_chunks: counters.completed.load(Ordering::SeqCst),
+                total_chunks,
+                eta_seconds: eta,
+                adapters: adapters
+                    .iter()
+                    .zip(adapter_speeds)
+                    .map(|(a, s)| a.progress(*s))
+                    .collect(),
+                chunk_map: map,
+            };
 
-        let mut last_bytes = 0u64;
+        // Start from the current counts so resumed bytes don't show up as a speed spike.
+        let mut last_bytes = counters.downloaded.load(Ordering::SeqCst);
         let mut last_instant = Instant::now();
         let mut speed_ema: Option<f64> = None;
+        let mut adapter_last: Vec<u64> = adapters
+            .iter()
+            .map(|a| a.received.load(Ordering::SeqCst))
+            .collect();
+        let mut adapter_ema: Vec<Option<f64>> = vec![None; adapters.len()];
+        let mut tick: u32 = 0;
 
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(PROGRESS_INTERVAL) => {}
                 _ = done_rx.notified() => {
-                    let final_update = snapshot(0.0, 0);
+                    let zeros = vec![0.0; adapters.len()];
+                    let final_update = snapshot(0.0, 0, &zeros, chunk_map());
                     let _ = tokio::time::timeout(Duration::from_secs(1), tx.send(final_update)).await;
                     return;
                 }
@@ -954,10 +1252,13 @@ fn spawn_progress_reporter(
             let elapsed = now.duration_since(last_instant).as_secs_f64();
             if elapsed > 0.0 {
                 let instant_speed = current.saturating_sub(last_bytes) as f64 / elapsed;
-                speed_ema = Some(match speed_ema {
-                    Some(prev) => 0.3 * instant_speed + 0.7 * prev,
-                    None => instant_speed,
-                });
+                speed_ema = Some(ema(speed_ema, instant_speed));
+                for (i, a) in adapters.iter().enumerate() {
+                    let received = a.received.load(Ordering::SeqCst);
+                    let sample = received.saturating_sub(adapter_last[i]) as f64 / elapsed;
+                    adapter_ema[i] = Some(ema(adapter_ema[i], sample));
+                    adapter_last[i] = received;
+                }
             }
             last_bytes = current;
             last_instant = now;
@@ -968,8 +1269,15 @@ fn spawn_progress_reporter(
             } else {
                 0
             };
+            let adapter_speeds: Vec<f64> = adapter_ema.iter().map(|s| s.unwrap_or(0.0)).collect();
+            let map = if tick.is_multiple_of(CHUNK_MAP_EVERY_N_UPDATES) {
+                chunk_map()
+            } else {
+                None
+            };
+            tick = tick.wrapping_add(1);
 
-            match tx.try_send(snapshot(speed, eta)) {
+            match tx.try_send(snapshot(speed, eta, &adapter_speeds, map)) {
                 Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
                 Err(mpsc::error::TrySendError::Closed(_)) => return,
             }

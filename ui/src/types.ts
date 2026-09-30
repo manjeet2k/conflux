@@ -1,42 +1,49 @@
-// Matches Rust AdapterInfo struct from commands.rs
+// IPC contract with crates/conflux-desktop/src/commands.rs. Field names are the serde names.
+
+export type AdapterKind = 'ethernet' | 'wifi' | 'cellular' | 'virtual' | 'loopback' | 'other';
+
+// Matches Rust AdapterInfo
 export interface AdapterInfo {
   id: string;
   name: string;
   ip: string;
   is_ipv4: boolean;
   is_loopback: boolean;
+  /** Discovery default: selected for new downloads unless the user unchecks it. */
   enabled: boolean;
+  /** The engine can bind to it (IPv4, not loopback, not link-local). */
+  usable: boolean;
+  kind: AdapterKind;
 }
 
-// Matches Rust TaskStatus enum (serde rename_all = "lowercase")
-export type TaskStatus = 'downloading' | 'completed' | 'stopped' | 'error';
+// Matches Rust TaskStatus (serde rename_all = "lowercase")
+export type TaskStatus = 'downloading' | 'paused' | 'completed' | 'error';
 
-// Matches Rust StartedDownload struct (returned by start_download)
-export interface StartedDownload {
-  task_id: string;
+// Matches Rust ProbeResult (returned by probe_url)
+export interface ProbeResult {
+  url: string;
   filename: string;
-  save_path: string;
   total_bytes: number;
   supports_ranges: boolean;
 }
 
-// Matches Rust ProgressEvent struct
-export interface ProgressEvent {
-  task_id: string;
+// Matches Rust AdapterStat: live per-adapter throughput of one task.
+export interface AdapterStat {
+  /** Id of the matching AdapterInfo, or null for unbound default routing. */
+  adapter_id: string | null;
+  name: string;
+  ip: string | null;
+  /** Gross bytes received through this adapter in the current run (includes retried bytes). */
   downloaded_bytes: number;
-  total_bytes: number;
   speed_bytes_sec: number;
-  eta_seconds: number;
-  active_chunks: number;
-  completed_chunks: number;
-  total_chunks: number;
-  status: TaskStatus;
-  sha256: string | null;
-  error: string | null;
+  active_connections: number;
+  /** Dropped by the engine after repeated failures. */
+  dropped: boolean;
 }
 
-// Matches Rust DownloadTaskState struct (returned by list_tasks)
-export interface DownloadTaskState {
+// Matches Rust DownloadTaskState. Returned by list_tasks/start/pause/resume and emitted as
+// the payload of the `download-progress` event (a full snapshot each time).
+export interface DownloadTask {
   id: string;
   url: string;
   filename: string;
@@ -55,26 +62,29 @@ export interface DownloadTaskState {
   sha256: string | null;
   error: string | null;
   created_at_ms: number;
+  completed_at_ms: number | null;
+  adapters: AdapterStat[];
+  /** One char per chunk: '.' pending, '>' downloading, '#' completed, '!' failed. */
+  chunk_map: string | null;
 }
 
-export interface DownloadTask {
-  id: string;
-  filename: string;
-  url: string;
-  totalBytes: number;
-  downloadedBytes: number;
-  status: TaskStatus;
-  currentSpeedBytesSec: number;
-  etaSeconds: number;
-  activeChunks: number;
-  completedChunks: number;
-  totalChunks: number;
-  savePath: string;
-  // Kept so a stopped/failed task can be restarted with the same parameters.
-  saveDir: string;
-  adapterIds: string[];
-  sha256?: string;
-  error?: string;
+export type ThemePreference = 'system' | 'light' | 'dark';
+
+// Matches Rust Settings
+export interface Settings {
+  theme: ThemePreference;
+  /** null = the OS Downloads folder. */
+  default_save_dir: string | null;
+  connections_per_adapter: number;
+  chunk_size_mb: number;
+  notify_on_complete: boolean;
 }
 
-export type CategoryFilter = 'all' | 'downloading' | 'completed' | 'stopped';
+// Matches Rust WindowBackdrop (returned by apply_window_theme)
+export interface WindowBackdrop {
+  mica: boolean;
+}
+
+export const PROGRESS_EVENT = 'download-progress';
+
+export type ViewId = 'all' | 'active' | 'paused' | 'completed' | 'failed' | 'network' | 'settings';

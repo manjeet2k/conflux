@@ -1,56 +1,37 @@
-@import "tailwindcss";
-
-@theme {
-  --color-fluent-bg: #141414;
-  --color-fluent-subnav: #1c1c1c;
-  --color-fluent-card: #242424;
-  --color-fluent-card-hover: #2d2d2d;
-  --color-fluent-card-selected: #333333;
-  --color-fluent-border: rgba(255, 255, 255, 0.08);
-  --color-fluent-border-focus: rgba(255, 255, 255, 0.2);
-  --color-fluent-accent: #60cdff;
-  --color-fluent-accent-hover: #78d4ff;
-  --color-fluent-ethernet: #00f2fe;
-  --color-fluent-wifi: #f355da;
-  --color-fluent-cellular: #ffb703;
-
-  --font-sans: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "Cascadia Code", "Consolas", monospace;
-
-  --shadow-fluent-card: 0 4px 12px rgba(0, 0, 0, 0.25);
-  --shadow-fluent-elevated: 0 12px 32px rgba(0, 0, 0, 0.45);
-}
-
-:root {
-  color-scheme: dark;
-}
-
-body {
+html,
+body,
+#root {
   margin: 0;
   padding: 0;
-  background-color: #141414;
-  color: #f3f3f3;
-  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
-  user-select: none;
+  height: 100%;
   overflow: hidden;
-  height: 100vh;
-}
-
-/* Custom Windows 11 style smooth scrollbars */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
+  /* The window backdrop (Mica or solid) is painted by the app root. */
   background: transparent;
 }
 
-::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 9999px;
+body {
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
 }
 
+/* Win11-style overlay scrollbars */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-clip: content-box;
+  border: 4px solid transparent;
+  border-radius: 9999px;
+  background-color: rgba(128, 128, 128, 0.45);
+}
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
+  border-width: 3px;
+  background-color: rgba(128, 128, 128, 0.7);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
 }

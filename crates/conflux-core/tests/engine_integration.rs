@@ -4,9 +4,10 @@ mod support;
 
 use anyhow::Result;
 use conflux_core::{
-    DownloadCancelled, DownloadEngine, DownloadProbe, NetworkAdapter, ProgressUpdate,
+    resume_sidecar_path, DownloadCancelled, DownloadEngine, DownloadProbe, NetworkAdapter,
+    ProgressUpdate,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -124,6 +125,19 @@ async fn normal_ranged_download_matches_sha() {
     // 1 probe + 17 chunk GETs, no retries, no HEAD.
     assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 17);
     assert_eq!(server.stats.head_requests.load(Ordering::SeqCst), 0);
+
+    // Resume data is removed once the download is complete.
+    assert!(!resume_sidecar_path(&out.path).exists());
+    // The final update always carries the chunk map; the first one does too.
+    assert_eq!(last.chunk_map.as_deref(), Some("#".repeat(17).as_str()));
+    assert!(out.progress[0].chunk_map.is_some());
+    // One unbound adapter that received exactly the payload (no retries happened).
+    assert_eq!(last.adapters.len(), 1);
+    assert_eq!(last.adapters[0].label, "default-route");
+    assert_eq!(last.adapters[0].ip, None);
+    assert_eq!(last.adapters[0].downloaded_bytes, PAYLOAD_LEN as u64);
+    assert_eq!(last.adapters[0].active_connections, 0);
+    assert!(!last.adapters[0].dropped);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -294,6 +308,19 @@ async fn failing_adapter_is_dropped_and_others_finish() {
         .requests_by_peer_127_0_0_2
         .load(Ordering::SeqCst);
     assert!((3..=6).contains(&bad), "bad adapter requests: {}", bad);
+
+    let last = out.progress.last().unwrap();
+    assert_eq!(last.adapters.len(), 2);
+    let bad_stats = &last.adapters[0];
+    let good_stats = &last.adapters[1];
+    assert_eq!(bad_stats.label, "127.0.0.2");
+    assert!(
+        bad_stats.dropped,
+        "failing adapter must be reported as dropped"
+    );
+    assert_eq!(bad_stats.downloaded_bytes, 0);
+    assert!(!good_stats.dropped);
+    assert_eq!(good_stats.downloaded_bytes, PAYLOAD_LEN as u64);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -494,4 +521,218 @@ async fn chunk_marked_failed_after_five_attempts_with_backoff() {
         "took {:?}",
         out.elapsed
     );
+}
+
+// ─── Resume ──────────────────────────────────────────────────────────────────
+
+fn throttled_config(data: &Arc<Vec<u8>>) -> ServerConfig {
+    let mut cfg = ServerConfig::new(Arc::clone(data));
+    cfg.write_piece = 4096;
+    cfg.throttle = Some(Duration::from_millis(10)); // ~400 KB/s per connection
+    cfg
+}
+
+/// Starts a download of `url` into `path` and cancels it after `after`.
+/// Returns the peak `completed_chunks` seen before the cancel.
+async fn cancelled_partial_download(
+    engine: &DownloadEngine,
+    url: &str,
+    path: &Path,
+    after: Duration,
+) -> usize {
+    let probe = engine.probe(url).await.unwrap();
+    let (tx, mut rx) = mpsc::channel(1024);
+    let collector = tokio::spawn(async move {
+        let mut all: Vec<ProgressUpdate> = Vec::new();
+        while let Some(p) = rx.recv().await {
+            all.push(p);
+        }
+        all
+    });
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let canceller = tokio::spawn(async move {
+        tokio::time::sleep(after).await;
+        cancel_tx.send(true).unwrap();
+        cancel_tx
+    });
+    let err = engine
+        .download(&probe, path, &[], Some(tx), cancel_rx)
+        .await
+        .expect_err("must be cancelled");
+    assert!(
+        err.downcast_ref::<DownloadCancelled>().is_some(),
+        "{:#}",
+        err
+    );
+    drop(canceller.await.unwrap());
+    let progress = collector.await.unwrap();
+    progress.last().map(|p| p.completed_chunks).unwrap_or(0)
+}
+
+async fn resume_to_end(
+    engine: &DownloadEngine,
+    url: &str,
+    path: &Path,
+) -> (Result<String>, Vec<ProgressUpdate>) {
+    let probe = engine.probe(url).await.unwrap();
+    let (tx, mut rx) = mpsc::channel(1024);
+    let collector = tokio::spawn(async move {
+        let mut all = Vec::new();
+        while let Some(p) = rx.recv().await {
+            all.push(p);
+        }
+        all
+    });
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let result = engine.resume(&probe, path, &[], Some(tx), cancel_rx).await;
+    (result, collector.await.unwrap())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pause_then_resume_continues_from_completed_chunks() {
+    let data = payload(PAYLOAD_LEN, 20);
+    let slow = TestServer::start(throttled_config(&data)).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("resume.bin");
+
+    let done_before = cancelled_partial_download(
+        &engine,
+        &slow.url("/resume.bin"),
+        &path,
+        Duration::from_millis(1500),
+    )
+    .await;
+    assert!(done_before > 0, "no chunk finished before the pause");
+    assert!(done_before < 17, "download finished before the pause");
+    let sidecar = resume_sidecar_path(&path);
+    assert!(sidecar.exists(), "cancel must leave a resume sidecar");
+
+    // Resume against a fast server with the same content; count what it has to send.
+    let fast = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let (result, progress) = resume_to_end(&engine, &fast.url("/resume.bin"), &path).await;
+    assert_eq!(result.expect("resume should succeed"), sha256_hex(&data));
+    assert!(
+        std::fs::read(&path).unwrap() == *data,
+        "file content differs"
+    );
+    assert!(!sidecar.exists(), "sidecar must be removed on success");
+
+    let fetched = fast.stats.chunk_requests.load(Ordering::SeqCst);
+    assert_eq!(fetched, 17 - done_before, "only missing chunks are fetched");
+    let sent = fast.stats.body_bytes_sent.load(Ordering::SeqCst);
+    assert!(
+        sent < PAYLOAD_LEN as u64,
+        "resume re-downloaded everything ({} bytes)",
+        sent
+    );
+    // Resumed bytes are counted from the first update, and accounting still ends exact.
+    assert!(progress[0].downloaded_bytes >= done_before as u64 * CHUNK);
+    assert!(progress[0].completed_chunks >= done_before);
+    assert_progress_sane(&progress, PAYLOAD_LEN as u64);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_with_changed_etag_restarts_from_zero() {
+    let data = payload(PAYLOAD_LEN, 21);
+    let mut cfg = throttled_config(&data);
+    cfg.etag = Some("\"v1\"".into());
+    let old = TestServer::start(cfg).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("etag.bin");
+    let done = cancelled_partial_download(
+        &engine,
+        &old.url("/etag.bin"),
+        &path,
+        Duration::from_millis(1500),
+    )
+    .await;
+    assert!(done > 0);
+
+    let mut cfg = ServerConfig::new(Arc::clone(&data));
+    cfg.etag = Some("\"v2\"".into());
+    let new = TestServer::start(cfg).await;
+    let (result, _) = resume_to_end(&engine, &new.url("/etag.bin"), &path).await;
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+    assert_eq!(new.stats.chunk_requests.load(Ordering::SeqCst), 17);
+    assert!(!resume_sidecar_path(&path).exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_with_changed_size_restarts_from_zero() {
+    let data = payload(PAYLOAD_LEN, 22);
+    let old = TestServer::start(throttled_config(&data)).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("size.bin");
+    let done = cancelled_partial_download(
+        &engine,
+        &old.url("/size.bin"),
+        &path,
+        Duration::from_millis(1500),
+    )
+    .await;
+    assert!(done > 0);
+
+    let bigger = payload(PAYLOAD_LEN + CHUNK as usize, 23);
+    let new = TestServer::start(ServerConfig::new(Arc::clone(&bigger))).await;
+    let (result, _) = resume_to_end(&engine, &new.url("/size.bin"), &path).await;
+    assert_eq!(result.unwrap(), sha256_hex(&bigger));
+    assert!(std::fs::read(&path).unwrap() == *bigger);
+    assert_eq!(new.stats.chunk_requests.load(Ordering::SeqCst), 18);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_with_corrupt_sidecar_or_missing_file_starts_fresh() {
+    let data = payload(PAYLOAD_LEN, 24);
+    let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+
+    // No sidecar and no file at all.
+    let path = dir.path().join("fresh.bin");
+    let (result, _) = resume_to_end(&engine, &server.url("/fresh.bin"), &path).await;
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+
+    // Garbage sidecar next to a wrong-length file: both ignored, full download.
+    let path = dir.path().join("corrupt.bin");
+    std::fs::write(&path, b"short").unwrap();
+    std::fs::write(resume_sidecar_path(&path), b"{not json").unwrap();
+    let (result, _) = resume_to_end(&engine, &server.url("/corrupt.bin"), &path).await;
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+    assert!(std::fs::read(&path).unwrap() == *data);
+    assert!(!resume_sidecar_path(&path).exists());
+    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 34);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn single_stream_resume_restarts_and_reports_one_adapter() {
+    let data = payload(PAYLOAD_LEN, 25);
+    let mut cfg = ServerConfig::new(Arc::clone(&data));
+    cfg.range_mode = RangeMode::Ignore;
+    let server = TestServer::start(cfg).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("single.bin");
+    // A stale sidecar must be ignored and removed.
+    std::fs::write(resume_sidecar_path(&path), b"{}").unwrap();
+
+    let (result, progress) = resume_to_end(&engine, &server.url("/single.bin"), &path).await;
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+    assert!(!resume_sidecar_path(&path).exists());
+    assert!(progress.iter().all(|p| p.chunk_map.is_none()));
+    let last = progress.last().unwrap();
+    assert_eq!(last.adapters.len(), 1);
+    assert_eq!(last.adapters[0].downloaded_bytes, PAYLOAD_LEN as u64);
+}
+
+#[tokio::test]
+async fn probe_captures_etag() {
+    let mut cfg = ServerConfig::new(payload(1024, 26));
+    cfg.etag = Some("\"abc\"".into());
+    let server = TestServer::start(cfg).await;
+    let probe = test_engine().probe(&server.url("/e.bin")).await.unwrap();
+    assert_eq!(probe.etag.as_deref(), Some("\"abc\""));
+    assert_eq!(probe.last_modified, None);
 }

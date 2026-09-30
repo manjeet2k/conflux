@@ -45,12 +45,14 @@ fn is_loopback_interface(name: &str, ip: &IpAddr) -> bool {
         || name.to_ascii_lowercase().contains("loopback")
 }
 
-fn looks_virtual(name: &str) -> bool {
+/// `true` if the interface name looks like a virtual / tunnel / container adapter.
+pub fn looks_virtual(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     VIRTUAL_NAME_HINTS.iter().any(|hint| lower.contains(hint))
 }
 
-fn is_link_local(ip: &IpAddr) -> bool {
+/// `true` for IPv4 `169.254.0.0/16` and IPv6 `fe80::/10` addresses.
+pub fn is_link_local(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_link_local(),
         IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,

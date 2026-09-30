@@ -58,6 +58,43 @@ impl SparseFileWriter {
         })
     }
 
+    /// Opens an existing file for resuming, without truncating it.
+    ///
+    /// Fails if the file does not exist or its length is not exactly `total_bytes`
+    /// (a different length means it is not the pre-allocated file of this download).
+    pub async fn open_existing<P: AsRef<Path>>(path: P, total_bytes: u64) -> Result<Self> {
+        let path_buf = path.as_ref().to_path_buf();
+        let open_path = path_buf.clone();
+        let file = tokio::task::spawn_blocking(move || -> Result<File> {
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&open_path)
+                .with_context(|| format!("Failed to open existing file {:?}", open_path))?;
+            let len = file
+                .metadata()
+                .with_context(|| format!("Failed to read metadata of {:?}", open_path))?
+                .len();
+            if len != total_bytes {
+                bail!(
+                    "Existing file {:?} is {} bytes, expected {}",
+                    open_path,
+                    len,
+                    total_bytes
+                );
+            }
+            Ok(file)
+        })
+        .await
+        .context("File open task panicked")??;
+
+        Ok(Self {
+            path: path_buf,
+            total_bytes,
+            file: Arc::new(file),
+        })
+    }
+
     /// Writes `data` at `offset` without altering other regions.
     ///
     /// Fails (without writing) if the write would extend past `total_bytes`.
@@ -228,6 +265,33 @@ mod tests {
         let contents = tokio::fs::read(&file_path).await?;
         assert_eq!(contents.len() as u64, total);
         assert!(contents == *expected, "file contents differ from expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_open_existing_keeps_contents_and_checks_length() -> Result<()> {
+        let dir = tempdir()?;
+        let file_path = dir.path().join("resume.bin");
+        std::fs::write(&file_path, b"ABCDEFGH")?;
+
+        let writer = SparseFileWriter::open_existing(&file_path, 8).await?;
+        writer.write_at(2, b"xy").await?;
+        writer.sync().await?;
+        assert_eq!(std::fs::read(&file_path)?, b"ABxyEFGH");
+
+        assert!(SparseFileWriter::open_existing(&file_path, 9)
+            .await
+            .is_err());
+        assert!(
+            SparseFileWriter::open_existing(dir.path().join("missing.bin"), 8)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read(&file_path)?,
+            b"ABxyEFGH",
+            "failed opens must not modify"
+        );
         Ok(())
     }
 }
