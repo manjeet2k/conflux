@@ -74,3 +74,10 @@ Before any commit:
 - `cargo fmt --check` (clean formatting)
 - `cargo clippy -- -D warnings` (zero compiler warnings)
 - `cargo test` (all unit & integration tests pass)
+
+### Superpower 6: Strict Version Incrementation
+- On every iteration/release, increment the version across:
+  - `Cargo.toml` (`[workspace.package.version]`)
+  - `crates/conflux-desktop/tauri.conf.json` (`version`)
+  - `ui/package.json` (`version`)
+- Ensure the installer bundle reflects the newly incremented version (e.g. `Conflux_<version>_x64-setup.exe`).
