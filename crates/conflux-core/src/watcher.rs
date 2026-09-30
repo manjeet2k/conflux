@@ -146,14 +146,16 @@ mod os {
     use tokio::sync::mpsc::UnboundedSender;
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::NetworkManagement::IpHelper::{
-        CancelMibChangeNotify2, NotifyUnicastIpAddressChange, MIB_NOTIFICATION_TYPE,
-        MIB_UNICASTIPADDRESS_ROW,
+        CancelMibChangeNotify2, NotifyIpInterfaceChange, NotifyUnicastIpAddressChange,
+        MIB_IPINTERFACE_ROW, MIB_NOTIFICATION_TYPE, MIB_UNICASTIPADDRESS_ROW,
     };
     use windows_sys::Win32::Networking::WinSock::AF_UNSPEC;
 
     pub struct OsWatcher {
-        handle: HANDLE,
-        _tx: Box<UnboundedSender<()>>,
+        address_handle: HANDLE,
+        interface_handle: HANDLE,
+        _address_tx: Box<UnboundedSender<()>>,
+        _interface_tx: Box<UnboundedSender<()>>,
     }
 
     unsafe impl Send for OsWatcher {}
@@ -161,15 +163,15 @@ mod os {
 
     impl OsWatcher {
         pub fn start(tx: UnboundedSender<()>) -> Result<Self> {
-            let tx_box = Box::new(tx);
-            let mut handle: HANDLE = std::ptr::null_mut();
+            let address_tx = Box::new(tx.clone());
+            let mut address_handle: HANDLE = std::ptr::null_mut();
             let err = unsafe {
                 NotifyUnicastIpAddressChange(
                     AF_UNSPEC as _,
                     Some(unicast_ip_change_callback),
-                    tx_box.as_ref() as *const _ as *const c_void,
+                    address_tx.as_ref() as *const _ as *const c_void,
                     false,
-                    &mut handle,
+                    &mut address_handle,
                 )
             };
             if err != 0 {
@@ -178,18 +180,44 @@ mod os {
                     err
                 );
             }
+
+            let interface_tx = Box::new(tx);
+            let mut interface_handle: HANDLE = std::ptr::null_mut();
+            let err = unsafe {
+                NotifyIpInterfaceChange(
+                    AF_UNSPEC as _,
+                    Some(ip_interface_change_callback),
+                    interface_tx.as_ref() as *const _ as *const c_void,
+                    false,
+                    &mut interface_handle,
+                )
+            };
+            if err != 0 {
+                unsafe {
+                    CancelMibChangeNotify2(address_handle);
+                }
+                bail!("NotifyIpInterfaceChange failed with Win32 error {}", err);
+            }
+
             Ok(Self {
-                handle,
-                _tx: tx_box,
+                address_handle,
+                interface_handle,
+                _address_tx: address_tx,
+                _interface_tx: interface_tx,
             })
         }
     }
 
     impl Drop for OsWatcher {
         fn drop(&mut self) {
-            if !self.handle.is_null() {
+            if !self.address_handle.is_null() {
                 unsafe {
-                    CancelMibChangeNotify2(self.handle);
+                    CancelMibChangeNotify2(self.address_handle);
+                }
+            }
+            if !self.interface_handle.is_null() {
+                unsafe {
+                    CancelMibChangeNotify2(self.interface_handle);
                 }
             }
         }
@@ -198,6 +226,17 @@ mod os {
     unsafe extern "system" fn unicast_ip_change_callback(
         callercontext: *const c_void,
         _row: *const MIB_UNICASTIPADDRESS_ROW,
+        _notificationtype: MIB_NOTIFICATION_TYPE,
+    ) {
+        if !callercontext.is_null() {
+            let tx = &*(callercontext as *const UnboundedSender<()>);
+            let _ = tx.send(());
+        }
+    }
+
+    unsafe extern "system" fn ip_interface_change_callback(
+        callercontext: *const c_void,
+        _row: *const MIB_IPINTERFACE_ROW,
         _notificationtype: MIB_NOTIFICATION_TYPE,
     ) {
         if !callercontext.is_null() {

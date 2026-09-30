@@ -740,7 +740,9 @@ async fn probe_captures_etag() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dynamic_adapter_joins_mid_download_and_aggregates_bandwidth() {
     let data = payload(PAYLOAD_LEN, 27);
-    let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let mut config = ServerConfig::new(Arc::clone(&data));
+    config.throttle = Some(Duration::from_millis(10));
+    let server = TestServer::start(config).await;
     let engine = test_engine();
     let dir = tempfile::tempdir().unwrap();
     let probe = engine.probe(&server.url("/dynamic.bin")).await.unwrap();
@@ -789,8 +791,31 @@ async fn dynamic_adapter_joins_mid_download_and_aggregates_bandwidth() {
     let progress = collector.await.unwrap();
     assert!(!progress.is_empty());
     let last = progress.last().unwrap();
-    assert!(last
-        .adapters
-        .iter()
-        .any(|a| a.label == "127.0.0.1" || a.label == "default-route"));
+    assert!(last.adapters.iter().any(|a| a.label == "127.0.0.1"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn closed_adapter_updates_do_not_block_completion() {
+    let data = payload(PAYLOAD_LEN, 28);
+    let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let probe = engine
+        .probe(&server.url("/closed-updates.bin"))
+        .await
+        .unwrap();
+    let path = dir.path().join(&probe.suggested_filename);
+    let (adapter_tx, adapter_rx) = mpsc::channel(1);
+    drop(adapter_tx);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        engine.download_with_updates(&probe, &path, &[], Some(adapter_rx), None, cancel_rx),
+    )
+    .await
+    .expect("closed adapter channel must not spin or hang")
+    .unwrap();
+
+    assert_eq!(result, sha256_hex(&data));
 }

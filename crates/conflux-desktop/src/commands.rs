@@ -537,7 +537,12 @@ async fn spawn_task(
     resume: bool,
 ) {
     let (cancel_tx, cancel_rx) = watch::channel(false);
-    let (adapter_tx, adapter_rx) = mpsc::channel(16);
+    let (adapter_tx, adapter_rx) = if probe.supports_ranges && probe.total_bytes > 0 {
+        let (tx, rx) = mpsc::channel(16);
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
     let names = Arc::new(RwLock::new(adapter_names(&adapters)));
     // Hold the handles lock across spawn + insert: the task removes its own handle when it
     // finishes, and that removal must not run before the handle has been inserted.
@@ -558,7 +563,7 @@ async fn spawn_task(
         task_id,
         TaskHandle {
             cancel_tx,
-            adapter_tx: Some(adapter_tx),
+            adapter_tx,
             names,
             join_handle,
             output_path,
@@ -574,7 +579,7 @@ async fn run_download(
     probe: DownloadProbe,
     output_path: PathBuf,
     adapters: Vec<NetworkAdapter>,
-    adapter_rx: mpsc::Receiver<AdapterUpdate>,
+    adapter_rx: Option<mpsc::Receiver<AdapterUpdate>>,
     names: Arc<RwLock<HashMap<std::net::IpAddr, (String, String)>>>,
     cancel_rx: watch::Receiver<bool>,
     resume: bool,
@@ -630,7 +635,7 @@ async fn run_download(
                 &probe,
                 &output_path,
                 &adapters,
-                Some(adapter_rx),
+                adapter_rx,
                 Some(tx),
                 cancel_rx.clone(),
             )
@@ -641,7 +646,7 @@ async fn run_download(
                 &probe,
                 &output_path,
                 &adapters,
-                Some(adapter_rx),
+                adapter_rx,
                 Some(tx),
                 cancel_rx.clone(),
             )
@@ -781,49 +786,58 @@ pub async fn handle_network_change(
     added: &[NetworkAdapter],
     removed: &[NetworkAdapter],
 ) {
-    let handles = state.handles.lock().await;
-    let mut tasks = state.tasks.write().await;
-
-    for (task_id, handle) in handles.iter() {
-        if let Some(task) = tasks.get_mut(task_id) {
-            if task.status != TaskStatus::Downloading {
-                continue;
-            }
-            // Auto-aggregate if the task was started with all adapters (empty adapter_ids)
-            let uses_all = task.adapter_ids.is_empty();
-
-            if uses_all {
-                for new_adapter in added {
-                    if let Some(tx) = &handle.adapter_tx {
-                        info!(
-                            task_id = %task_id,
-                            adapter = %new_adapter.id,
-                            "Auto-aggregating newly connected adapter into download"
-                        );
-                        {
-                            let mut names = handle.names.write().await;
-                            names.insert(
-                                new_adapter.ip,
-                                (
-                                    new_adapter.id.clone(),
-                                    crate::adapters::adapter_name(new_adapter),
-                                ),
-                            );
-                        }
-                        let _ = tx.send(AdapterUpdate::Add(new_adapter.clone())).await;
-                    }
+    let targets = {
+        let handles = state.handles.lock().await;
+        let tasks = state.tasks.read().await;
+        handles
+            .iter()
+            .filter_map(|(task_id, handle)| {
+                let task = tasks.get(task_id)?;
+                if task.status != TaskStatus::Downloading {
+                    return None;
                 }
-            }
+                Some((
+                    task_id.clone(),
+                    task.adapter_ids.is_empty(),
+                    handle.adapter_tx.clone(),
+                    handle.names.clone(),
+                ))
+            })
+            .collect::<Vec<_>>()
+    };
 
-            for drop_adapter in removed {
-                if let Some(tx) = &handle.adapter_tx {
-                    info!(
-                        task_id = %task_id,
-                        adapter = %drop_adapter.id,
-                        "Retiring disconnected adapter from download"
+    for (task_id, uses_all, tx, names) in targets {
+        let Some(tx) = tx else { continue };
+        if uses_all {
+            for new_adapter in added {
+                {
+                    let mut names = names.write().await;
+                    names.insert(
+                        new_adapter.ip,
+                        (
+                            new_adapter.id.clone(),
+                            crate::adapters::adapter_name(new_adapter),
+                        ),
                     );
-                    let _ = tx.send(AdapterUpdate::Remove(drop_adapter.ip)).await;
                 }
+                info!(
+                    task_id = %task_id,
+                    adapter = %new_adapter.id,
+                    "Auto-aggregating newly connected adapter into download"
+                );
+                if let Err(e) = tx.try_send(AdapterUpdate::Add(new_adapter.clone())) {
+                    warn!(task_id = %task_id, "Could not queue adapter addition: {e}");
+                }
+            }
+        }
+        for drop_adapter in removed {
+            info!(
+                task_id = %task_id,
+                adapter = %drop_adapter.id,
+                "Retiring disconnected adapter from download"
+            );
+            if let Err(e) = tx.try_send(AdapterUpdate::Remove(drop_adapter.ip)) {
+                warn!(task_id = %task_id, "Could not queue adapter removal: {e}");
             }
         }
     }

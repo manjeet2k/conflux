@@ -12,8 +12,13 @@ export function useWindowTheme(preference: ThemePreference) {
   useEffect(() => {
     const mq = window.matchMedia(darkQuery);
     const onChange = () => setSystemDark(mq.matches);
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
+    onChange();
+    if (typeof mq.addEventListener === 'function') {
+      mq.addEventListener('change', onChange);
+      return () => mq.removeEventListener('change', onChange);
+    }
+    mq.addListener(onChange);
+    return () => mq.removeListener(onChange);
   }, []);
 
   const dark = preference === 'system' ? systemDark : preference === 'dark';

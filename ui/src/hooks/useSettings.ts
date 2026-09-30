@@ -16,6 +16,7 @@ export function useSettings(onError: (message: string) => void) {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   // Latest settings for `update`, which must not close over stale state.
   const current = useRef(settings);
+  const saveQueue = useRef(Promise.resolve());
 
   useEffect(() => {
     api
@@ -34,8 +35,9 @@ export function useSettings(onError: (message: string) => void) {
       const next = { ...prev, ...patch };
       current.current = next;
       setSettings(next);
-      api
-        .updateSettings(next)
+      saveQueue.current = saveQueue.current
+        .catch(() => undefined)
+        .then(() => api.updateSettings(next))
         .then((saved) => {
           current.current = saved;
           setSettings(saved);

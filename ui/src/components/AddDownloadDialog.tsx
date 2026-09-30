@@ -137,6 +137,7 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
     userSelection === null
       ? usable.filter((a) => a.enabled).map((a) => a.id)
       : userSelection.filter((id) => usableIds.has(id));
+  const adapterIds = userSelection === null ? [] : selected;
 
   const toggle = (id: string, checked: boolean) =>
     setUserSelection(checked ? [...selected, id] : selected.filter((s) => s !== id));
@@ -164,7 +165,7 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
         url: url.trim(),
         saveDir: saveDir.trim(),
         filename: filename !== null && effectiveName ? effectiveName : null,
-        adapterIds: selected,
+        adapterIds,
       });
       onClose();
     } catch (err) {
@@ -245,7 +246,7 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
                 <AccordionHeader expandIconPosition="end" size="small">
                   Network adapters
                   <Caption1 className={styles.muted} style={{ marginLeft: 8 }}>
-                    {usable.length === 0
+                    {usable.length === 0 || userSelection === null
                       ? 'default route'
                       : `${selected.length} of ${usable.length} selected`}
                   </Caption1>

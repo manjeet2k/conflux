@@ -212,10 +212,12 @@ struct AdapterWorkerState {
     /// Gross body bytes received (never decremented; see `AdapterProgress`).
     received: AtomicU64,
     active: AtomicUsize,
+    retire_tx: watch::Sender<bool>,
 }
 
 impl AdapterWorkerState {
     fn new(ip: Option<IpAddr>, client: reqwest::Client) -> Self {
+        let (retire_tx, _retire_rx) = watch::channel(false);
         Self {
             label: DownloadEngine::bind_label(ip),
             ip,
@@ -224,6 +226,7 @@ impl AdapterWorkerState {
             dropped: AtomicBool::new(false),
             received: AtomicU64::new(0),
             active: AtomicUsize::new(0),
+            retire_tx,
         }
     }
 
@@ -800,7 +803,10 @@ impl DownloadEngine {
                             if adapter.enabled && adapter.is_ipv4 && !adapter.is_loopback && adapter.ip.is_ipv4() {
                                 let already_exists = {
                                     let states = adapter_states.read().unwrap();
-                                    states.iter().any(|s| s.ip == Some(adapter.ip))
+                                    states.iter().any(|s| {
+                                        s.ip == Some(adapter.ip)
+                                            && !s.dropped.load(Ordering::SeqCst)
+                                    })
                                 };
                                 if !already_exists {
                                     info!(
@@ -830,12 +836,13 @@ impl DownloadEngine {
                         Some(AdapterUpdate::Remove(ip)) => {
                             info!("Network adapter {} disconnected; dropping workers", ip);
                             let states = adapter_states.read().unwrap();
-                            if let Some(target) = states.iter().find(|s| s.ip == Some(ip)) {
+                            for target in states.iter().filter(|s| s.ip == Some(ip)) {
                                 target.dropped.store(true, Ordering::SeqCst);
+                                target.retire_tx.send_replace(true);
                             }
                         }
                         None => {
-                            // Adapter updates stream closed
+                            adapter_rx = None;
                         }
                     }
                 }
@@ -1075,8 +1082,9 @@ async fn run_chunk_worker(
     worker_idx: usize,
     mut stop: watch::Receiver<bool>,
 ) {
+    let mut retire = adapter.retire_tx.subscribe();
     loop {
-        if *stop.borrow() || adapter.dropped.load(Ordering::SeqCst) {
+        if *stop.borrow() || *retire.borrow() || adapter.dropped.load(Ordering::SeqCst) {
             return;
         }
 
@@ -1089,6 +1097,7 @@ async fn run_chunk_worker(
                 tokio::select! {
                     _ = tokio::time::sleep(delay) => {}
                     _ = wait_for_true(&mut stop) => return,
+                    _ = wait_for_true(&mut retire) => return,
                 }
                 continue;
             }
@@ -1103,7 +1112,15 @@ async fn run_chunk_worker(
         shared.counters.active.fetch_add(1, Ordering::SeqCst);
         adapter.active.fetch_add(1, Ordering::SeqCst);
         let mut counted = 0u64;
-        let result = fetch_chunk(&adapter, &shared, &chunk, &mut counted, &mut stop).await;
+        let result = fetch_chunk(
+            &adapter,
+            &shared,
+            &chunk,
+            &mut counted,
+            &mut stop,
+            &mut retire,
+        )
+        .await;
         adapter.active.fetch_sub(1, Ordering::SeqCst);
         shared.counters.active.fetch_sub(1, Ordering::SeqCst);
 
@@ -1178,6 +1195,7 @@ async fn fetch_chunk(
     chunk: &Chunk,
     counted: &mut u64,
     stop: &mut watch::Receiver<bool>,
+    retire: &mut watch::Receiver<bool>,
 ) -> Result<(), AttemptError> {
     let range = chunk.to_range_header();
     let request = adapter
@@ -1189,6 +1207,7 @@ async fn fetch_chunk(
     let resp = tokio::select! {
         biased;
         _ = wait_for_true(stop) => return Err(AttemptError::Stopped),
+        _ = wait_for_true(retire) => return Err(AttemptError::Stopped),
         r = request => r.with_context(|| format!("Request for {} failed", range))?,
     };
 
@@ -1244,6 +1263,7 @@ async fn fetch_chunk(
         let next = tokio::select! {
             biased;
             _ = wait_for_true(stop) => return Err(AttemptError::Stopped),
+            _ = wait_for_true(retire) => return Err(AttemptError::Stopped),
             n = stream.next() => n,
         };
         let Some(item) = next else { break };

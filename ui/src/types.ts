@@ -91,4 +91,3 @@ export const PROGRESS_EVENT = 'download-progress';
 export const NETWORK_ADAPTERS_CHANGED_EVENT = 'network-adapters-changed';
 
 export type ViewId = 'all' | 'active' | 'paused' | 'completed' | 'failed' | 'network' | 'settings';
-

@@ -1,9 +1,5 @@
 import React from 'react';
 import {
-  Accordion,
-  AccordionHeader,
-  AccordionItem,
-  AccordionPanel,
   Badge,
   Button,
   Caption1,
@@ -36,11 +32,20 @@ const useStyles = makeStyles({
   adapterHead: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' },
   adapterIcon: { fontSize: '24px', display: 'flex' },
   adapterTitle: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' },
+  statusBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: '22px',
+    lineHeight: '18px',
+    paddingBlock: '1px',
+    fontFamily: "'Segoe UI Variable Text', 'Segoe UI', sans-serif",
+    textRendering: 'geometricPrecision',
+  },
   stats: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' },
   stat: { display: 'flex', flexDirection: 'column' },
   statValue: { fontVariantNumeric: 'tabular-nums', fontWeight: tokens.fontWeightSemibold },
   muted: { color: tokens.colorNeutralForeground3 },
-  otherRow: { display: 'flex', gap: '12px', padding: '6px 0', alignItems: 'center' },
 });
 
 interface LiveStat {
@@ -77,8 +82,7 @@ interface NetworkPageProps {
 
 export const NetworkPage: React.FC<NetworkPageProps> = ({ adapters, tasks, history, dark, onRefresh }) => {
   const styles = useStyles();
-  const usable = usableAdapters(adapters);
-  const others = adapters.filter((a) => !a.usable);
+  const usable = usableAdapters(adapters).filter((a) => a.enabled);
   const stats = liveStats(tasks);
   const totalNow = history.length > 0 ? history[history.length - 1].total : 0;
   const accent = dark ? '#60CDFF' : '#005FB8';
@@ -154,22 +158,18 @@ export const NetworkPage: React.FC<NetworkPageProps> = ({ adapters, tasks, histo
                   </Caption1>
                 </div>
                 {s?.dropped ? (
-                  <Badge appearance="tint" color="danger">
+                  <Badge className={styles.statusBadge} appearance="tint" color="danger">
                     Dropped
                   </Badge>
                 ) : inUse ? (
-                  <Badge appearance="filled" color="brand">
+                  <Badge className={styles.statusBadge} appearance="filled" color="brand">
                     In use
                   </Badge>
                 ) : a.enabled ? (
-                  <Badge appearance="tint" color="success">
+                  <Badge className={styles.statusBadge} appearance="tint" color="success">
                     Ready
                   </Badge>
-                ) : (
-                  <Badge appearance="tint" color="informative">
-                    Off by default
-                  </Badge>
-                )}
+                ) : null}
               </div>
               <div className={styles.stats}>
                 <div className={styles.stat}>
@@ -190,29 +190,6 @@ export const NetworkPage: React.FC<NetworkPageProps> = ({ adapters, tasks, histo
         })}
       </div>
 
-      {others.length > 0 && (
-        <Accordion collapsible style={{ marginTop: 16 }}>
-          <AccordionItem value="others">
-            <AccordionHeader expandIconPosition="end">
-              Other interfaces ({others.length}) — IPv6, link-local and loopback addresses can't be used for bonding
-            </AccordionHeader>
-            <AccordionPanel>
-              {others.map((a) => {
-                const Icon = kindIcon[a.kind];
-                return (
-                  <div key={a.id} className={styles.otherRow}>
-                    <Icon />
-                    <Text>{a.name}</Text>
-                    <Caption1 className={styles.muted} style={{ userSelect: 'text' }}>
-                      {a.ip}
-                    </Caption1>
-                  </div>
-                );
-              })}
-            </AccordionPanel>
-          </AccordionItem>
-        </Accordion>
-      )}
     </Page>
   );
 };
