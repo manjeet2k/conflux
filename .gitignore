@@ -9,6 +9,7 @@ dist/
 build/
 out/
 bin/
+*.exe
 
 # Conflux temporary files, active downloads, and sparse files
 downloads/
