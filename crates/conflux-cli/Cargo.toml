@@ -1,0 +1,18 @@
+[package]
+name = "conflux-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "conflux"
+path = "src/main.rs"
+
+[dependencies]
+conflux-core = { path = "../conflux-core" }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
