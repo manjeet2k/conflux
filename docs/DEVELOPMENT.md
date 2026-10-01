@@ -23,10 +23,10 @@ Conflux targets Windows, but day-to-day development happens on **Linux / WSL2**:
 
 | What | Where it runs |
 |------|---------------|
-| `conflux-core` (engine) unit + integration tests | Linux/WSL2 (and Windows CI) |
-| `conflux-cli` tests | Linux/WSL2 |
+| `conflux-core` (engine) unit + integration tests | Linux/WSL2, **and as real Windows exes from WSL2** (`scripts/test-windows.sh`), and Windows CI |
+| `conflux-cli` tests | Linux/WSL2 and as a Windows exe (`scripts/test-windows.sh`) |
 | UI lint, build, and browser dev with the mock backend | Anywhere with Node |
-| `conflux-desktop` (Tauri) **tests** | Windows only — needs GTK/WebKit on Linux |
+| `conflux-desktop` (Tauri) **tests** | As a Windows exe from WSL2 (`scripts/test-windows.sh desktop`) and Windows CI; native Linux needs GTK/WebKit and is not used |
 | `conflux-desktop` **compile / clippy check** | Linux, with the Windows target |
 
 Setup on Linux/WSL2:
@@ -40,6 +40,23 @@ because `tauri-winres` runs it from a build script. If it is installed outside t
 prepend its directory to `PATH` for that command.
 
 Never run a bare `cargo test` on Linux — always pass `-p <crate>`.
+
+### Running the tests as real Windows executables (WSL2)
+
+WSL2 can launch Windows `.exe` files, so the cross-compiled test binaries run **natively on the
+Windows host**. This exercises the Windows-only code (NTFS sparse files, `GetAdaptersAddresses`,
+the `NotifyUnicastIpAddressChange` watcher, Mark-of-the-Web) that the Linux run skips:
+
+```bash
+PATH=<dir with x86_64-w64-mingw32-windres>:$PATH scripts/test-windows.sh        # core + cli + desktop
+scripts/test-windows.sh desktop                                                  # just the desktop crate
+```
+Details worth knowing (the script handles them): the desktop tests use `--lib` because a plain
+`cargo test` also links the crate's `cdylib`, which exceeds MinGW's 65,535-export limit; and test
+executables need a Common Controls v6 manifest (the Tauri dialog plugin imports
+`TaskDialogIndirect`), which the script links in from `scripts/windows-test/`. This runs the unit
+tests only — it does not start the app or the webview, so it does not replace the smoke test in
+`docs/WINDOWS_TEST_PLAN.md`. If `cmd.exe /c ver` fails in your shell, interop is off.
 
 ## Quality gates
 
@@ -58,11 +75,8 @@ npm --prefix ui run lint && npm --prefix ui run build
 node scripts/check-version.mjs
 ```
 The engine and watcher integration tests are timing-sensitive: when you touch that code, run
-`cargo test -p conflux-core` three times in a row.
-
-Desktop logic that is pure (parsing, redaction, migration) can't be tested on Linux in place. To
-check it anyway, `#[path]`-include the module in a scratch crate outside the repo and run its
-tests there, and say so in your report. The real tests run on the CI Windows job.
+`cargo test -p conflux-core` three times in a row. Before reporting desktop work done, also run
+`scripts/test-windows.sh` (it needs WSL2 interop; otherwise rely on the CI Windows job).
 
 ## Running things
 

@@ -38,7 +38,7 @@ Prerequisites: Rust toolchain from `rust-toolchain.toml`, Node 20+, MSVC build t
 
 | # | Step | Expected | Result | Notes |
 |---|------|----------|--------|-------|
-| 1.1 | `cargo test -p conflux-desktop` | all tests pass, including settings migration, `set_override`, `partial_file_is_ours`, Zone.Identifier contents | PASS / FAIL | |
+| 1.1 | `cargo test -p conflux-desktop --lib` (on a Windows machine with Rust; from WSL2 use `scripts/test-windows.sh desktop`, which already passed 65 tests on the maintainer's host) | all tests pass, including settings migration, `set_override`, `partial_file_is_ours`, Zone.Identifier contents | PASS / FAIL | |
 | 1.2 | `cargo test -p conflux-core` | all tests pass | PASS / FAIL | |
 | 1.3 | Repeat 1.1 a second time | same result (no flaky tests) | PASS / FAIL | |
 

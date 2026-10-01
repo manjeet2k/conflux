@@ -10,6 +10,7 @@ All notable changes to Conflux are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `scripts/test-windows.sh`: runs the core, CLI and desktop tests as real Windows executables from WSL2 (core 72+45, cli 4, desktop 65 pass), so Windows-only code paths are exercised locally.
 - In-app updates (Settings -> About & Updates, optional quiet check on start): running downloads
   are paused before installing and resume automatically after the restart. Release workflow
   (`release.yml`) builds a draft prerelease with standard and offline-WebView2 installers,

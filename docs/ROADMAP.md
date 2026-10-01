@@ -81,11 +81,8 @@ gates** live in [DEVELOPMENT.md](DEVELOPMENT.md). Run every gate there before re
 done, and run `cargo test -p conflux-core` three times when you touched engine/watcher code.
 
 Project state that matters for picking tasks:
-- **Windows-only code has been compiled but never run:** adapter link/DAD-state filtering,
-  NTFS sparse files (`FSCTL_SET_SPARSE`), Mark-of-the-Web (`Zone.Identifier`), the strict CSP in
-  the real webview, trimmed capabilities. Treat these as unverified until task V-1 is done.
-- Desktop tests cannot run on Linux; verify desktop work with the Windows clippy gate (and, for
-  pure logic, a scratch crate — see DEVELOPMENT.md).
+- **Unit/integration tests now run as real Windows executables** from WSL2 (`scripts/test-windows.sh`: core 72+45, cli 4, desktop 65 pass). That covers the Windows-only code paths in the test suites (NTFS sparse, adapter enumeration, watcher, Zone.Identifier).
+- **Still unverified on real Windows:** the running app and webview (strict CSP, trimmed capabilities, the manifest with long-path support), tray, installer/uninstaller, the updater, real multi-adapter bonding. That is what V-1, V-2, V-4 and V-5 cover.
 
 ---
 
@@ -174,7 +171,7 @@ Done notes: ARCHITECTURE.md rewritten against the code (sections 5–7 new); PLA
 > run itself `[!]` "needs Windows host", leaving exact instructions for the human.
 
 #### V-1 — Run desktop tests and smoke-test the app on Windows  `[~]`
-Why: all Windows-only code is unverified; desktop unit tests can't run on Linux.
+Why: the running app is unverified on Windows (unit tests already run natively via `scripts/test-windows.sh`).
 Depends on: none
 Files: new `docs/WINDOWS_TEST_PLAN.md`
 Do: write a checklist, then (on Windows) run it and record results:
@@ -262,7 +259,7 @@ Depends on: none
 Files: `crates/conflux-desktop/src/history.rs`, `settings.rs`
 Do: on parse failure, rename the bad file to `*.corrupt-<timestamp>` (keep at most 3), start empty, and surface a one-time notice in the UI. Same for settings. Add a `schema_version` field to both files for future migrations.
 Acceptance: test writes garbage, loads, finds a `.corrupt-*` backup and an empty/default state; version field round-trips and old files without it still load.
-Verify: `cargo clippy` for desktop; run the pure tests in a scratch copy if the crate can't be tested on Linux (see [DEVELOPMENT.md](DEVELOPMENT.md)) — or on Windows.
+Verify: `cargo clippy` for desktop and `scripts/test-windows.sh desktop` (see [DEVELOPMENT.md](DEVELOPMENT.md)) — or on Windows.
 Done notes: New `fileutil.rs`: unparseable file → `<name>.corrupt-<UTC>` (keep 3, never overwrite); `schema_version` added to settings (v1) and history (`{"schema_version":1,"tasks":[…]}`; bare array still loads); `take_startup_notices` command → warning toast in `App.tsx`.
 
 #### P-5 — Installer polish  `[x]`
@@ -376,7 +373,7 @@ Do:
 4. Add only the updater permissions the JS uses to `capabilities/default.json`.
 Acceptance: install `v0.1.6-test`, publish `v0.1.7-test`, app updates itself and resumes a download that was in flight.
 Verify: manual on Windows; unit test for the "pause before install" ordering where possible.
-Done notes: `updater.rs`: check/install in Rust, pause→persist→install ordering with rollback, resume at startup, notify-only startup check; Settings → About & Updates. Updater key generated locally (`~/.config/conflux-secrets/`), public key in `tauri.conf.json`. 6 unit tests ran in a scratch crate only. **Real update flow never exercised** (needs two published betas on a public repo).
+Done notes: `updater.rs`: check/install in Rust, pause→persist→install ordering with rollback, resume at startup, notify-only startup check; Settings → About & Updates. Updater key generated locally (`~/.config/conflux-secrets/`), public key in `tauri.conf.json`. Its unit tests run as part of the desktop suite (65 pass as a Windows exe via `scripts/test-windows.sh`). **Real update flow never exercised** (needs two published betas on a public repo).
 
 #### S-4 — Release runbook  `[x]`
 Depends on: R-3, S-3 (S-2 later, when signing lands)
