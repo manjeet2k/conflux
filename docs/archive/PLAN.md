@@ -1,4 +1,4 @@
-> **Historical document.** This is the original design plan and no longer tracks the code. See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works now and [ROADMAP.md](ROADMAP.md) for what is planned.
+> **Historical document.** This is the original design plan and no longer tracks the code. See [ARCHITECTURE.md](../ARCHITECTURE.md) for how it works now and [ROADMAP.md](../ROADMAP.md) for what is planned.
 
 # Conflux: Native Windows Multi-Source & Multi-Interface Download Accelerator
 

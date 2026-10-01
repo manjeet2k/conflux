@@ -1,5 +1,7 @@
 # Compiling Conflux for Windows from Linux & WSL2
 
+> Part of the [development docs](../DEVELOPMENT.md). Everyday checks (lint, tests) do not need a Windows build; use this only when you need a Windows binary.
+
 This guide outlines how to compile native standalone Windows executables (`.exe`) for Conflux from your Linux/WSL2 environment.
 
 ---
@@ -70,5 +72,5 @@ Since you are running inside WSL2 on a Windows host, you can also build natively
 ## Notes
 
 - `cargo clippy -p conflux-desktop --target x86_64-pc-windows-gnu -- -D warnings` needs the mingw `windres` (`x86_64-w64-mingw32-windres`) on `PATH`, because `tauri-winres` invokes it in the build script. If it is installed outside the default path, prepend that directory to `PATH` for the command.
-- Release installers are meant to come from CI, not local builds, once roadmap task R-3 lands (see [ROADMAP.md](ROADMAP.md)). Until then, build an installer locally only when explicitly requested.
+- Release installers are meant to come from CI, not local builds, once roadmap task R-3 lands (see [ROADMAP.md](../ROADMAP.md)). Until then, build an installer locally only when explicitly requested.
 

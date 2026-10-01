@@ -10,6 +10,11 @@ All notable changes to Conflux are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Platform policy made explicit: Windows 10/11 (64-bit) only. README, AGENTS.md, architecture,
+  development guide and roadmap say so; Linux code paths remain only as a test/dev host.
+- Documentation reorganised: docs index (`docs/README.md`), development guide
+  (`docs/DEVELOPMENT.md`), guides/ and archive/ folders, `scripts/roadmap-status.mjs` and
+  `scripts/check-docs.mjs`, and a corrected README layout and testing section.
 - Non-polling network adapter watcher: adapters that appear or disappear are hot-joined to or
   dropped from running downloads without a restart.
 - Adapter selection is now an app-level global setting, with runtime fallback when a selected

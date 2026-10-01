@@ -1,6 +1,6 @@
 # Conflux Agent & Engineering Guidelines
 
-Welcome to **Conflux**: A high-performance native Windows & cross-platform download manager built in Rust and Tauri v2 that aggregates bandwidth across all available network interfaces (Wi-Fi, Ethernet, USB 4G/5G mobile tethering) and multiple mirror sources.
+Welcome to **Conflux**: A high-performance native **Windows-only** (10/11, 64-bit) download manager built in Rust and Tauri v2 that aggregates bandwidth across all available network interfaces (Wi-Fi, Ethernet, USB 4G/5G mobile tethering) and multiple mirror sources.
 
 All agents, contributors, and automated tooling operating within this repository MUST adhere to the principles and guidelines outlined below.
 
@@ -70,6 +70,8 @@ Before any commit:
 - `cargo clippy -p conflux-desktop --target x86_64-pc-windows-gnu -- -D warnings` (clean desktop linting)
 - `cargo test -p conflux-core` (all unit & integration tests pass on Linux host)
 - `npm --prefix ui run lint && npm --prefix ui run build` (clean frontend types and bundle)
+
+*(Platform policy: Windows is the only supported and shipped platform. The Linux code paths exist solely so `conflux-core` tests run on the WSL2 dev host and in Linux CI; do not add Linux/macOS features or packaging. See `docs/DEVELOPMENT.md`.)*
 
 *(Note: Do not run bare `cargo test` without `-p conflux-core` on Linux/WSL2, as `conflux-desktop` targets Windows and requires cross-compilation).*
 

@@ -8,6 +8,10 @@ beta** with an auto-updating, repeatable release process.
 > "beta". Code signing and the 1.0 checklist are **deferred until after the beta** (see
 > [Post-beta backlog](#post-beta-backlog)). Do not tag, label or describe anything as 1.0 or
 > "stable" until the user says so.
+>
+> **Platform target (user decision): Windows 10/11 x64 only.** Linux code paths exist only as a
+> dev/test convenience (see [DEVELOPMENT.md](DEVELOPMENT.md#platform-policy)); do not add Linux or
+> macOS features, packaging or CI release jobs.
 
 This file is the single source of truth for that work. It is written so that **any agent can
 open it, pick the next unblocked task, finish it, and leave the file accurate for the next
@@ -21,7 +25,7 @@ Last reviewed against the repo: version `0.1.5`, branch `main`.
 
 ### Picking a task
 1. Read `AGENTS.md` (binding rules for this repo) and the [Ground rules](#ground-rules) below.
-2. Find the first task with status `[ ]` whose **Depends on** tasks are all `[x]` and whose
+2. Run `node scripts/roadmap-status.mjs --todo` for the current task list, then find the first task with status `[ ]` whose **Depends on** tasks are all `[x]` and whose
    **Gate** (if any) is resolved in [Open decisions](#open-decisions).
 3. Mark it `[~]` (in progress) and add your agent/session name in **Owner** *before* you start,
    so parallel agents don't collide. If a task is already `[~]`, pick another.
@@ -29,7 +33,7 @@ Last reviewed against the repo: version `0.1.5`, branch `main`.
 
 ### Finishing a task
 1. Satisfy every line of **Acceptance** and run every command under **Verify**.
-2. Run the repo quality gates ([Quality gates](#quality-gates)). They must pass.
+2. Run the repo quality gates ([DEVELOPMENT.md](DEVELOPMENT.md#quality-gates)). They must pass.
 3. Change the status to `[x]` and fill **Done notes** (what changed, what was *not* verified,
    follow-ups). Be honest: say "compiled but not run on Windows" when that is the case.
 4. If you discover new work, **add a new task** (next free ID in that phase) instead of
@@ -71,29 +75,17 @@ These come from `AGENTS.md`; they are repeated because they cause the most mista
 - **Concurrency etiquette:** several agents may edit the same working tree. Stay inside your
   task's files; if a build breaks in a file you don't own, wait and retry, don't "fix" it.
 
-### Environment facts (verified)
-- Host is Linux/WSL2. `conflux-desktop` cannot be *tested* on Linux (needs GTK/WebKit); it can
-  only be compile-checked for Windows: `cargo clippy -p conflux-desktop --target x86_64-pc-windows-gnu`.
-- That Windows clippy needs `PATH=/home/manjeet/.local/usr/bin:$PATH` so `tauri-winres` finds
-  `x86_64-w64-mingw32-windres`.
+### Environment and quality gates
+The dev environment (WSL2, what can and cannot be tested on Linux) and the **full list of quality
+gates** live in [DEVELOPMENT.md](DEVELOPMENT.md). Run every gate there before reporting a task
+done, and run `cargo test -p conflux-core` three times when you touched engine/watcher code.
+
+Project state that matters for picking tasks:
 - **Windows-only code has been compiled but never run:** adapter link/DAD-state filtering,
   NTFS sparse files (`FSCTL_SET_SPARSE`), Mark-of-the-Web (`Zone.Identifier`), the strict CSP in
   the real webview, trimmed capabilities. Treat these as unverified until task V-1 is done.
-
-### Quality gates
-Run before reporting any task done (from the repo root):
-```
-cargo fmt --check
-cargo clippy -p conflux-core --tests -- -D warnings
-cargo clippy -p conflux-core --target x86_64-pc-windows-gnu --tests -- -D warnings
-cargo clippy -p conflux-cli --tests -- -D warnings
-PATH=/home/manjeet/.local/usr/bin:$PATH cargo clippy -p conflux-desktop --target x86_64-pc-windows-gnu --tests -- -D warnings
-cargo test -p conflux-core
-cargo test -p conflux-cli
-npm --prefix ui run lint && npm --prefix ui run build
-```
-Run `cargo test -p conflux-core` three times when you touched engine/watcher code
-(timing-sensitive integration tests).
+- Desktop tests cannot run on Linux; verify desktop work with the Windows clippy gate (and, for
+  pure logic, a scratch crate — see DEVELOPMENT.md).
 
 ---
 
@@ -156,9 +148,9 @@ Verify: `node scripts/bump-version.mjs 0.1.6 && node scripts/check-version.mjs &
 Done notes: `scripts/bump-version.mjs`, `check-version.mjs`, `lib.mjs`; `npm run version:check|version:bump`; `check-version.mjs --expect X.Y.Z` is for the release workflow. Bump also syncs Cargo.lock workspace crates and `ui/package-lock.json` (currently stale at 0.1.0, so the first real bump changes it). Tested bump → check → break → restore.
 
 #### H-4 — Docs reconciliation  `[x]`
-Why: README project tree, `docs/PLAN.md` (original design incl. `socket2` language), and `docs/ARCHITECTURE.md` have drifted from the code.
+Why: README project tree, `docs/archive/PLAN.md` (original design incl. `socket2` language), and `docs/ARCHITECTURE.md` have drifted from the code.
 Depends on: none
-Files: `README.md`, `docs/ARCHITECTURE.md`, `docs/PLAN.md`
+Files: `README.md`, `docs/ARCHITECTURE.md`, `docs/archive/PLAN.md`
 Do: update architecture doc for: interface-name overrides, If-Range/ETag validation, `claim_unique_path`, watcher fallback polling, `quit_gracefully`, Linux `SO_BINDTODEVICE`. Mark `docs/PLAN.md` as historical. Link `docs/ROADMAP.md` from README.
 Acceptance: every module named in ARCHITECTURE.md exists; no mention of removed behaviour.
 Verify: manual read + `git grep -n "socket2" docs README.md`.
@@ -261,7 +253,7 @@ Depends on: none
 Files: `crates/conflux-desktop/src/history.rs`, `settings.rs`
 Do: on parse failure, rename the bad file to `*.corrupt-<timestamp>` (keep at most 3), start empty, and surface a one-time notice in the UI. Same for settings. Add a `schema_version` field to both files for future migrations.
 Acceptance: test writes garbage, loads, finds a `.corrupt-*` backup and an empty/default state; version field round-trips and old files without it still load.
-Verify: `cargo clippy` for desktop; run the pure tests in a scratch copy if the crate can't be tested on Linux (see Environment facts) — or on Windows.
+Verify: `cargo clippy` for desktop; run the pure tests in a scratch copy if the crate can't be tested on Linux (see [DEVELOPMENT.md](DEVELOPMENT.md)) — or on Windows.
 Done notes: New `fileutil.rs`: unparseable file → `<name>.corrupt-<UTC>` (keep 3, never overwrite); `schema_version` added to settings (v1) and history (`{"schema_version":1,"tasks":[…]}`; bare array still loads); `take_startup_notices` command → warning toast in `App.tsx`.
 
 #### P-5 — Installer polish  `[ ]`
@@ -483,7 +475,7 @@ task entry is later reorganised.
 ## Appendix A — Useful commands
 
 ```
-# Gates (see Quality gates for the full list)
+# Gates (see DEVELOPMENT.md for the full list)
 cargo fmt --check && cargo test -p conflux-core
 
 # Windows compile-check from Linux/WSL2

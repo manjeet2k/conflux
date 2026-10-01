@@ -2,7 +2,7 @@
 
 ## 1. The Single-Gateway Bottleneck in Standard Operating Systems
 
-In standard operating systems (Windows and Linux), when an application initiates an outgoing TCP connection using a default socket (`INADDR_ANY`), the OS kernel consults the system IP routing table:
+In Windows (and most other operating systems), when an application initiates an outgoing TCP connection using a default socket (`INADDR_ANY`), the OS kernel consults the system IP routing table:
 
 ```text
 Destination     Gateway         Netmask         Interface       Metric
@@ -50,9 +50,12 @@ if let Some(name) = interface.filter(|n| !n.is_empty()) {
 }
 ```
 
+Windows is the only supported platform; the Linux code paths below exist only so the core
+tests run on the WSL2 dev host and in Linux CI.
+
 Binding the source IP alone does not pin the egress interface on weak-host-model stacks
 (Linux by default): the kernel may still route out of another NIC carrying this NIC's
-source address. On **Linux** the engine therefore also passes the OS interface name
+source address. On **Linux** (dev/test only) the engine therefore also passes the OS interface name
 (`BindTarget::interface` in `engine.rs`, taken from `NetworkAdapter::name`), which sets
 `SO_BINDTODEVICE`. On **Windows** only the source-IP bind is used (the `interface`
 argument is ignored), so true per-adapter egress there depends on the routing table and is
@@ -89,7 +92,7 @@ Traditional download managers often download separate `.part` files for each con
 Conflux uses **sparse file pre-allocation**:
 1. When the download initializes, `SparseFileWriter::create` (`writer.rs`) pre-allocates the complete target file size instantly:
    - On Windows: first marks the file sparse (`FSCTL_SET_SPARSE`, best effort, in `mark_sparse`), then `set_len` moves `EndOfFile`. Without the sparse flag NTFS zero-fills everything before a far-offset write.
-   - On Linux: `set_len` (`ftruncate`) leaves a sparse file.
+   - On Linux (dev/test only): `set_len` (`ftruncate`) leaves a sparse file.
    - `SparseFileWriter::open_existing` reopens a partial file for resume without truncating it.
 2. Workers write incoming stream buffers **directly to their exact byte offsets**:
    ```rust
