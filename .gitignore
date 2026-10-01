@@ -51,3 +51,6 @@ conflux_panic*.txt
 *.p12
 *.key
 updater*.key*
+
+# Claude Code agent worktrees (local scratch checkouts)
+.claude/worktrees/
