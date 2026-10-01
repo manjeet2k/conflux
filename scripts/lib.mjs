@@ -53,7 +53,7 @@ export const jsonVersion = (p) => JSON.parse(read(p)).version;
 export function lockVersions(text = read(P.cargoLock)) {
   const out = {};
   for (const name of LOCK_CRATES) {
-    const m = new RegExp(`^name = "${name}"\\nversion = "([^"]+)"`, "m").exec(text);
+    const m = new RegExp(`^name = "${name}"\\r?\\nversion = "([^"]+)"`, "m").exec(text);
     out[name] = m ? m[1] : null;
   }
   return out;

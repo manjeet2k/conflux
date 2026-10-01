@@ -38,7 +38,7 @@ for (const p of [P.tauri, P.pkg]) {
 {
   let t = read(P.cargoLock);
   for (const n of LOCK_CRATES) {
-    const re = new RegExp(`(^name = "${n}"\\nversion = ")[^"]+(")`, "m");
+    const re = new RegExp(`(^name = "${n}"\\r?\\nversion = ")[^"]+(")`, "m");
     if (!re.test(t)) throw new Error(`Cargo.lock: ${n} not found (run cargo check first)`);
     t = t.replace(re, `$1${next}$2`);
   }
