@@ -1,33 +1,54 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1200" height="630" viewBox="0 0 1200 630">
-  <!-- Source of og.png (Open Graph / social preview). Re-render: see docs/DEVELOPMENT.md, "Website". -->
+  <!-- Source of og.png (social preview). Re-render: see docs/DEVELOPMENT.md, "Website". -->
   <defs>
-    <radialGradient id="g1" cx="88%" cy="0%" r="70%"><stop offset="0" stop-color="#c084fc" stop-opacity="0.35"/><stop offset="1" stop-color="#c084fc" stop-opacity="0"/></radialGradient>
-    <radialGradient id="g2" cx="0%" cy="20%" r="65%"><stop offset="0" stop-color="#4cc2ff" stop-opacity="0.30"/><stop offset="1" stop-color="#4cc2ff" stop-opacity="0"/></radialGradient>
-    <linearGradient id="txt" x1="0" x2="1"><stop offset="0" stop-color="#4cc2ff"/><stop offset="0.55" stop-color="#a78bfa"/><stop offset="1" stop-color="#34d399"/></linearGradient>
-    <linearGradient id="btn" x1="0" x2="1"><stop offset="0" stop-color="#4cc2ff"/><stop offset="1" stop-color="#c084fc"/></linearGradient>
+    <radialGradient id="violet" cx="1" cy="1.05" r="0.95"><stop offset="0" stop-color="#5c31ff" stop-opacity="0.95"/><stop offset="0.69" stop-color="#5c31ff" stop-opacity="0"/></radialGradient>
+    <radialGradient id="pink" cx="0.62" cy="1.25" r="0.7"><stop offset="0" stop-color="#f88cd4" stop-opacity="0.7"/><stop offset="0.69" stop-color="#f88cd4" stop-opacity="0"/></radialGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="0.7"><stop offset="0" stop-color="#eeedf2" stop-opacity="0.30"/><stop offset="0.43" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
+    <radialGradient id="shine" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#1c1341" stop-opacity="0.87"/><stop offset="0.61" stop-color="#1c1341" stop-opacity="0"/></radialGradient>
   </defs>
-  <rect width="1200" height="630" fill="#0a0e1a"/>
-  <rect width="1200" height="630" fill="url(#g1)"/>
-  <rect width="1200" height="630" fill="url(#g2)"/>
+  <rect width="1200" height="630" fill="#0d0628"/>
+  <rect width="1200" height="630" fill="url(#violet)"/>
+  <rect width="1200" height="630" fill="url(#pink)"/>
 
-  <image x="72" y="64" width="56" height="56" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAAEIElEQVR42u3d263jWBAEwTKiDZTDson6kBVERqItOKzAYHcedyeFmycQABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIA7+/zfTwCAN31/89TANBdPwMA1NfPAAD19TMAQH39DABQXz8DANTXzwAA9fUzAEB9/QwAUF8/AwDU188AAPX1MwBAff0MAFBfPwMA1NfPAAD19TMAQH39DABQXz8DANTXzwAA9fUzAEB9/QwAUF8/AwDU188AAPX1MwBAff0MAFBfPwMA1NfPAAD19TMAQH39DABQXz8DANTXzwAA9fUzAEB9/QwAUF8/AwDU188AAPX1MwBAff0MAFBfPwMA1NfPAAD19TMAQH39DABQXz8DANTXz8Cs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2YBfAZxfARhw/huAAef/AjHg/D4AA87vBDPg/FkgBpw/DcqA8/cBGHD+RhgDzt8JZsD5VyEYcP5dIAbcu9d//m1QV17/+dehXXn95+cDuPL6z0+IceX1n58R5srrPz8l0pXXf35OsCuv//ykeFde/1sBMGD9dQAMWH8dAAPWXwfAgPXXATBg/XUADFh/HQAD1l8HwID11wEwYP11AAxYfx0AA9ZfB8CA9dcBMGD9dQAMWH8dAAPWXwfAgPXXATBg/XUADFh/HQAD1l8HwID11wEwYP11AAxYfx0AA9ZfB8CA9dcBMBBfPwAMPPGvD0DagE8PQNeAjw5A14DPDUDXgA8NQNeATwxA14CPC0DXgM8KQNeADwpA14BPCUDXgI8IQNeAzwdA14APB0DXgE8GQNeAjwVA14DPBEDXgA8EQNeATwNA14CPAkDXgM8BQNeADwFA14BPAEDXgMcHoGvAswPQNeDBAega8NQAdA14ZAC6BjwvAF0DHhaArgFPCkDXgMcEoGvAMwLQNeABAega8HQAdA14NAC6BjwXAF0DHgqArgFPBEDXgMcBoGvAswDQNeBBAOga8BQAdA14BAAkACQAJAAkACQAJAAkACQAJAAkACQAJAAkACQAJAAkACQAJAAkACQAJAAkACQAJAAEgASABIAEgASABIAEgASABIAEgASABIAEgPTyfqYbS0xPPnhpAAAAAElFTkSuQmCC"/>
-  <text x="144" y="104" font-family="Ubuntu Sans, DejaVu Sans, sans-serif" font-size="34" font-weight="700" fill="#e8ecf6">Conflux</text>
-  <rect x="290" y="78" width="78" height="32" rx="16" fill="url(#btn)"/>
-  <text x="329" y="100" text-anchor="middle" font-family="Ubuntu Sans, DejaVu Sans, sans-serif" font-size="16" font-weight="800" fill="#0a0e1a" letter-spacing="1.5">BETA</text>
+  <image x="72" y="62" width="34" height="34" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAAEIElEQVR42u3d263jWBAEwTKiDZTDson6kBVERqItOKzAYHcedyeFmycQABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIA7+/zfTwCAN31/89TANBdPwMA1NfPAAD19TMAQH39DABQXz8DANTXzwAA9fUzAEB9/QwAUF8/AwDU188AAPX1MwBAff0MAFBfPwMA1NfPAAD19TMAQH39DABQXz8DANTXzwAA9fUzAEB9/QwAUF8/AwDU188AAPX1MwBAff0MAFBfPwMA1NfPAAD19TMAQH39DABQXz8DANTXzwAA9fUzAEB9/QwAUF8/AwDU188AAPX1MwBAff0MAFBfPwMA1NfPAAD19TMAQH39DABQXz8DANTXz8Cs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2cCs35UNzPpd2YBfAZxfARhw/huAAef/AjHg/D4AA87vBDPg/FkgBpw/DcqA8/cBGHD+RhgDzt8JZsD5VyEYcP5dIAbcu9d//m1QV17/+dehXXn95+cDuPL6z0+IceX1n58R5srrPz8l0pXXf35OsCuv//ykeFde/1sBMGD9dQAMWH8dAAPWXwfAgPXXATBg/XUADFh/HQAD1l8HwID11wEwYP11AAxYfx0AA9ZfB8CA9dcBMGD9dQAMWH8dAAPWXwfAgPXXATBg/XUADFh/HQAD1l8HwID11wEwYP11AAxYfx0AA9ZfB8CA9dcBMBBfPwAMPPGvD0DagE8PQNeAjw5A14DPDUDXgA8NQNeATwxA14CPC0DXgM8KQNeADwpA14BPCUDXgI8IQNeAzwdA14APB0DXgE8GQNeAjwVA14DPBEDXgA8EQNeATwNA14CPAkDXgM8BQNeADwFA14BPAEDXgMcHoGvAswPQNeDBAega8NQAdA14ZAC6BjwvAF0DHhaArgFPCkDXgMcEoGvAMwLQNeABAega8HQAdA14NAC6BjwXAF0DHgqArgFPBEDXgMcBoGvAswDQNeBBAOga8BQAdA14BAAkACQAJAAkACQAJAAkACQAJAAkACQAJAAkACQAJAAkACQAJAAkACQAJAAkACQAJAAEgASABIAEgASABIAEgASABIAEgASABIAEgPTyfqYbS0xPPnhpAAAAAElFTkSuQmCC"/>
+  <text x="120" y="88" font-family="DM Sans" font-weight="700" font-size="24" letter-spacing="2" fill="#eeedf2">CONFLUX</text>
+  <text x="72" y="140" font-family="DM Sans" font-weight="700" font-size="17" letter-spacing="2.2" fill="#eeedf2" fill-opacity="0.75">WINDOWS 10/11 · FREE &amp; OPEN SOURCE · PUBLIC BETA</text>
 
-  <text x="72" y="248" font-family="Ubuntu Sans, DejaVu Sans, sans-serif" font-size="76" font-weight="800" fill="#e8ecf6" letter-spacing="-2">One download.</text>
-  <text x="72" y="336" font-family="Ubuntu Sans, DejaVu Sans, sans-serif" font-size="76" font-weight="800" fill="url(#txt)" letter-spacing="-2">Every connection.</text>
-  <text x="72" y="400" font-family="Ubuntu Sans, DejaVu Sans, sans-serif" font-size="27" fill="#cdd4e6">Bond Wi-Fi, Ethernet and phone tethering</text>
-  <text x="72" y="438" font-family="Ubuntu Sans, DejaVu Sans, sans-serif" font-size="27" fill="#cdd4e6">into one faster download on Windows.</text>
-
-  <g font-family="Ubuntu Sans, DejaVu Sans, sans-serif" font-size="20" fill="#a3acc4">
-    <rect x="760" y="196" width="368" height="276" rx="22" fill="#ffffff" fill-opacity="0.05" stroke="#ffffff" stroke-opacity="0.10"/>
-    <text x="792" y="248">Ethernet</text><rect x="792" y="260" width="304" height="10" rx="5" fill="#ffffff" fill-opacity="0.08"/><rect x="792" y="260" width="150" height="10" rx="5" fill="#4cc2ff"/>
-    <text x="792" y="306">Wi-Fi 6</text><rect x="792" y="318" width="304" height="10" rx="5" fill="#ffffff" fill-opacity="0.08"/><rect x="792" y="318" width="98" height="10" rx="5" fill="#a78bfa"/>
-    <text x="792" y="364">5G tether</text><rect x="792" y="376" width="304" height="10" rx="5" fill="#ffffff" fill-opacity="0.08"/><rect x="792" y="376" width="62" height="10" rx="5" fill="#34d399"/>
-    <text x="792" y="426" fill="#e8ecf6" font-weight="700">Conflux</text><rect x="792" y="438" width="304" height="14" rx="7" fill="url(#txt)"/>
+  <g font-family="Fahkwang" font-weight="700" font-size="84" letter-spacing="-3.4" fill="#eeedf2">
+    <text x="68" y="248">ONE</text>
+    <text x="68" y="327">DOWNLOAD.</text>
+    <text x="68" y="406">EVERY</text>
+    <text x="68" y="485">CONNECTION.</text>
   </g>
 
-  <text x="72" y="560" font-family="Ubuntu Sans, DejaVu Sans, sans-serif" font-size="22" fill="#a3acc4">Free &amp; open source  ·  Windows 10/11  ·  No telemetry</text>
-  <text x="1128" y="560" text-anchor="end" font-family="Ubuntu Sans, DejaVu Sans, sans-serif" font-size="22" fill="#60a5fa">manjeet2k.github.io/conflux</text>
+  <!-- two-part button -->
+  <rect x="72" y="526" width="246" height="56" fill="none" stroke="#eeedf2" stroke-width="1.5"/>
+  <text x="195" y="560" text-anchor="middle" font-family="DM Sans" font-weight="700" font-size="16" letter-spacing="2" fill="#f88cd4">DOWNLOAD FREE</text>
+  <rect x="318" y="526" width="96" height="56" fill="#eeedf2"/>
+  <path d="M346 554h38M377 546l8 8-8 8" fill="none" stroke="#0d0628" stroke-width="2.4"/>
+
+  <!-- rotated glass card -->
+  <g transform="translate(905 330) rotate(-9) translate(-215 -135)">
+    <clipPath id="cardclip"><rect width="430" height="270" rx="26"/></clipPath>
+    <g clip-path="url(#cardclip)">
+      <rect width="430" height="270" fill="#ffffff" fill-opacity="0.04"/>
+      <rect width="430" height="270" fill="url(#sheen)"/>
+      <circle cx="40" cy="-30" r="300" fill="url(#shine)"/>
+    </g>
+    <rect width="430" height="270" rx="26" fill="none" stroke="#eeedf2" stroke-opacity="0.34" stroke-width="2"/>
+    <text x="30" y="48" font-family="DM Sans" font-weight="700" font-size="17" letter-spacing="2" fill="#eeedf2" fill-opacity="0.85">CONFLUX</text>
+    <text x="400" y="48" text-anchor="end" font-family="DM Sans" font-weight="700" font-size="14" letter-spacing="1.6" fill="#eeedf2" fill-opacity="0.6">BETA</text>
+    <text x="28" y="150" font-family="Fahkwang" font-weight="700" font-size="76" letter-spacing="-3" fill="#eeedf2">193</text>
+    <text x="32" y="180" font-family="DM Sans" font-weight="700" font-size="14" letter-spacing="2" fill="#eeedf2" fill-opacity="0.7">MB/S · ONE FILE</text>
+    <rect x="30" y="226" width="370" height="7" rx="3.5" fill="#eeedf2" fill-opacity="0.12"/>
+    <rect x="30" y="226" width="181" height="7" rx="3.5" fill="#5c31ff"/>
+    <rect x="211" y="226" width="118" height="7" fill="#f88cd4"/>
+    <rect x="329" y="226" width="71" height="7" rx="3.5" fill="#def141"/>
+    <g font-family="DM Sans" font-weight="700" font-size="12" letter-spacing="1.4" fill="#eeedf2" fill-opacity="0.8">
+      <circle cx="35" cy="207" r="4" fill="#5c31ff"/><text x="45" y="211">ETHERNET</text>
+      <circle cx="135" cy="207" r="4" fill="#f88cd4"/><text x="145" y="211">WI-FI</text>
+      <circle cx="205" cy="207" r="4" fill="#def141"/><text x="215" y="211">5G</text>
+    </g>
+  </g>
+  <text x="1128" y="590" text-anchor="end" font-family="DM Sans" font-weight="700" font-size="16" letter-spacing="1.6" fill="#eeedf2" fill-opacity="0.8">MANJEET2K.GITHUB.IO/CONFLUX</text>
 </svg>

@@ -3,19 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'">
   <meta name="robots" content="noindex">
+  <meta name="theme-color" content="#0d0628">
   <title>Not found | Conflux</title>
   <link rel="icon" type="image/png" sizes="32x32" href="{{SITE_URL}}favicon-32.png">
   <link rel="stylesheet" href="{{SITE_URL}}styles.css">
 </head>
 <body>
-  <main>
-    <section class="final">
-      <h1>Page not found</h1>
-      <p class="lede">That page doesn't exist.</p>
-      <a class="btn primary" href="{{SITE_URL}}">Back to Conflux</a>
-    </section>
+  <div class="glow" aria-hidden="true"><i class="g-violet"></i><i class="g-pink"></i><i class="noise"></i></div>
+  <main class="notfound">
+    <div class="container">
+      <div class="hero-glass nf-glass">
+        <p class="eyebrow">Error 404</p>
+        <h1>Lost the<br>connection.</h1>
+        <p class="lede">That page doesn't exist. The download is still where you left it.</p>
+        <a class="button" href="{{SITE_URL}}"><span class="b-text">Back to Conflux</span><span class="b-icon"><svg class="arrow" viewBox="0 0 40 16" aria-hidden="true"><path d="M0 8h37M30 1l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2"/></svg></span><i class="b-fill" aria-hidden="true"></i></a>
+      </div>
+    </div>
   </main>
 </body>
 </html>

@@ -116,14 +116,20 @@ touch it, after every Release run, and by hand (`gh workflow run pages.yml`).
 - `node scripts/check-site-links.mjs` checks every link in `_site/` (internal files, `#anchors`,
   og/twitter image URLs, and every external URL with a real request); the Pages workflow runs it
   and refuses to deploy on any broken link. `--no-external` skips the network.
-- `site/demo.js` drives the interactive parts (hero packet stream, lane race, "pull the plug"
-  chunk simulation, speed calculator). They are simulations with example numbers, pause when
-  off-screen or in a hidden tab, and respect reduced motion.
+- `site/demo.js` drives the interactive parts: the hero fit (scales the glass hero so it fits the
+  first screen, capped by `--hero-max`, with readability floors and a compact fallback), the
+  letter/line reveals, the hover tilt on glass surfaces (`data-tilt="max degrees"`), magnetic
+  buttons, the speed calculator and the "pull the plug" chunk simulation. Demos use example
+  numbers, pause off-screen and in hidden tabs, and respect reduced motion.
+- Design: deep indigo with violet/pink corner light, uppercase Fahkwang headings, DM Sans body,
+  Outfit labels (self-hosted in `site/fonts/`, SIL Open Font License; licences alongside), square
+  two-part buttons, frosted-glass hero and panels, light "calculator" sections.
 - `site/app.js` refreshes the links from GitHub's public API in the browser (CORS allowed), so the
   page is right even before the next deploy. The page's CSP only allows that one API origin.
 - Social previews: `site/og.png` (1200x630) is rendered from `site/og.svg`. To re-render after
-  editing the SVG, in a scratch folder: `npm i @resvg/resvg-js@2` and run a few lines of
-  `new Resvg(svg, { fitTo: { mode: "width", value: 1200 }, font: { loadSystemFonts: true } }).render().asPng()`.
+  editing the SVG, in a scratch folder: `npm i @resvg/resvg-js@2`, download `Fahkwang-Bold.ttf` and
+  `DMSans[opsz,wght].ttf` from the google/fonts repository (`ofl/…`), and render with
+  `new Resvg(svg, { fitTo: { mode: "width", value: 1200 }, font: { loadSystemFonts: false, fontFiles: [...], defaultFontFamily: "DM Sans" } }).render().asPng()`.
   Check previews with a social card validator after deploying.
 - A README cannot embed the page (GitHub strips iframes and scripts); the README links to it with
   the banner image and badges instead.

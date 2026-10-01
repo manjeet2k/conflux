@@ -10,7 +10,7 @@ All notable changes to Conflux are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- Project website at https://manjeet2k.github.io/conflux/ with direct download links, social preview cards and an FAQ.
+- Project website at https://manjeet2k.github.io/conflux/: frosted-glass hero that fits the first screen on any device, direct download links, a speed calculator, a "pull the plug" simulation, FAQ and social preview cards. Fonts are self-hosted; the page makes no third-party requests except GitHub's API for the latest release.
 
 ## [0.2.0-beta.1] - 2026-10-01
 
