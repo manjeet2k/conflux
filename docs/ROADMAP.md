@@ -310,11 +310,11 @@ Done notes: `.github/workflows/ci.yml` (linux + windows jobs, desktop tests run 
 #### R-2 — Supply-chain checks  `[x]`
 Why: a download manager is a high-trust app; dependency risk matters.
 Depends on: R-1
-Files: `.github/workflows/security.yml`, `.github/dependabot.yml`, `deny.toml`
+Files: `.github/workflows/security.yml`, `.github/workflows/dependency-report.yml`, `deny.toml`
 Do: `cargo audit`, `cargo deny check` (licenses allow-list MIT/Apache-2.0/BSD/ISC/MPL/Unicode; deny unknown registries), `npm audit --omit=dev --audit-level=high`; weekly schedule + on PR. Dependabot for `cargo`, `npm` (ui), `github-actions`.
 Acceptance: workflow green on `main`; a known-bad test advisory fails it (try on a branch).
 Verify: workflow run link.
-Done notes: `security.yml` (cargo-deny, rustsec/audit-check, npm audit; PR/push/weekly), `dependabot.yml` (cargo, npm /ui, github-actions), `deny.toml`. `cargo deny check` passes locally. **Not run:** `cargo audit`, `npm audit`. Added `CDLA-Permissive-2.0` to the allow-list (needed by webpki-roots) and ignored RUSTSEC-2024-0370 (proc-macro-error, unmaintained, Tauri build-time) — **pending user OK**.
+Done notes: `security.yml` (cargo-deny, rustsec/audit-check, npm audit; PR/push/weekly), `deny.toml`. `cargo deny check` passes locally. **Not run:** `cargo audit`, `npm audit`. Added `CDLA-Permissive-2.0` to the allow-list (needed by webpki-roots) and ignored RUSTSEC-2024-0370 (proc-macro-error, unmaintained, Tauri build-time) — **pending user OK**. **Update (cost control):** Dependabot version-update PRs are disabled (they triggered CI/Security per PR); Dependabot alerts stay on, security-fix PRs off. `dependency-report.yml` keeps one "Dependency report" issue up to date monthly; the weekly `cargo-audit` run opens issues for advisories. CI skips docs-only changes; Security runs weekly or when dependency files change.
 
 #### R-3 — Release workflow  `[ ]`   Gate: D3 (publisher), partially D2
 Why: installers must come from CI, not a developer laptop.

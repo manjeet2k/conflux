@@ -19,7 +19,7 @@ All notable changes to Conflux are documented here. The format follows
 - Version tooling (`scripts/bump-version.mjs`, `scripts/check-version.mjs`) and
   `version:bump` / `version:check` npm scripts.
 - Continuous integration (fmt, clippy, tests, UI build on Linux and Windows) and supply-chain
-  checks (`cargo deny`, `cargo audit`, `npm audit`, Dependabot).
+  checks (`cargo deny`, `cargo audit`, `npm audit`) and a monthly dependency report issue; Dependabot alerts on, no update PRs.
 
 ### Changed
 - Core engine hardened: If-Range/ETag validation so a changed remote file is detected on resume,

@@ -36,6 +36,12 @@ jobs:
   cargo-audit:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # On the weekly scheduled run this opens an issue per new advisory; on pushes/PRs it
+    # reports through a check run.
+    permissions:
+      contents: read
+      issues: write
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: rustsec/audit-check@v2

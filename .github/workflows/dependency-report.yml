@@ -1,0 +1,55 @@
+name: Dependency report
+
+# Reports outdated dependencies as ONE issue (created or updated in place) instead of opening
+# update PRs. Runs monthly or on demand; costs a few Linux minutes.
+on:
+  schedule:
+    - cron: "0 6 1 * *" # 1st of each month, 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-outdated
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Collect outdated dependencies
+        run: |
+          {
+            echo "Generated $(date -u +%Y-%m-%d) by the Dependency report workflow. Nothing is opened as a PR; update by hand when you want to."
+            echo
+            echo "### Rust (direct dependencies)"
+            echo '```'
+            cargo outdated --workspace --root-deps-only || true
+            echo '```'
+            echo
+            echo "### npm (ui/)"
+            echo '```'
+            npm --prefix ui install --package-lock-only --ignore-scripts >/dev/null 2>&1 || true
+            npm --prefix ui outdated || true
+            echo '```'
+          } > report.md
+      - name: Create or update the report issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Dependency report"
+          gh label create dependency-report --color 0366d6 --description "Automated outdated-dependency report" 2>/dev/null || true
+          number=$(gh issue list --label dependency-report --state open --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body-file report.md
+          else
+            gh issue create --title "$title" --label dependency-report --body-file report.md
+          fi
