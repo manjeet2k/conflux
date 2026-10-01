@@ -116,14 +116,16 @@ jobs:
       # artifacts (.sig). The Tauri CLI is built directly instead of through tauri-action:
       # that action runs `tauriScript` as `npm run <script...>`, which cannot express "the CLI
       # lives in ui/, the app in crates/conflux-desktop". The draft release itself is created
-      # by the upload step below. BETA POLICY: always a draft AND a prerelease.
+      # by the upload step below. The CLI binary is run directly from crates/conflux-desktop:
+      # `npm --prefix ../../ui run tauri` would start it with ui/ as the working directory and the
+      # CLI would not find tauri.conf.json. BETA POLICY: always a draft AND a prerelease.
       - name: Build NSIS installer
         working-directory: crates/conflux-desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         # Everything after the second `--` goes to cargo: --locked refuses to touch Cargo.lock.
-        run: npm --prefix ../../ui run tauri -- build --bundles nsis -- --locked
+        run: ../../ui/node_modules/.bin/tauri build --bundles nsis -- --locked
 
       - name: Stage the standard installer
         run: |
@@ -142,7 +144,7 @@ jobs:
         working-directory: crates/conflux-desktop
         run: |
           V="${{ steps.meta.outputs.version }}"
-          npm --prefix ../../ui run tauri -- build --bundles nsis --config tauri.offline.conf.json -- --locked
+          ../../ui/node_modules/.bin/tauri build --bundles nsis --config tauri.offline.conf.json -- --locked
           SRC="../../target/release/bundle/nsis/Conflux_${V}_x64-setup.exe"
           test -f "$SRC" || { echo "::error::missing $SRC"; exit 1; }
           cp "$SRC" "../../dist-installer/Conflux_${V}_x64-offline-setup.exe"
