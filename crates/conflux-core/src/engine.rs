@@ -85,6 +85,11 @@ pub struct AdapterProgress {
     pub active_connections: usize,
     /// The engine stopped using this adapter after repeated consecutive failures.
     pub dropped: bool,
+    /// Human-readable cause of this adapter's most recent failed attempt, cleared when it
+    /// completes a chunk. Never contains a URL. `None` when the adapter is healthy.
+    pub last_error: Option<String>,
+    /// Why the engine stopped using this adapter (set together with `dropped`).
+    pub drop_reason: Option<String>,
 }
 
 /// Dynamic adapter events that can be sent to an in-flight chunked download.
@@ -244,6 +249,10 @@ struct AdapterWorkerState {
     client: reqwest::Client,
     consecutive_failures: AtomicU32,
     dropped: AtomicBool,
+    /// See `AdapterProgress::last_error`.
+    last_error: Mutex<Option<String>>,
+    /// See `AdapterProgress::drop_reason`.
+    drop_reason: Mutex<Option<String>>,
     /// Gross body bytes received (never decremented; see `AdapterProgress`).
     received: AtomicU64,
     active: AtomicUsize,
@@ -260,6 +269,8 @@ impl AdapterWorkerState {
             client,
             consecutive_failures: AtomicU32::new(0),
             dropped: AtomicBool::new(false),
+            last_error: Mutex::new(None),
+            drop_reason: Mutex::new(None),
             received: AtomicU64::new(0),
             active: AtomicUsize::new(0),
             retire_tx,
@@ -274,8 +285,129 @@ impl AdapterWorkerState {
             speed_bytes_sec,
             active_connections: self.active.load(Ordering::SeqCst),
             dropped: self.dropped.load(Ordering::SeqCst),
+            last_error: self
+                .last_error
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
+            drop_reason: self
+                .drop_reason
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
         }
     }
+
+    fn set_last_error(&self, msg: Option<String>) {
+        *self.last_error.lock().unwrap_or_else(|p| p.into_inner()) = msg;
+    }
+
+    /// Marks the adapter dropped and records why (first reason wins).
+    fn drop_with_reason(&self, reason: String) {
+        let mut slot = self.drop_reason.lock().unwrap_or_else(|p| p.into_inner());
+        if slot.is_none() {
+            *slot = Some(reason);
+        }
+        drop(slot);
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+/// The server answered a chunk request with something other than 206 (typed so the status
+/// can be shown to the user without parsing the message).
+#[derive(Debug)]
+struct UnexpectedStatus {
+    range: String,
+    status: StatusCode,
+}
+
+impl std::fmt::Display for UnexpectedStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "expected 206 Partial Content for {}, got {}",
+            self.range, self.status
+        )
+    }
+}
+
+impl std::error::Error for UnexpectedStatus {}
+
+/// Replaces every `scheme://...` token with `<url>` so no credentials or query leak.
+fn strip_urls(text: &str) -> String {
+    text.split_whitespace()
+        .map(|w| if w.contains("://") { "<url>" } else { w })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn describe_io(e: &std::io::Error) -> Option<&'static str> {
+    use std::io::ErrorKind as K;
+    // Windows (WSA*) and Linux errno values, for kinds std does not map on every platform.
+    match e.raw_os_error() {
+        Some(10060 | 110) => return Some("connect timed out"),
+        Some(10061 | 111) => return Some("connection refused"),
+        Some(10051 | 10065 | 101 | 113) => {
+            return Some("no route to host (does this adapter have its own gateway?)")
+        }
+        Some(10049 | 99) => return Some("adapter address is not usable (address not available)"),
+        _ => {}
+    }
+    match e.kind() {
+        K::TimedOut => Some("connect timed out"),
+        K::ConnectionRefused => Some("connection refused"),
+        K::HostUnreachable | K::NetworkUnreachable => {
+            Some("no route to host (does this adapter have its own gateway?)")
+        }
+        K::AddrNotAvailable => Some("adapter address is not usable (address not available)"),
+        K::ConnectionReset | K::ConnectionAborted | K::BrokenPipe => {
+            Some("connection reset by the server or network")
+        }
+        _ => None,
+    }
+}
+
+/// Turns a chunk-attempt failure into a short, human-readable reason with no URLs.
+fn describe_failure(err: &anyhow::Error) -> String {
+    let mut timed_out = false;
+    let mut is_connect = false;
+    for cause in err.chain() {
+        if let Some(s) = cause.downcast_ref::<UnexpectedStatus>() {
+            return format!("server answered HTTP {}", s.status);
+        }
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            if let Some(text) = describe_io(io) {
+                return text.to_string();
+            }
+        }
+        if let Some(r) = cause.downcast_ref::<reqwest::Error>() {
+            timed_out |= r.is_timeout();
+            is_connect |= r.is_connect();
+        }
+    }
+    let full = format!("{err:#}").to_lowercase();
+    if full.contains("certificate") || full.contains("tls") || full.contains("handshake") {
+        return "TLS error (certificate or handshake failed)".to_string();
+    }
+    if timed_out || full.contains("timed out") {
+        return if is_connect {
+            "connect timed out".to_string()
+        } else {
+            "stalled: no data received before the timeout".to_string()
+        };
+    }
+    if full.contains("stall timeout") {
+        return "stalled: no data received before the timeout".to_string();
+    }
+    if is_connect {
+        return "could not connect to the server".to_string();
+    }
+    let head = strip_urls(&format!("{err:#}"));
+    let mut short: String = head.chars().take(160).collect();
+    if head.chars().count() > 160 {
+        short.push('…');
+    }
+    short
 }
 
 /// Where and what to write for the resume sidecar of one chunked download.
@@ -912,7 +1044,7 @@ impl DownloadEngine {
                             info!("Network adapter {} disconnected; dropping workers", ip);
                             let states = adapter_states.read().unwrap();
                             for target in states.iter().filter(|s| s.ip == Some(ip)) {
-                                target.dropped.store(true, Ordering::SeqCst);
+                                target.drop_with_reason("adapter disconnected or disabled".to_string());
                                 target.retire_tx.send_replace(true);
                             }
                             let has_active = states.iter().any(|s| !s.dropped.load(Ordering::SeqCst));
@@ -1238,6 +1370,7 @@ async fn run_chunk_worker(
                 shared.scheduler().complete(chunk.id);
                 shared.counters.completed.fetch_add(1, Ordering::SeqCst);
                 adapter.consecutive_failures.store(0, Ordering::SeqCst);
+                adapter.set_last_error(None);
                 if adapter.ip.is_some() {
                     retire_default_route(&adapter_states, &adapter);
                 }
@@ -1284,6 +1417,7 @@ async fn run_chunk_worker(
                     chunk.id, chunk.start, chunk.end, adapter.label, e, counted, chunk.size
                 );
                 shared.record_error(msg.clone());
+                adapter.set_last_error(Some(describe_failure(&e)));
 
                 let outcome = shared.scheduler().fail(chunk.id, Instant::now());
                 match outcome {
@@ -1310,7 +1444,10 @@ async fn run_chunk_worker(
                         .iter()
                         .any(|s| !Arc::ptr_eq(s, &adapter) && !s.dropped.load(Ordering::SeqCst));
                     if others_alive {
-                        if !adapter.dropped.swap(true, Ordering::SeqCst) {
+                        if !adapter.dropped.load(Ordering::SeqCst) {
+                            adapter.drop_with_reason(format!(
+                                "dropped after {failures} consecutive failures"
+                            ));
                             error!(
                                 "Dropping adapter {} for this download after {} consecutive failures",
                                 adapter.label, failures
@@ -1349,7 +1486,7 @@ fn retire_default_route(
             "Retiring default-route fallback workers now that adapter {} completed a chunk",
             proven.label
         );
-        fallback.dropped.store(true, Ordering::SeqCst);
+        fallback.drop_with_reason("retired: another adapter took over".to_string());
         fallback.retire_tx.send_replace(true);
     }
 }
@@ -1405,11 +1542,10 @@ async fn fetch_chunk(
         )));
     }
     if status != StatusCode::PARTIAL_CONTENT {
-        return Err(AttemptError::Failed(anyhow!(
-            "expected 206 Partial Content for {}, got {}",
+        return Err(AttemptError::Failed(anyhow::Error::new(UnexpectedStatus {
             range,
-            status
-        )));
+            status,
+        })));
     }
     // RFC 9110: a 206 carries the same validators a 200 would, so any difference
     // (including one appearing or disappearing) means a different representation.
@@ -1691,6 +1827,60 @@ async fn finish_progress(handle: Option<JoinHandle<()>>, done: Arc<Notify>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn describe_failure_maps_common_causes() {
+        use std::io::{Error, ErrorKind};
+        let wrap = |e: Error| anyhow::Error::new(e).context("Request for bytes=0-9 failed");
+        assert_eq!(
+            describe_failure(&wrap(Error::from(ErrorKind::ConnectionRefused))),
+            "connection refused"
+        );
+        assert_eq!(
+            describe_failure(&wrap(Error::from_raw_os_error(10065))),
+            "no route to host (does this adapter have its own gateway?)"
+        );
+        assert_eq!(
+            describe_failure(&wrap(Error::from(ErrorKind::TimedOut))),
+            "connect timed out"
+        );
+        let status = anyhow::Error::new(UnexpectedStatus {
+            range: "bytes=0-9".into(),
+            status: StatusCode::FORBIDDEN,
+        });
+        assert_eq!(
+            describe_failure(&status),
+            "server answered HTTP 403 Forbidden"
+        );
+        assert_eq!(
+            describe_failure(&anyhow!("invalid peer certificate: UnknownIssuer")),
+            "TLS error (certificate or handshake failed)"
+        );
+        assert_eq!(
+            describe_failure(&anyhow!(
+                "error reading chunk body (stall timeout or disconnect)"
+            )),
+            "stalled: no data received before the timeout"
+        );
+    }
+
+    #[test]
+    fn describe_failure_never_leaks_urls() {
+        let e = anyhow!("weird failure at https://user:pw@host.example/f?token=abc went wrong");
+        let text = describe_failure(&e);
+        assert!(!text.contains("pw") && !text.contains("token"), "{text}");
+        assert!(text.contains("<url>"));
+    }
+
+    #[test]
+    fn drop_reason_keeps_first_reason() {
+        let state = AdapterWorkerState::new(None, reqwest::Client::new());
+        state.drop_with_reason("first".into());
+        state.drop_with_reason("second".into());
+        let p = state.progress(0.0);
+        assert!(p.dropped);
+        assert_eq!(p.drop_reason.as_deref(), Some("first"));
+    }
 
     #[test]
     fn test_parse_content_range() {

@@ -263,7 +263,7 @@ pub fn sanitize_filename(raw: &str) -> String {
 ///
 /// Existence is checked with `symlink_metadata`, so a dangling symlink counts as taken.
 /// Note: this is a check-then-use helper; the caller creates the file afterwards.
-pub fn unique_path(dir: &Path, filename: &str) -> PathBuf {
+fn unique_path(dir: &Path, filename: &str) -> PathBuf {
     let taken = |p: &Path| std::fs::symlink_metadata(p).is_ok();
 
     let candidate = dir.join(filename);

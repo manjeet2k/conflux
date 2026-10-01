@@ -28,6 +28,12 @@ pub struct AdapterStat {
     pub speed_bytes_sec: f64,
     pub active_connections: usize,
     pub dropped: bool,
+    /// Human-readable cause of the adapter's latest failed attempt in this task (no URLs).
+    #[serde(default)]
+    pub last_error: Option<String>,
+    /// Why the engine stopped using this adapter for this task.
+    #[serde(default)]
+    pub drop_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

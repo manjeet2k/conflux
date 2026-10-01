@@ -233,6 +233,8 @@ pub fn adapter_stat(p: &AdapterProgress, names: &HashMap<IpAddr, (String, String
         speed_bytes_sec: p.speed_bytes_sec,
         active_connections: p.active_connections,
         dropped: p.dropped,
+        last_error: p.last_error.as_deref().map(crate::redact::redact_urls),
+        drop_reason: p.drop_reason.as_deref().map(crate::redact::redact_urls),
     }
 }
 
@@ -383,12 +385,28 @@ mod tests {
             speed_bytes_sec: 2.0,
             active_connections: 1,
             dropped: false,
+            last_error: None,
+            drop_reason: None,
         };
 
         let bound = adapter_stat(&progress(Some(ip), "192.168.1.5"), &names);
         assert_eq!(bound.adapter_id.as_deref(), Some("Wi-Fi:192.168.1.5"));
         assert_eq!(bound.name, "Wi-Fi");
         assert_eq!(bound.ip.as_deref(), Some("192.168.1.5"));
+
+        let mut failing = progress(Some(ip), "192.168.1.5");
+        failing.last_error = Some("GET https://u:p@h.example/f?token=1 failed".into());
+        failing.drop_reason = Some("dropped after 3 consecutive failures".into());
+        let stat = adapter_stat(&failing, &names);
+        let shown = stat.last_error.unwrap();
+        assert!(
+            !shown.contains("u:p") && !shown.contains("token=1"),
+            "{shown}"
+        );
+        assert_eq!(
+            stat.drop_reason.as_deref(),
+            Some("dropped after 3 consecutive failures")
+        );
 
         let unbound = adapter_stat(&progress(None, "default-route"), &names);
         assert_eq!(unbound.adapter_id, None);
@@ -403,6 +421,8 @@ mod tests {
             "speed_bytes_sec",
             "active_connections",
             "dropped",
+            "last_error",
+            "drop_reason",
         ] {
             assert!(json.get(key).is_some(), "missing {key}");
         }

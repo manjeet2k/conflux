@@ -339,6 +339,79 @@ async fn failing_adapter_is_dropped_and_others_finish() {
     assert_eq!(bad_stats.downloaded_bytes, 0);
     assert!(!good_stats.dropped);
     assert_eq!(good_stats.downloaded_bytes, PAYLOAD_LEN as u64);
+
+    // V-3: the failing adapter explains itself; the healthy one stays silent.
+    let err = bad_stats.last_error.as_deref().unwrap_or("");
+    assert!(!err.is_empty(), "failing adapter must report a last_error");
+    assert!(
+        !err.contains("http://") && !err.contains(&server.url("")),
+        "last_error must not leak the URL: {err}"
+    );
+    let reason = bad_stats.drop_reason.as_deref().unwrap_or("");
+    assert!(
+        reason.contains("consecutive failures"),
+        "unexpected drop_reason: {reason:?}"
+    );
+    assert_eq!(good_stats.last_error, None);
+    assert_eq!(good_stats.drop_reason, None);
+}
+
+/// A removed adapter reports why it stopped; a fallback retired by a proven adapter too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn removed_adapter_reports_drop_reason() {
+    let data = payload(PAYLOAD_LEN, 77);
+    let server = TestServer::start(throttled_config(&data)).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let probe = engine.probe(&server.url("/removed.bin")).await.unwrap();
+    let path = dir.path().join("removed.bin");
+
+    let (progress_tx, mut progress_rx) = mpsc::channel(1024);
+    let collector = tokio::spawn(async move {
+        let mut all = Vec::new();
+        while let Some(p) = progress_rx.recv().await {
+            all.push(p);
+        }
+        all
+    });
+    let (adapter_tx, adapter_rx) = mpsc::channel(4);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let _ = adapter_tx
+            .send(AdapterUpdate::Remove("127.0.0.2".parse().unwrap()))
+            .await;
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    });
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let result = engine
+        .download_with_updates(
+            &probe,
+            &path,
+            &[fake_adapter("127.0.0.2"), fake_adapter("127.0.0.1")],
+            Some(adapter_rx),
+            Some(progress_tx),
+            cancel_rx,
+        )
+        .await;
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+    let progress = collector.await.unwrap();
+    let last = progress.last().unwrap();
+    let removed = last
+        .adapters
+        .iter()
+        .find(|a| a.label == "127.0.0.2")
+        .unwrap();
+    assert!(removed.dropped);
+    assert_eq!(
+        removed.drop_reason.as_deref(),
+        Some("adapter disconnected or disabled")
+    );
+    let kept = last
+        .adapters
+        .iter()
+        .find(|a| a.label == "127.0.0.1")
+        .unwrap();
+    assert!(!kept.dropped && kept.drop_reason.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -141,6 +141,8 @@ mod tests {
                 speed_bytes_sec: 12.0,
                 active_connections: 2,
                 dropped: false,
+                last_error: None,
+                drop_reason: None,
             }],
             chunk_map: Some("#>..".into()),
         }

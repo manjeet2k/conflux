@@ -121,6 +121,8 @@ async fn main() -> Result<()> {
             let engine = DownloadEngine::new(chunk_size, usize::from(connections))?;
             let probe = engine.probe(&url).await?;
 
+            // Fallible setup first: resolve_output_path leaves an empty placeholder file.
+            let adapters = discover_adapters()?;
             let final_path = resolve_output_path(output.as_deref(), &probe.suggested_filename)?;
 
             println!("⚡ Conflux Download Starting");
@@ -143,7 +145,6 @@ async fn main() -> Result<()> {
             );
             println!("  Output:     {:?}", final_path);
 
-            let adapters = discover_adapters()?;
             let active_count = adapters
                 .iter()
                 .filter(|a| a.enabled && !a.is_loopback && a.is_ipv4)
