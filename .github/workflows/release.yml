@@ -35,12 +35,13 @@ jobs:
     concurrency:
       group: release-${{ inputs.tag || github.ref_name }}
       cancel-in-progress: false
+    # Secrets/approval gate: the maintainer creates the `release` environment with required
+    # reviewers and keeps the TAURI_SIGNING_* secrets there (docs/RELEASING.md). Until then it
+    # is auto-created without protection and repository-level secrets still work.
+    environment: release
     defaults:
       run:
         shell: bash
-    env:
-      # Job-level so steps can test for presence: secrets cannot be used in `if:` directly.
-      VT_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
     steps:
       - name: Resolve tag and version
         id: meta
@@ -55,9 +56,36 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      # A published release is immutable: re-running the build must never silently replace the
+      # assets users (and the updater manifest) already point at. Only a missing release or a
+      # DRAFT may be (re)built. Lists releases instead of `gh release view <tag>` because the
+      # tag endpoint does not return drafts.
+      - name: Refuse to rebuild a published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          STATES="$(gh api "repos/$GH_REPO/releases" --paginate --jq '.[] | select(.tag_name == env.TAG) | if .draft then "draft" else "published" end')"
+          echo "existing releases for $TAG: ${STATES:-none}"
+          if grep -qx published <<<"$STATES"; then
+            echo "::error::Release $TAG is already published. Never rebuild a published release: to fix it, cut a new beta number (docs/RELEASING.md)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: refs/tags/${{ steps.meta.outputs.tag }}
+          fetch-depth: 0 # full history for the ancestor check below
+
+      # Only code that reached main may be released; a tag on a side branch is refused.
+      - name: Tagged commit must be on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$(git rev-parse --short HEAD) (tag ${{ steps.meta.outputs.tag }}) is not an ancestor of origin/main."
+            exit 1
+          fi
 
       # Aborts here when the tag and the version files disagree.
       - name: Check tag matches the version files
@@ -65,8 +93,8 @@ jobs:
 
       - name: Install pinned Rust toolchain (rust-toolchain.toml, MSVC target)
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -80,6 +108,7 @@ jobs:
       - name: Third-party licenses are up to date
         run: node scripts/gen-licenses.mjs --check
 
+      # Fails (no fallback to Unreleased) when CHANGELOG.md has no section for this version.
       - name: Release notes from CHANGELOG.md
         run: node scripts/extract-changelog.mjs "${{ steps.meta.outputs.version }}" > release-notes.md
 
@@ -87,7 +116,7 @@ jobs:
       # artifacts (.sig). BETA POLICY: the release is ALWAYS a draft AND a prerelease, whatever
       # the tag looks like. Do not change either flag without a maintainer decision.
       - name: Build NSIS installer and create draft release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -95,7 +124,8 @@ jobs:
         with:
           projectPath: crates/conflux-desktop
           tauriScript: npm --prefix ../../ui run tauri --
-          args: --bundles nsis
+          # Everything after the second `--` goes to cargo: --locked refuses to touch Cargo.lock.
+          args: --bundles nsis -- --locked
           tagName: ${{ steps.meta.outputs.tag }}
           releaseName: Conflux ${{ steps.meta.outputs.version }}
           releaseBody: See the changelog below.
@@ -121,7 +151,7 @@ jobs:
         working-directory: crates/conflux-desktop
         run: |
           V="${{ steps.meta.outputs.version }}"
-          npm --prefix ../../ui run tauri -- build --bundles nsis --config tauri.offline.conf.json
+          npm --prefix ../../ui run tauri -- build --bundles nsis --config tauri.offline.conf.json -- --locked
           SRC="../../target/release/bundle/nsis/Conflux_${V}_x64-setup.exe"
           test -f "$SRC" || { echo "::error::missing $SRC"; exit 1; }
           cp "$SRC" "../../dist-installer/Conflux_${V}_x64-offline-setup.exe"
@@ -160,7 +190,7 @@ jobs:
       - name: Install cargo-cyclonedx
         id: cdx_tool
         continue-on-error: true
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-cyclonedx
       - name: SBOM (CycloneDX)
@@ -172,17 +202,23 @@ jobs:
 
       # D-5: skipped unless the VIRUSTOTAL_API_KEY secret exists. Scans the standard installer
       # (the offline one exceeds free-tier upload limits). Detections are for a human to judge.
+      # The key is only exposed to these two steps (secrets cannot be tested in `if:` directly).
+      - name: Is VirusTotal configured
+        id: vt_cfg
+        env:
+          VT_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+        run: echo "enabled=$([ -n "$VT_KEY" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - name: VirusTotal scan
         id: vt
-        if: env.VT_KEY != ''
+        if: steps.vt_cfg.outputs.enabled == 'true'
         continue-on-error: true
-        uses: crazy-max/ghaction-virustotal@v4
+        uses: crazy-max/ghaction-virustotal@d34968c958ae283fe976efed637081b9f9dcf74f # v4.2.0
         with:
-          vt_api_key: ${{ env.VT_KEY }}
+          vt_api_key: ${{ secrets.VIRUSTOTAL_API_KEY }}
           files: |
             dist-installer/Conflux_*_x64-setup.exe
       - name: VirusTotal report link in job summary
-        if: env.VT_KEY != '' && steps.vt.outputs.analysis != ''
+        if: steps.vt_cfg.outputs.enabled == 'true' && steps.vt.outputs.analysis != ''
         env:
           ANALYSIS: ${{ steps.vt.outputs.analysis }}
         run: |
@@ -195,7 +231,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload extra assets to the draft release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: Conflux ${{ steps.meta.outputs.version }}
@@ -242,15 +278,40 @@ jobs:
       GH_REPO: ${{ github.repository }}
       TAG: ${{ github.event.release.tag_name }}
     steps:
-      - name: Download latest.json from the published release
+      # Scripts and the updater public key come from the tagged commit.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Tagged commit must be on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor HEAD origin/main || { echo "::error::tag $TAG is not on main"; exit 1; }
+      - name: Download latest.json and the standard installer from the published release
         run: |
           gh release download "$TAG" --pattern latest.json --dir .
-          VERSION="${TAG#v}"
-          node -e '
-            const m = JSON.parse(require("fs").readFileSync("latest.json", "utf8"));
-            if (m.version !== process.argv[1]) { console.error("latest.json is for " + m.version + ", not " + process.argv[1]); process.exit(1); }
-            if (!m.platforms["windows-x86_64"].signature) { console.error("missing signature"); process.exit(1); }
-          ' "$VERSION"
+          mkdir installers
+          # The glob matches only the standard installer, not *_x64-offline-setup.exe.
+          gh release download "$TAG" --pattern 'Conflux_*_x64-setup.exe' --dir installers
+          ls -la installers
+      - name: Fetch the currently published manifest (if any)
+        run: |
+          if gh release view updater-beta --json assets --jq '.assets[].name' 2>/dev/null | grep -qx latest.json; then
+            gh release download updater-beta --pattern latest.json --output current-latest.json
+            echo "currently published: $(node -p 'require("./current-latest.json").version')"
+          else
+            echo "no manifest published yet; skipping the version-order check"
+          fi
+      # Signature vs the pubkey in tauri.conf.json, version strictly newer, urls inside this release.
+      - name: Verify the manifest before it goes live
+        run: |
+          CURRENT=()
+          [ -f current-latest.json ] && CURRENT=(--current current-latest.json)
+          node scripts/verify-updater-manifest.mjs --manifest latest.json --installer-dir installers \
+            --conf crates/conflux-desktop/tauri.conf.json --repo "$GITHUB_REPOSITORY" --tag "$TAG" "${CURRENT[@]}"
       - name: Create the updater-beta release if missing
         run: |
           if ! gh release view updater-beta >/dev/null 2>&1; then

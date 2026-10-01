@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Print the CHANGELOG.md section for a version (release notes). Falls back to "Unreleased"
-// when the version has no section of its own.
-//   node scripts/extract-changelog.mjs 0.2.0-beta.1 [--file CHANGELOG.md]
-// Exits non-zero if neither the version nor Unreleased has any content.
+// Print the CHANGELOG.md section for a version (release notes).
+//   node scripts/extract-changelog.mjs 0.2.0-beta.1 [--file CHANGELOG.md] [--allow-unreleased]
+// Exits non-zero when the version has no non-empty section of its own (the release workflow
+// relies on this). Only with --allow-unreleased does it fall back to "Unreleased", for previews.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "./lib.mjs";
@@ -23,10 +23,10 @@ export function section(text, heading) {
   return body.join("\n").trim();
 }
 
-/** Notes for `version` (a leading "v" is ignored), falling back to Unreleased. */
-export function notesFor(text, version) {
+/** Notes for `version` (a leading "v" is ignored); Unreleased only as an explicit fallback. */
+export function notesFor(text, version, allowUnreleased = false) {
   const v = version.replace(/^v/, "");
-  for (const heading of [v, "Unreleased"]) {
+  for (const heading of allowUnreleased ? [v, "Unreleased"] : [v]) {
     const body = section(text, heading);
     if (body) return { heading, body };
   }
@@ -36,16 +36,30 @@ export function notesFor(text, version) {
 import { fileURLToPath } from "node:url";
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
+  if (args.includes("--self-test")) {
+    const t = "## [Unreleased]\n- u\n\n## [1.0.0] - d\n- a\n\n## [0.9.0]\n- b\n";
+    const ok =
+      notesFor(t, "v1.0.0")?.body === "- a" &&
+      notesFor(t, "1.0.1") === null &&
+      notesFor(t, "1.0.1", true)?.heading === "Unreleased" &&
+      notesFor("## [Unreleased]\n\n## [1.0.0]\n- a\n", "1.0.1", true) === null;
+    if (!ok) { console.error("extract-changelog self-test FAILED"); process.exit(1); }
+    console.log("extract-changelog self-test: ok");
+    process.exit(0);
+  }
+  const ai = args.indexOf("--allow-unreleased");
+  const allowUnreleased = ai >= 0;
+  if (ai >= 0) args.splice(ai, 1);
   const fi = args.indexOf("--file");
   const file = fi >= 0 ? args.splice(fi, 2)[1] : join(ROOT, "CHANGELOG.md");
   const version = args[0];
   if (!version) {
-    console.error("usage: extract-changelog.mjs <version> [--file CHANGELOG.md]");
+    console.error("usage: extract-changelog.mjs <version> [--file CHANGELOG.md] [--allow-unreleased]");
     process.exit(2);
   }
-  const found = notesFor(readFileSync(file, "utf8"), version);
+  const found = notesFor(readFileSync(file, "utf8"), version, allowUnreleased);
   if (!found) {
-    console.error(`No changelog content for ${version} or Unreleased in ${file}`);
+    console.error(`::error::No changelog section with content for ${version.replace(/^v/, "")} in ${file}. Rename [Unreleased] to the version first (docs/RELEASING.md).`);
     process.exit(1);
   }
   if (found.heading !== version.replace(/^v/, "")) {

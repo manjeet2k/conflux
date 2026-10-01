@@ -51,9 +51,10 @@ Build and launch from a developer checkout:
 ```powershell
 npm --prefix ui ci
 npm --prefix ui run build
-cargo run -p conflux-desktop --release
+cargo run -p conflux-desktop --release --features custom-protocol
 ```
-(Or install a CI-built installer and start it from the Start menu.) Start the test server first
+(`--features custom-protocol` makes the binary serve the UI built by the previous command; without it
+the release binary tries to load the dev server and shows a blank window.) (Or install a CI-built installer and start it from the Start menu.) Start the test server first
 (section 5.1) and use a ~500 MB file so downloads last long enough to pause and kill.
 
 | # | Step | Expected | Result | Notes |
@@ -78,7 +79,7 @@ cargo run -p conflux-desktop --release
 | 2.18 | Launch Conflux a second time while the first runs (also while hidden in the tray) | No second window/process; the first window is brought to the front | PASS / FAIL | |
 | 2.19 | Settings > Open logs folder | Explorer opens the log folder; a recent log file exists | PASS / FAIL | |
 | 2.20 | Settings > Copy diagnostics, paste into Notepad | Shows version, OS, adapters with masked subnets (`x.x.x.x`-style host part), no folder paths, URLs or full IPs | PASS / FAIL | |
-| 2.21 | Update check (if the build has the updater): trigger the check in Settings/About | Reports up to date or offers an update, with no error. Note what URL it contacts in the log | PASS / FAIL / N/A | |
+| 2.21 | Update check: trigger the check in Settings/About | Reports up to date or offers an update, with no error. Note what URL it contacts in the log | PASS / FAIL / N/A | |
 | 2.22 | Add a URL that 404s, and one with a wrong host | Clear error message, no crash | PASS / FAIL | |
 | 2.23 | Add a download with an existing file name in the folder | Does not overwrite; unique name chosen | PASS / FAIL | |
 
@@ -100,14 +101,14 @@ Record the OS in the column headers: W10 = ______ ; W11 = ______ .
 | 3.4 | Launch from the Start menu | UI renders; add and complete a small download | | | |
 | 3.5 | Close; check Settings > Apps (Installed apps) | Conflux listed with the right version and a publisher string (record it) | | | |
 | 3.6 | Upgrade: install previous beta, create settings + history + one completed download, then run the new installer over it | Upgrade completes without uninstalling first; settings and history preserved; app version updated | | | |
-| 3.7 | In-app update (if updater exists): from the previous beta, accept an update | Downloads, installs, restarts into the new version; settings and history preserved | | | |
+| 3.7 | In-app update: from the previous beta, accept an update | Downloads, installs, restarts into the new version; settings and history preserved | | | |
 | 3.8 | Uninstall from Settings > Apps | App removed; Start menu entry and tray icon gone | | | |
 | 3.9 | After uninstall: check your downloaded files | **Files in the download folder are untouched** (the hard requirement) | | | |
 | 3.10 | After uninstall: check `%APPDATA%\com.conflux.desktop` | Record whether settings/history remain; this must match what the uninstaller says | | | |
 | 3.11 | Reinstall after uninstall | Works; behaviour matches 3.10 (settings kept or fresh) | | | |
 | 3.12 | **WebView2 absent**: use a Windows 10 VM image without WebView2 (or uninstall "Microsoft Edge WebView2 Runtime", noting Edge itself may keep it on some builds). Run the installer **with internet** | Installer downloads and installs the WebView2 bootstrapper, then the app starts | | | |
 | 3.13 | WebView2 absent and **offline** (disconnect network before running) | Record exactly what happens: clear error message or silent failure. A silent failure is a FAIL | | | |
-| 3.14 | **Offline installer** (if one is published: WebView2 embedded/fixed variant): install on an air-gapped VM | Installs and launches without any network access | PASS/FAIL/N/A | PASS/FAIL/N/A | |
+| 3.14 | **Offline installer** (WebView2 embedded variant, `*_x64-offline-setup.exe`): install on an air-gapped VM | Installs and launches without any network access | PASS/FAIL/N/A | PASS/FAIL/N/A | |
 | 3.15 | Install as a standard (non-admin) user | Works with no UAC prompt | | | |
 | 3.16 | Antivirus: scan the installer and installed exe (Defender on, then with VirusTotal if you can) | Record any detection; false positives to be filed | | | |
 

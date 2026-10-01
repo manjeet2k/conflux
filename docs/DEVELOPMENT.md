@@ -81,8 +81,9 @@ npm --prefix ui run dev                      # UI in a browser, using ui/src/dev
   `crates/conflux-desktop/tauri.conf.json`, and `ui/package.json`.
   `node scripts/check-version.mjs` verifies them; `node scripts/bump-version.mjs X.Y.Z` changes
   all of them (and the lock files) together.
-- **Do not build the release `.exe` / NSIS installer unless asked.** Release builds are meant to
-  come from CI once the release workflow exists (roadmap task R-3). To build for Windows from
+- **Do not build the release `.exe` / NSIS installer unless asked.** Release builds come from
+  CI via [`.github/workflows/release.yml`](../.github/workflows/release.yml) (runbook:
+  [RELEASING.md](RELEASING.md)). To build for Windows from
   Linux anyway, see the [Windows cross-compilation guide](guides/windows-cross-compilation.md).
 - Add a line under *Unreleased* in [`CHANGELOG.md`](../CHANGELOG.md) for every user-visible change.
 

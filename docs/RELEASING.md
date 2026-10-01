@@ -42,7 +42,10 @@ There are two **unrelated** kinds of signing:
    visibility. Do this *before* announcing or publishing the first beta.
 2. Create the updater key and set the GitHub secrets: [Updater key](#updater-key-setup-backup-rotation).
 3. Optional: add the `VIRUSTOTAL_API_KEY` secret ([Antivirus](#antivirus-and-smartscreen)).
-4. Check Actions are enabled for the repo and the workflow permission is "Read and write"
+4. **Protect the signing key** ([Hardening](#hardening-the-release-pipeline-manual-github-settings)):
+   create the `release` environment with required reviewers, move the two `TAURI_SIGNING_*`
+   secrets into it, and add a tag ruleset for `v*.*.*`.
+5. Check Actions are enabled for the repo and the workflow permission is "Read and write"
    *or* leave the default; `release.yml` asks for `contents: write` itself.
 
 ## Release checklist
@@ -53,12 +56,14 @@ Work on `main` with a clean tree.
 ```bash
 cargo fmt --check
 cargo clippy -p conflux-core --tests -- -D warnings
-PATH=/home/manjeet/.local/usr/bin:$PATH cargo clippy -p conflux-desktop --target x86_64-pc-windows-gnu --tests -- -D warnings
+PATH=<dir>:$PATH cargo clippy -p conflux-desktop --target x86_64-pc-windows-gnu --tests -- -D warnings
 cargo test -p conflux-core
 npm --prefix ui run lint && npm --prefix ui run build
 node scripts/check-version.mjs
 ```
-CI on `main` should be green. Run through [`WINDOWS_TEST_PLAN.md`](WINDOWS_TEST_PLAN.md) on a real
+(`<dir>` = prepend the directory that contains `x86_64-w64-mingw32-windres`, if it is not already on `PATH`.)
+CI on `main` should be green, **including the Security workflow** (cargo-deny, RustSec audit, npm
+audit): the release workflow does not re-run it, so check Actions -> Security on the commit you tag. Run through [`WINDOWS_TEST_PLAN.md`](WINDOWS_TEST_PLAN.md) on a real
 Windows machine for anything risky.
 
 ### 2. Update the changelog
@@ -76,7 +81,9 @@ Preview them:
 ```bash
 node scripts/extract-changelog.mjs 0.2.0-beta.1
 ```
-If the version has no section, the script falls back to `Unreleased` and says so on stderr.
+If the version has no section (or it is empty) the script **fails**, and so does the release
+workflow: it never silently ships the `Unreleased` text. To preview unreleased notes before you
+rename the heading, add `--allow-unreleased`.
 
 ### 3. Bump the version
 ```bash
@@ -94,9 +101,15 @@ together and refuses to go backwards. Versions must be valid semver; `0.2.0-beta
 git tag -a v0.2.0-beta.1 -m "Conflux 0.2.0-beta.1"
 git push origin main v0.2.0-beta.1
 ```
-The workflow aborts immediately if the tag does not equal the version in the files. To rebuild an
-existing tag (for example after fixing the workflow only), run it by hand:
-`gh workflow run release.yml -f tag=v0.2.0-beta.1` (Actions tab -> Release -> Run workflow).
+The workflow aborts immediately if the tag does not equal the version in the files, if the tagged
+commit is not an ancestor of `origin/main`, or if the changelog has no section for the version.
+Installers are built with `cargo ... --locked` (the committed `Cargo.lock` must be current).
+
+**Rebuild rule.** A published release is immutable. The build job refuses to run for a tag whose
+release is already published (it may only run when no release exists or the release is still a
+*Draft*). To rebuild: **delete the draft** (`gh release delete vX --yes`, keep the tag, or move it
+if the commit changed) and re-run `gh workflow run release.yml -f tag=v0.2.0-beta.1` (Actions tab
+-> Release -> Run workflow). Never touch a published release; to fix one, cut a **new beta number**.
 
 ### 5. Wait for CI and inspect the draft
 Watch Actions -> Release (about 15-25 minutes). Then open **Releases**; there is a *Draft* with:
@@ -146,8 +159,13 @@ If this fails, **yank the release** (below) before more users take it.
 
 ### 8. Publish the draft
 Releases -> the draft -> Edit -> confirm **"Set as a pre-release" is ticked** and *not* "latest"
--> **Publish release**. Publishing triggers `publish-updater`, which creates the `updater-beta`
-release if needed and overwrites its `latest.json`. From this moment installed copies are offered
+-> **Publish release**. Publishing triggers `publish-updater`, which first **verifies** the manifest
+(`scripts/verify-updater-manifest.mjs`): the signature checks out against the public key in
+`tauri.conf.json`, the version equals the tag and is strictly newer than the one currently in
+`updater-beta`, and every `url` points into this release. Only then does it create the
+`updater-beta` release if needed and overwrite its `latest.json`. If the job fails, nothing went
+live; fix forward with a new beta number. (A published older version can never replace a newer
+manifest; use the rollback steps below by hand for that.) From this moment installed copies are offered
 the update (startup check is on by default; users can also click Check for updates).
 
 Confirm: open
@@ -157,6 +175,30 @@ browser window and check that `version` is the new one.
 ### 9. Announce
 Post the release link, point to the SmartScreen note and the checksums, and ask beta testers to
 attach "Copy diagnostics" output to bug reports.
+
+## Hardening the release pipeline (manual GitHub settings)
+
+The workflow file cannot configure these; the maintainer applies them once in the repository
+settings (this is not done by CI):
+
+1. **Environment `release`** (Settings -> Environments -> New environment). Add *Required
+   reviewers* (yourself or a second person) and set *Deployment branches and tags* to `main` plus
+   the tag pattern `v*.*.*`. Then move `TAURI_SIGNING_PRIVATE_KEY` and
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` from repository secrets into this environment's secrets
+   (and delete the repository-level copies). The build job declares `environment: release`, so
+   every release run waits for approval, and workflows from other branches or jobs (including
+   `publish-updater`, which needs no key) cannot read the key.
+2. **Tag ruleset** (Settings -> Rules -> Rulesets -> New tag ruleset): target tag pattern
+   `v*.*.*`, restrict creations (and updates/deletions) to the maintainers. Otherwise anyone with
+   write access can start a release build by pushing a tag.
+3. Optionally require a pull request and status checks on `main`; the workflow already refuses
+   tags whose commit is not on `main`.
+
+Built into the workflow: third-party actions are pinned to full commit SHAs (update them
+deliberately, resolving a tag with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` and, for
+annotated tags, `.../git/tags/<sha>`), and `VIRUSTOTAL_API_KEY` is visible only to the VirusTotal
+steps. Security checks (cargo-deny, RustSec, npm audit) are not repeated in the release job; keep
+the Security workflow green before tagging.
 
 ## Rollback and yanking a bad release
 
@@ -190,6 +232,10 @@ This runs `tauri signer generate` with a random password, saves the keys **outsi
 mode 700, files 600) and writes only the **public** key into
 `crates/conflux-desktop/tauri.conf.json` (`plugins.updater.pubkey`). Commit that change.
 `--out DIR --no-config` makes a test key without touching the repo; `--force` replaces a key.
+
+Known exposure: the Tauri CLI accepts the key password only as the `--password` argument (no
+environment variable or stdin option for `signer generate`), so the random password is visible in
+the process list for about a second. Run this only on a single-user machine you trust.
 
 Then set the GitHub Actions secrets (Settings -> Secrets and variables -> Actions, or `gh`):
 ```bash

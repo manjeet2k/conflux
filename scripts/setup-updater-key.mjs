@@ -41,6 +41,11 @@ if (existsSync(keyPath) && !force) {
 mkdirSync(outDir, { recursive: true, mode: 0o700 });
 chmodSync(outDir, 0o700);
 const password = randomBytes(24).toString("base64url");
+// KNOWN EXPOSURE: `tauri signer generate` only accepts the password via `--password` (no env
+// var or stdin option; checked with `tauri signer generate --help`). For the second or so that
+// the process runs, the password is visible in the process list (`ps`, /proc/<pid>/cmdline) to
+// other local users. Run this only on a single-user machine you trust. (`tauri signer sign`
+// reads TAURI_SIGNING_PRIVATE_KEY_PASSWORD from the environment, so signing is not affected.)
 const tauriArgs = ["--prefix", join(ROOT, "ui"), "tauri", "signer", "generate", "--ci", "-w", keyPath, "--password", password];
 if (force) tauriArgs.push("--force");
 execFileSync("npx", tauriArgs, { stdio: ["ignore", "ignore", "inherit"] });

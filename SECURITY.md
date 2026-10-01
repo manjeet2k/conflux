@@ -31,6 +31,10 @@ other people's data.
 
 - The installer is **unsigned** during the beta. That is a known limitation, not a vulnerability
   (see [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md)). Verify downloads with `SHA256SUMS.txt`.
+  Note that `SHA256SUMS.txt` is published next to the installers, so it protects against
+  corruption but not against a tampered release: anyone who can replace the installer can
+  replace the checksum file. What protects in-app updates is the updater signature (minisign,
+  checked against the public key built into the app).
 - In scope: the Conflux application and installer, the update mechanism, handling of untrusted
   servers and URLs (redirects, headers, filenames, path handling), log and diagnostics leakage.
 - Out of scope: vulnerabilities in third-party servers you download from, and issues that need an

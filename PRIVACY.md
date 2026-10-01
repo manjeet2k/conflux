@@ -9,10 +9,18 @@ else stays on your PC.
 1. **The URLs you add.** For each download the engine sends HTTP requests (a probe, then ranged
    `GET`s) to that URL and any redirect targets, from each network adapter you enabled. The
    server you download from can see your IP address for each adapter (that is how bonding works).
-2. **GitHub Releases, for update checks.** The in-app updater asks the project's GitHub
-   releases (`github.com/manjeet2k/conflux`, a small `latest.json` file) whether a newer beta exists and downloads it if you
-   accept. GitHub sees your IP address and the request, as with any download from GitHub. No
-   identifier or usage data is added by the app.
+2. **GitHub Releases, for update checks.** With **Settings > Check for updates on start** on
+   (the default), the app asks the project's GitHub releases (`github.com/manjeet2k/conflux`, a
+   small `latest.json` file) whether a newer beta exists automatically, about 10 seconds after
+   launch, and again when you click **Check for updates**. Turn the setting off to stop the
+   automatic check. Installing an update always needs your click; nothing is installed by
+   itself. If you install one, running downloads are paused and listed in
+   `resume_after_update.json` in the data folder so they resume after the restart (the file is
+   deleted once read). GitHub sees your IP address and the request, as with any download from
+   GitHub. No identifier or usage data is added by the app.
+3. **A link you paste or type in the Add dialog.** The dialog probes the URL automatically after
+   a paste or edit (to show the file name and size), before you press Download. The server sees
+   that request.
 
 That is all. There are no other outbound connections.
 
@@ -42,6 +50,7 @@ Rust crates and the UI for network use (`reqwest`, `http(s)://` literals, socket
 |------|-------|-------|
 | Settings | app config folder (`%APPDATA%\com.conflux.desktop`) | theme, chunk size, adapter toggles, folders |
 | Download history | app data folder (`%APPDATA%\com.conflux.desktop`) | URLs, file names and paths of your downloads |
+| Update resume list | app data folder, `resume_after_update.json` | downloads paused for an update; deleted at the next start |
 | Resume file | next to the partial download, `<file>.conflux.json` | which pieces are done, server validators |
 | Logs | app log folder (typically `%LOCALAPPDATA%\com.conflux.desktop\logs`) | URL credentials and query strings are redacted; URL **paths** are not (see [known issues](docs/KNOWN_ISSUES.md)) |
 

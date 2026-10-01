@@ -42,6 +42,17 @@ All notable changes to Conflux are documented here. The format follows
 - Quitting the app now shuts down gracefully, persisting in-flight download state.
 
 ### Fixed
+- Credentials and tokens are redacted from error messages shown in the UI and written to logs,
+  not only from the URLs themselves.
+- A download that was paused and resumed could end up truncated; the file is now only completed
+  when every byte is present.
+- A hostile or corrupt server-reported size (absurdly large, or inconsistent with the ranged
+  responses) no longer makes the app preallocate or accept it; the download fails cleanly.
+- The `.conflux.json` sidecar name no longer collides when two downloads would share a file name.
+- Release workflow safeguards: a published release can no longer be rebuilt over; the updater
+  manifest is verified (signature, newer version, release-local URLs) before going live; the
+  tagged commit must be on `main`; release builds use `--locked`; release notes must come from a
+  real changelog section; GitHub Actions are pinned to commit SHAs.
 - Settings could be overwritten by a concurrent save (race).
 - Start/pause race that could leave a download in the wrong state.
 - Adapter-scan errors are surfaced instead of silently ignored.

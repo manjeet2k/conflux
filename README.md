@@ -113,7 +113,11 @@ the end.
 SmartScreen does not know the publisher. See [the section above](#windows-protected-your-pc--unknown-publisher).
 
 **How do updates work?** Conflux checks the project's GitHub Releases for a newer beta and can
-update itself in the app. That check is the only network request the app makes on its own. You can
+update itself in the app. The update check is **not** the only request the app makes on its own: it
+runs about 10 seconds after launch while *Check for updates on start* is on (default; switch it off
+in Settings), and pasting a link (or typing in the Add dialog) makes the app probe that URL
+automatically to show the file name and size, before you press Download. Installing an update
+always needs your click. You can
 always download the new installer from the Releases page instead and verify it with `SHA256SUMS.txt`.
 
 **Where is my data stored?** Settings are in the app config folder and the download history in the
