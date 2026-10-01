@@ -106,20 +106,14 @@ recommended default. If the user hasn't answered, **ask** (don't assume).
 
 ---
 
-## Parked work (agents stopped early)
+## Before the first beta
 
-Three agents were started for the tasks below, then stopped when the maintainer powered off their
-PC (they ran locally, not in the cloud). Nothing here is finished; start fresh, using the branches
-only as a head start. Do not open PRs for them (PRs trigger paid CI); merge by hand after review.
-
-| Branch | Tasks | State |
-|--------|-------|-------|
-| _(none pushed)_ | R-3, R-4, S-3, S-4, D-5, P-5, D-3 | Nothing was written. Re-run from the task entries. |
-| `roadmap/adapter-diagnostics` | V-3, P-6 (remainder) | One failing test written first in `crates/conflux-core/tests/engine_integration.rs`; no implementation. |
-| `roadmap/docs-and-windows-kit` | H-2, D-1, D-2, V-1, V-2, V-4, V-5 | H-2 repo metadata commit done; `scripts/bench/` started. Rest not done. |
-
-Plan when picking these up: generate the updater key locally (S-3 task entry), set the GitHub
-secrets it lists, and make the repo public before cutting the first beta (B-1).
+Code and docs for the beta are in place; what is left needs you or a Windows machine:
+1. Set the GitHub secrets (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, optional `VIRUSTOTAL_API_KEY`) and **back up `~/.config/conflux-secrets/`**.
+2. Run V-1, V-2, V-4, V-5 on Windows (kits in `docs/WINDOWS_TEST_PLAN.md`, `scripts/bench/`) and fix what they find.
+3. Add screenshots/GIF and benchmark numbers (D-1).
+4. Run `ci.yml` once by hand to shake out workflow problems (roughly 55 billed minutes).
+5. Make the repo public (updates cannot download from a private repo), then follow `docs/RELEASING.md` for B-1.
 
 ## Phase map
 
@@ -144,14 +138,14 @@ Acceptance: `git ls-files | grep -iE "panic|\.exe|\.dll|\.pfx|\.key"` prints not
 Verify: command above.
 Done notes: `conflux_panic.txt` untracked, `.gitignore` extended, and the stray `Conflux.exe`, `Conflux-Setup.exe`, `WebView2Loader.dll` deleted from the repo root (user approved).
 
-#### H-2 — Fix repo metadata  `[ ]`
+#### H-2 — Fix repo metadata  `[x]`
 Why: `Cargo.toml` `repository`, `authors`, and `ui/package.json` carry placeholder-ish identity data.
 Depends on: none
 Files: `Cargo.toml`, `ui/package.json`, `crates/*/Cargo.toml`, `README.md`
 Do: set `repository`, `homepage`, `authors`, `description`, `keywords`, `categories` consistently; make the README's badge/links point at the real repo; set `publish = false` in crates not meant for crates.io.
 Acceptance: `cargo metadata --no-deps` shows the same repository/authors for all workspace crates.
 Verify: `cargo metadata --no-deps --format-version 1 | jq '.packages[] | {name,repository,authors}'`
-Done notes:
+Done notes: Consistent repository/homepage/description/keywords/categories across crates and `ui/package.json`; `cargo metadata --no-deps` OK.
 
 #### H-3 — Single version source + bump script  `[x]`
 Why: the version lives in three files and must move together (AGENTS.md Superpower 6). Humans forget.
@@ -179,7 +173,7 @@ Done notes: ARCHITECTURE.md rewritten against the code (sections 5–7 new); PLA
 > on Linux/WSL2 **cannot complete them**: it should write the scripts/checklists and mark the
 > run itself `[!]` "needs Windows host", leaving exact instructions for the human.
 
-#### V-1 — Run desktop tests and smoke-test the app on Windows  `[ ]`
+#### V-1 — Run desktop tests and smoke-test the app on Windows  `[~]`
 Why: all Windows-only code is unverified; desktop unit tests can't run on Linux.
 Depends on: none
 Files: new `docs/WINDOWS_TEST_PLAN.md`
@@ -193,43 +187,43 @@ Do: write a checklist, then (on Windows) run it and record results:
 7. Close window with `close_to_tray` off and on; Quit from tray with 3 active downloads → exits fast, downloads resume afterwards.
 Acceptance: every checklist line has PASS/FAIL + notes; every FAIL has a new task filed.
 Verify: results table committed in `docs/WINDOWS_TEST_PLAN.md`.
-Done notes:
+Done notes: Kit ready: `docs/WINDOWS_TEST_PLAN.md` (desktop tests, 23-row smoke test). **Not run — needs a Windows machine.**
 
-#### V-2 — Real multi-adapter bonding benchmark  `[ ]`
+#### V-2 — Real multi-adapter bonding benchmark  `[~]`
 Why: the whole product claim is aggregated bandwidth; it has only been tested against loopback aliases.
 Depends on: V-1 (app launches)
 Files: new `scripts/bench/` (PowerShell + a small Rust or Node range-capable test server), `docs/BENCHMARKS.md`
 Do: serve a large file from a LAN/VPS you control with `Accept-Ranges`; download via (a) Ethernet only, (b) Wi-Fi only, (c) both, (d) both + phone tethering. Record per-adapter throughput from the app's own stats and from Windows `Get-NetAdapterStatistics`. Include a CDN-hosted file to observe ETag/Last-Modified behaviour on 206s (informs **D7**).
 Acceptance: `docs/BENCHMARKS.md` has a table with link speeds, observed aggregate, efficiency %, test date, Windows build; notes any adapter that connected but moved 0 bytes.
 Verify: raw logs attached (`RUST_LOG=conflux_core=debug`).
-Done notes:
+Done notes: Kit ready: `scripts/bench/` (range server tested with curl; `measure-adapters.ps1` never run) and `docs/BENCHMARKS.md` methodology. **Results table still empty — needs real adapters on Windows.**
 
-#### V-3 — Weak-host / no-gateway adapter diagnostics  `[ ]`
+#### V-3 — Weak-host / no-gateway adapter diagnostics  `[x]`
 Why: on Windows an adapter without its own default gateway may accept `bind(ip)` yet fail to connect; today the user just sees a stalled adapter with no explanation.
 Depends on: V-2 findings
 Files: `crates/conflux-core/src/engine.rs`, `adapter.rs`, `crates/conflux-desktop/src/commands.rs`, `ui/src/pages/NetworkPage.tsx`, `ui/src/types.ts`
 Do: surface per-adapter last error and drop reason (e.g. "connect timed out", "no route") in `AdapterProgress`/`AdapterInfo` and show it on the Network page and in the details pane. Optionally pre-flight each adapter with a tiny ranged probe when a download starts.
 Acceptance: unplugging gateway / using a no-gateway adapter shows a human-readable reason in the UI within the stall timeout; unit/integration test covers the error plumbing (use `fail_peer_ip` in the test server).
 Verify: gates + manual check from V-2 setup.
-Done notes:
+Done notes: `AdapterProgress.last_error`/`drop_reason` + `describe_failure` (Linux errno and Windows WSA codes) → desktop (URLs redacted) → Network page and details pane. Tests: strengthened `failing_adapter_is_dropped_and_others_finish`, new `removed_adapter_reports_drop_reason`, 3 unit tests. Pre-flight probe skipped (startup latency/races). **Windows mapping untested on a real no-gateway adapter.** `last_error` clears on the next successful chunk; the text only shows while a task is downloading.
 
-#### V-4 — Clean-machine install/uninstall test  `[ ]`
+#### V-4 — Clean-machine install/uninstall test  `[~]`
 Why: installer behaviour with and without WebView2, per-user install, upgrade-over-previous.
 Depends on: R-3 (an installer artifact from CI)
 Files: `docs/WINDOWS_TEST_PLAN.md`
 Do: on a fresh Windows 10 and 11 VM: install, launch, upgrade from previous version, uninstall. Confirm user downloads are never deleted; settings/history handling matches what the uninstall page says.
 Acceptance: results recorded; failures filed as tasks.
 Verify: checklist.
-Done notes:
+Done notes: Checklist ready in `docs/WINDOWS_TEST_PLAN.md` (16 rows incl. WebView2-absent, offline installer, upgrade, uninstall). **Not run — needs clean Windows 10/11 VMs and an installer from a release.**
 
-#### V-5 — Soak and chaos run  `[ ]`
+#### V-5 — Soak and chaos run  `[~]`
 Why: confirm resilience claims (AGENTS.md Superpower 3) on real hardware.
 Depends on: V-1
 Files: `docs/WINDOWS_TEST_PLAN.md`
 Do: 10+ GB file; disable/enable Wi-Fi mid-download; sleep/resume laptop; kill the process (check resume from sidecar); fill the disk; revoke the save folder; run 10 concurrent downloads for an hour. Verify SHA-256 against the server's.
 Acceptance: all runs end correct or fail with a clear error; none produce a corrupt file reported as complete.
 Verify: SHA-256 comparison logged per run.
-Done notes:
+Done notes: Checklist ready in `docs/WINDOWS_TEST_PLAN.md` (12 rows with SHA-256 comparison). **Not run — needs Windows hardware.**
 
 ---
 
@@ -271,16 +265,16 @@ Acceptance: test writes garbage, loads, finds a `.corrupt-*` backup and an empty
 Verify: `cargo clippy` for desktop; run the pure tests in a scratch copy if the crate can't be tested on Linux (see [DEVELOPMENT.md](DEVELOPMENT.md)) — or on Windows.
 Done notes: New `fileutil.rs`: unparseable file → `<name>.corrupt-<UTC>` (keep 3, never overwrite); `schema_version` added to settings (v1) and history (`{"schema_version":1,"tasks":[…]}`; bare array still loads); `take_startup_notices` command → warning toast in `App.tsx`.
 
-#### P-5 — Installer polish  `[ ]`
+#### P-5 — Installer polish  `[x]`
 Why: first impression + support burden.
 Depends on: none
 Files: `crates/conflux-desktop/tauri.conf.json`, new `crates/conflux-desktop/installer/*.nsh` if needed
 Do: set `bundle.publisher`, `copyright`, `shortDescription`, `longDescription`, license file shown in installer (`bundle.licenseFile`), `nsis.installerIcon`; choose `webviewInstallMode` (keep `downloadBootstrapper`, plus offline variant via a second CI build — see R-4); uninstall page: ask whether to delete settings/history, never touch downloads; start-menu shortcut; optional "launch after install".
 Acceptance: installer shows publisher and license; uninstall leaves the download folder intact.
 Verify: V-4.
-Done notes:
+Done notes: Publisher, copyright, descriptions, licence file, bundled third-party licences in `tauri.conf.json`; `installer/hooks.nsh` adds a keep-by-default prompt for settings/history on top of Tauri's own checkbox and never touches downloads. **NSIS hook never compiled; Start-menu shortcut assumed to be the default — verify in V-4.**
 
-#### P-6 — Robustness backlog from the review  `[~]`
+#### P-6 — Robustness backlog from the review  `[x]`
 Why: items from the full-app review not yet addressed.
 Depends on: none
 Files: various (see list)
@@ -292,7 +286,7 @@ Do (each is its own commit-sized change; add a test first where feasible):
 - A real Linux uplink named `br0` is disabled by default — add a "why is this disabled?" hint on the Network page.
 Acceptance: one test or manual step per bullet, recorded in Done notes.
 Verify: quality gates.
-Done notes: Done: `AdapterInfo.disabled_reason` (+ Network page hint, UI/mocks), `classify_kind` now marks usable-but-discovery-disabled adapters Virtual, `folder_exists` command + Settings warning for a missing default folder. No-change: no early-failure placeholder leak found in `start_download`. **Remaining:** core `unique_path` is still public next to `claim_unique_path` (conflux-core; make `claim_unique_path` the only public naming API). **Needs user confirmation:** the Network page now lists usable virtual-looking adapters (off by default, with hint) instead of hiding them; loopback still hidden.
+Done notes: All items done: `claim_unique_path` is the only public naming API; CLI placeholder leak fixed (discover adapters before claiming the file); desktop `start_download` has no fallible step between reservation and spawn.
 
 #### P-7 — Optional features  `[-]` deferred past the beta
 Why: the competitors (IDM/FDM) ship these; not needed for the beta.
@@ -323,23 +317,23 @@ Acceptance: workflow green on `main`; a known-bad test advisory fails it (try on
 Verify: workflow run link.
 Done notes: `security.yml` (cargo-deny, rustsec/audit-check, npm audit; PR/push/weekly), `deny.toml`. `cargo deny check` passes locally. **Not run:** `cargo audit`, `npm audit`. Added `CDLA-Permissive-2.0` to the allow-list (needed by webpki-roots) and ignored RUSTSEC-2024-0370 (proc-macro-error, unmaintained, Tauri build-time) — **pending user OK**. **Update (cost control):** Dependabot version-update PRs are disabled (they triggered CI/Security per PR); Dependabot alerts stay on, security-fix PRs off. `dependency-report.yml` keeps one "Dependency report" issue up to date monthly; the weekly `cargo-audit` run opens issues for advisories. CI skips docs-only changes; Security runs weekly or when dependency files change.
 
-#### R-3 — Release workflow  `[ ]`
+#### R-3 — Release workflow  `[x]`
 Why: installers must come from CI, not a developer laptop.
 Depends on: R-1, H-3
 Files: new `.github/workflows/release.yml`
 Do: trigger on tag `v*.*.*`. Steps: checkout → `node scripts/check-version.mjs` (tag must equal version) → setup Rust (MSVC, `x86_64-pc-windows-msvc`) and Node → `tauri-apps/tauri-action` builds the NSIS bundle → compute SHA-256 → create a **draft** GitHub Release with the installer, `SHA256SUMS.txt`, and release notes extracted from `CHANGELOG.md` → upload SBOM (`cargo cyclonedx`). Prerelease flag for tags containing `-`.
 Acceptance: pushing `v0.1.6-test` on a fork produces a draft release with installer + checksums; version mismatch aborts.
 Verify: workflow run on a test tag. (This task *defines* the build; it is the one sanctioned place an installer is produced — by CI, not locally.)
-Done notes:
+Done notes: `.github/workflows/release.yml` (tag `v*.*.*` / manual; Windows build; always a draft prerelease; SHA256SUMS; changelog notes; SBOM; `publish-updater` job copies `latest.json` to `updater-beta` only when the draft is published). **Never run; tauri-action inputs for this layout, the NSIS filename for a prerelease version, and the SBOM install are unverified.**
 
-#### R-4 — Offline-WebView2 installer variant  `[ ]`
+#### R-4 — Offline-WebView2 installer variant  `[x]`
 Why: locked-down/offline machines can't use the downloading bootstrapper.
 Depends on: R-3
 Files: `release.yml`, a second Tauri config override (e.g. `tauri.offline.conf.json`)
 Do: build a second NSIS artifact with `webviewInstallMode: { "type": "offlineInstaller" }` (note: it is large, ~130 MB — publish as a separate asset).
 Acceptance: release has two installers, named clearly.
 Verify: V-4 on an offline VM.
-Done notes:
+Done notes: `tauri.offline.conf.json` + second build in `release.yml`, published as `_x64-offline-setup.exe`, no updater artifacts. Unverified (never built).
 
 #### R-5 — Changelog and release-notes discipline  `[x]`
 Why: users and the updater both need human-readable notes.
@@ -371,7 +365,7 @@ Acceptance: `Get-AuthenticodeSignature` shows `Valid` and the right publisher on
 Verify: command above on a downloaded artifact.
 Done notes:
 
-#### S-3 — Auto-update  `[ ]`
+#### S-3 — Auto-update  `[x]`
 Why: shipping fixes quickly is mandatory for a networking tool, especially in a beta. Note: the updater signature (its own key) is separate from code signing and **is** required even while the installer is unsigned.
 Depends on: R-3, D4 (answered: in-app auto-update)
 Files: `crates/conflux-desktop/Cargo.toml`, `src/lib.rs`, `tauri.conf.json` (`plugins.updater`), `capabilities/default.json`, UI (`SettingsPage.tsx`, `StatusBar.tsx`), `release.yml`
@@ -382,39 +376,39 @@ Do:
 4. Add only the updater permissions the JS uses to `capabilities/default.json`.
 Acceptance: install `v0.1.6-test`, publish `v0.1.7-test`, app updates itself and resumes a download that was in flight.
 Verify: manual on Windows; unit test for the "pause before install" ordering where possible.
-Done notes:
+Done notes: `updater.rs`: check/install in Rust, pause→persist→install ordering with rollback, resume at startup, notify-only startup check; Settings → About & Updates. Updater key generated locally (`~/.config/conflux-secrets/`), public key in `tauri.conf.json`. 6 unit tests ran in a scratch crate only. **Real update flow never exercised** (needs two published betas on a public repo).
 
-#### S-4 — Release runbook  `[ ]`
+#### S-4 — Release runbook  `[x]`
 Depends on: R-3, S-3 (S-2 later, when signing lands)
 Files: new `docs/RELEASING.md`
 Do: step-by-step: update changelog → bump version → tag → CI → verify signature → publish draft → smoke test the update path → announce. Include rollback ("yank" a release, withdraw `latest.json`), key rotation, and who holds which secret.
 Acceptance: a person who has never released can follow it end to end.
-Done notes:
+Done notes: `docs/RELEASING.md` full runbook (repo must be public first; key backup/rotation; SmartScreen; rollback).
 
 ---
 
 ## Phase 5 — Distribution and trust (≈2 days)
 
-#### D-1 — README / landing page  `[ ]`
+#### D-1 — README / landing page  `[~]`
 Depends on: V-2 (honest numbers)
 Files: `README.md`, optionally `docs/index.md` (GitHub Pages)
 Do: **a clear "Beta" banner and a "Windows protected your PC / unknown publisher" section explaining the unsigned installer (More info → Run anyway) plus the SHA-256 to verify the download**; screenshots, a short GIF of bonding with the per-adapter speed pills, install instructions, system requirements (Windows 10 1809+/11, WebView2), an honest "how much gain to expect" note (needs independent physical links with their own gateways), FAQ (why is SmartScreen showing…, how updates work, where data is stored).
 Acceptance: a new user can install and complete a first bonded download from the README alone.
-Done notes:
+Done notes: README rewritten (beta banner, unsigned-installer guidance, checksum verification, FAQ, requirements). **Still needs real screenshots/GIF and benchmark numbers.**
 
-#### D-2 — Policy and community files  `[ ]`
+#### D-2 — Policy and community files  `[x]`
 Files: `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `PRIVACY.md`, `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`
 Do: security contact + disclosure window; privacy statement matching D6 (today: no telemetry; app talks only to URLs the user adds, plus the update endpoint if S-3); issue templates asking for "Copy diagnostics" output; PR template with the quality-gate checklist.
 Acceptance: files exist; PRIVACY.md is accurate to the code (grep for network calls: only engine probes/downloads and the updater).
-Done notes:
+Done notes: `SECURITY.md`, `PRIVACY.md` (verified against code: only the engine's reqwest and the updater make network calls), `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, issue/PR templates.
 
-#### D-3 — Third-party licence notices  `[ ]`
+#### D-3 — Third-party licence notices  `[x]`
 Why: MIT/Apache dependencies require attribution; the installer should carry it.
 Depends on: none
 Files: new `THIRD_PARTY_LICENSES.md` (generated), `scripts/gen-licenses.*`, `tauri.conf.json` (`bundle.resources`)
 Do: generate with `cargo about` + `license-checker`; fail CI if a dependency has a licence outside the allow-list (reuse `deny.toml`); show it in Settings → About.
 Acceptance: file generated in CI and bundled; Settings → About lists app version, licences link, repo link.
-Done notes:
+Done notes: `scripts/gen-licenses.mjs` (+ `--check`) generates `THIRD_PARTY_LICENSES.md` (410 components); bundled and linked from About.
 
 #### D-4 — Package-manager listings  `[-]` deferred until after the beta
 Depends on: S-2, a published signed release
@@ -422,11 +416,11 @@ Do: submit a `winget` manifest PR (`microsoft/winget-pkgs`); optionally Scoop bu
 Acceptance: `winget install <id>` installs the signed build.
 Done notes:
 
-#### D-5 — Antivirus reputation  `[ ]`
+#### D-5 — Antivirus reputation  `[x]`
 Depends on: R-3 (S-2 later)
 Do: upload each release to VirusTotal in CI and fail loudly on > N detections; document the Microsoft Defender false-positive submission process in `docs/RELEASING.md`.
 Acceptance: process documented; first release's scan result recorded.
-Done notes:
+Done notes: VirusTotal step in `release.yml` (skipped without `VIRUSTOTAL_API_KEY`); Defender false-positive steps in `docs/RELEASING.md`. Unverified (never run).
 
 ---
 
