@@ -8,6 +8,7 @@ mod redact;
 mod settings;
 mod state;
 mod tray;
+mod updater;
 
 use history::HistoryStore;
 use state::AppState;
@@ -55,6 +56,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let log_dir = app.path().app_log_dir().ok();
             if let Some(problem) = logging::init(log_dir.as_deref()) {
@@ -88,6 +90,7 @@ pub fn run() {
             let (tasks, history_notice) = history.load();
             info!(restored = tasks.len(), "Loaded download history");
             app.manage(AppState::new(settings, settings_path, history, tasks));
+            app.manage(updater::PendingUpdate::default());
             for notice in [settings_notice, history_notice].into_iter().flatten() {
                 app.state::<AppState>().push_notice(notice);
             }
@@ -141,6 +144,15 @@ pub fn run() {
                 }
             });
 
+            // After an in-app update: resume the downloads that were running, then do the
+            // quiet update check (never installs by itself).
+            let updater_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                updater::resume_after_update(&updater_handle).await;
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                updater::startup_check(&updater_handle).await;
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -186,6 +198,9 @@ pub fn run() {
             commands::folder_exists,
             commands::get_diagnostics,
             commands::open_logs_folder,
+            updater::check_for_update,
+            updater::install_update,
+            updater::open_about_link,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Conflux desktop");

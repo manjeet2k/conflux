@@ -1,0 +1,262 @@
+name: Release
+
+# Builds the Windows installers from a version tag and attaches them to a DRAFT GitHub
+# prerelease. Nothing is public until a maintainer reviews and publishes the draft; publishing
+# it (the `release: published` event) then points the in-app updater at it. Runbook:
+# docs/RELEASING.md. Never runs on pull requests (Windows minutes are billed double).
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build, e.g. v0.2.0-beta.1"
+        required: true
+        type: string
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    # The `release: published` trigger belongs to the publish-updater job only.
+    if: github.event_name != 'release'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write # create/update the draft release and upload assets
+    # One build per tag; never cancel a half-uploaded release.
+    concurrency:
+      group: release-${{ inputs.tag || github.ref_name }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Job-level so steps can test for presence: secrets cannot be used in `if:` directly.
+      VT_KEY: ${{ secrets.VIRUSTOTAL_API_KEY }}
+    steps:
+      - name: Resolve tag and version
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          TAG="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$TAG' is not a release tag like v0.2.0-beta.1"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ steps.meta.outputs.tag }}
+
+      # Aborts here when the tag and the version files disagree.
+      - name: Check tag matches the version files
+        run: node scripts/check-version.mjs --expect "${{ steps.meta.outputs.version }}"
+
+      - name: Install pinned Rust toolchain (rust-toolchain.toml, MSVC target)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: UI install and build
+        run: |
+          npm --prefix ui ci
+          npm --prefix ui run build
+
+      - name: Third-party licenses are up to date
+        run: node scripts/gen-licenses.mjs --check
+
+      - name: Release notes from CHANGELOG.md
+        run: node scripts/extract-changelog.mjs "${{ steps.meta.outputs.version }}" > release-notes.md
+
+      # Standard installer (downloads the WebView2 bootstrapper when needed) plus the updater
+      # artifacts (.sig). BETA POLICY: the release is ALWAYS a draft AND a prerelease, whatever
+      # the tag looks like. Do not change either flag without a maintainer decision.
+      - name: Build NSIS installer and create draft release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: crates/conflux-desktop
+          tauriScript: npm --prefix ../../ui run tauri --
+          args: --bundles nsis
+          tagName: ${{ steps.meta.outputs.tag }}
+          releaseName: Conflux ${{ steps.meta.outputs.version }}
+          releaseBody: See the changelog below.
+          releaseDraft: true
+          prerelease: true
+          # latest.json is generated below with the URLs of this exact release.
+          includeUpdaterJson: false
+
+      - name: Stage the standard installer
+        run: |
+          V="${{ steps.meta.outputs.version }}"
+          NSIS=target/release/bundle/nsis
+          mkdir -p dist-installer
+          for f in "Conflux_${V}_x64-setup.exe" "Conflux_${V}_x64-setup.exe.sig"; do
+            test -f "$NSIS/$f" || { echo "::error::missing $NSIS/$f"; ls -la "$NSIS"; exit 1; }
+            cp "$NSIS/$f" dist-installer/
+          done
+
+      # R-4: second build with the WebView2 runtime embedded (~130 MB) for offline or locked-down
+      # machines. Tauri names both installers alike, so it is renamed. It has no updater
+      # artifacts and is never listed in latest.json.
+      - name: Build offline-WebView2 installer
+        working-directory: crates/conflux-desktop
+        run: |
+          V="${{ steps.meta.outputs.version }}"
+          npm --prefix ../../ui run tauri -- build --bundles nsis --config tauri.offline.conf.json
+          SRC="../../target/release/bundle/nsis/Conflux_${V}_x64-setup.exe"
+          test -f "$SRC" || { echo "::error::missing $SRC"; exit 1; }
+          cp "$SRC" "../../dist-installer/Conflux_${V}_x64-offline-setup.exe"
+
+      - name: SHA256SUMS.txt and updater manifest
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd dist-installer
+          sha256sum "Conflux_${VERSION}_x64-setup.exe" "Conflux_${VERSION}_x64-offline-setup.exe" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          # Only the standard installer is in the manifest (the offline one has no signature).
+          node - <<'EOF'
+          const fs = require("fs");
+          const { TAG, VERSION, REPO } = process.env;
+          const name = `Conflux_${VERSION}_x64-setup.exe`;
+          const manifest = {
+            version: VERSION,
+            notes: fs.readFileSync("../release-notes.md", "utf8").trim(),
+            pub_date: new Date().toISOString(),
+            platforms: {
+              "windows-x86_64": {
+                signature: fs.readFileSync(`${name}.sig`, "utf8").trim(),
+                url: `https://github.com/${REPO}/releases/download/${TAG}/${name}`,
+              },
+            },
+          };
+          fs.writeFileSync("latest.json", JSON.stringify(manifest, null, 2) + "\n");
+          EOF
+          cat latest.json
+
+      # Optional: a prebuilt cargo-cyclonedx keeps this cheap (no compiling it). If the tool
+      # cannot be installed or fails, the SBOM is skipped and the release continues.
+      - name: Install cargo-cyclonedx
+        id: cdx_tool
+        continue-on-error: true
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cyclonedx
+      - name: SBOM (CycloneDX)
+        if: steps.cdx_tool.outcome == 'success'
+        continue-on-error: true
+        run: |
+          cargo cyclonedx --format json
+          cp crates/conflux-desktop/conflux-desktop.cdx.json "dist-installer/Conflux_${{ steps.meta.outputs.version }}_sbom.cdx.json"
+
+      # D-5: skipped unless the VIRUSTOTAL_API_KEY secret exists. Scans the standard installer
+      # (the offline one exceeds free-tier upload limits). Detections are for a human to judge.
+      - name: VirusTotal scan
+        id: vt
+        if: env.VT_KEY != ''
+        continue-on-error: true
+        uses: crazy-max/ghaction-virustotal@v4
+        with:
+          vt_api_key: ${{ env.VT_KEY }}
+          files: |
+            dist-installer/Conflux_*_x64-setup.exe
+      - name: VirusTotal report link in job summary
+        if: env.VT_KEY != '' && steps.vt.outputs.analysis != ''
+        env:
+          ANALYSIS: ${{ steps.vt.outputs.analysis }}
+        run: |
+          {
+            echo "### VirusTotal"
+            echo
+            echo "$ANALYSIS" | tr ',' '\n' | sed 's/^/- /'
+            echo
+            echo "Review detections before publishing the draft (see docs/RELEASING.md)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload extra assets to the draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Conflux ${{ steps.meta.outputs.version }}
+          body_path: release-notes.md
+          # Keep the beta policy: never published automatically, always flagged prerelease.
+          draft: true
+          prerelease: true
+          make_latest: "false"
+          fail_on_unmatched_files: false
+          files: |
+            dist-installer/Conflux_*_x64-offline-setup.exe
+            dist-installer/SHA256SUMS.txt
+            dist-installer/latest.json
+            dist-installer/*_sbom.cdx.json
+
+      - name: Summary
+        run: |
+          {
+            echo "### Draft release ${{ steps.meta.outputs.tag }}"
+            echo
+            echo "Review it under Releases, verify \`SHA256SUMS.txt\`, smoke-test, then publish."
+            echo "Publishing triggers the \`publish-updater\` job, which updates \`updater-beta/latest.json\`."
+            echo
+            echo '```'
+            cat dist-installer/SHA256SUMS.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Runs when a maintainer publishes the reviewed draft. Only now do installed copies learn
+  # about the version: latest.json on the fixed `updater-beta` release is what the app polls
+  # (`releases/latest/download/` ignores prereleases and private repos, so it cannot be used).
+  publish-updater:
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    # Serialise manifest writes; the newest publish wins.
+    concurrency:
+      group: updater-manifest
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Download latest.json from the published release
+        run: |
+          gh release download "$TAG" --pattern latest.json --dir .
+          VERSION="${TAG#v}"
+          node -e '
+            const m = JSON.parse(require("fs").readFileSync("latest.json", "utf8"));
+            if (m.version !== process.argv[1]) { console.error("latest.json is for " + m.version + ", not " + process.argv[1]); process.exit(1); }
+            if (!m.platforms["windows-x86_64"].signature) { console.error("missing signature"); process.exit(1); }
+          ' "$VERSION"
+      - name: Create the updater-beta release if missing
+        run: |
+          if ! gh release view updater-beta >/dev/null 2>&1; then
+            gh release create updater-beta --prerelease --latest=false --target "$GITHUB_SHA" \
+              --title "Updater manifest (do not delete)" \
+              --notes "Holds latest.json, which installed copies of Conflux poll for updates. Overwritten on each published release. Do not delete or publish installers here."
+          fi
+      - name: Overwrite latest.json
+        run: gh release upload updater-beta latest.json --clobber

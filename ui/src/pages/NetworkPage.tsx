@@ -14,7 +14,7 @@ import type { SpeedSample } from '../hooks/useSpeedHistory';
 import { HISTORY_SECONDS, adapterKey } from '../hooks/useSpeedHistory';
 import { Page, SectionHeader } from '../components/Page';
 import { SpeedGraph } from '../components/SpeedGraph';
-import { adapterColor, kindIcon, kindLabel, usableAdapters } from '../utils/adapters';
+import { adapterColor, adapterProblem, kindIcon, kindLabel, usableAdapters } from '../utils/adapters';
 import { formatBytes, formatSpeed } from '../utils/formatters';
 
 const useStyles = makeStyles({
@@ -64,6 +64,8 @@ interface LiveStat {
   connections: number;
   received: number;
   dropped: boolean;
+  /** Most useful explanation for a stalled/dropped adapter across running tasks. */
+  problem: string | null;
 }
 
 function liveStats(tasks: DownloadTask[]): Map<string, LiveStat> {
@@ -72,11 +74,18 @@ function liveStats(tasks: DownloadTask[]): Map<string, LiveStat> {
     if (t.status !== 'downloading') continue;
     for (const a of t.adapters) {
       const key = adapterKey(a.adapter_id);
-      const s = stats.get(key) ?? { speed: 0, connections: 0, received: 0, dropped: false };
+      const s = stats.get(key) ?? {
+        speed: 0,
+        connections: 0,
+        received: 0,
+        dropped: false,
+        problem: null,
+      };
       s.speed += a.speed_bytes_sec;
       s.connections += a.active_connections;
       s.received += a.downloaded_bytes;
       s.dropped ||= a.dropped;
+      s.problem ??= adapterProblem(a);
       stats.set(key, s);
     }
   }
@@ -202,6 +211,14 @@ export const NetworkPage: React.FC<NetworkPageProps> = ({
               {!a.enabled && a.disabled_reason && (
                 <Caption1 className={styles.muted} style={{ display: 'block', marginBottom: '8px' }}>
                   {disabledHint[a.disabled_reason]}
+                </Caption1>
+              )}
+              {s?.problem && (
+                <Caption1
+                  role="status"
+                  style={{ display: 'block', marginBottom: '8px', color: tokens.colorPaletteRedForeground1 }}
+                >
+                  {s.problem}
                 </Caption1>
               )}
               <div className={styles.stats}>

@@ -7,7 +7,7 @@ import {
   Globe20Regular,
 } from '@fluentui/react-icons';
 import type { FluentIcon } from '@fluentui/react-icons';
-import type { AdapterInfo, AdapterKind } from '../types';
+import type { AdapterInfo, AdapterKind, AdapterStat } from '../types';
 import { seriesColors, seriesColorsDark } from '../theme';
 
 export const kindIcon: Record<AdapterKind, FluentIcon> = {
@@ -39,4 +39,15 @@ export function adapterColor(adapterId: string | null, adapters: AdapterInfo[], 
   if (adapterId === null) return dark ? '#9E9E9E' : '#707070';
   const idx = usableAdapters(adapters).findIndex((a) => a.id === adapterId);
   return palette[(idx < 0 ? palette.length - 1 : idx) % palette.length];
+}
+
+/**
+ * One-line, human-readable explanation of why a per-task adapter stat is stalled or dropped,
+ * or null when it is healthy. The strings come from the engine and never contain URLs.
+ */
+export function adapterProblem(a: Pick<AdapterStat, 'dropped' | 'last_error' | 'drop_reason'>): string | null {
+  if (a.dropped) {
+    return [a.drop_reason ?? 'no longer used for this download', a.last_error].filter(Boolean).join('. Last error: ');
+  }
+  return a.last_error ? `Last error: ${a.last_error}` : null;
 }

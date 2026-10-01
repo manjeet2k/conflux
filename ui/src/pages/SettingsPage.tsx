@@ -10,12 +10,13 @@ import {
   Navigation20Regular,
   Warning20Regular,
   Bug20Regular,
+  ArrowSync20Regular,
 } from '@fluentui/react-icons';
 import { open } from '@tauri-apps/plugin-dialog';
 import { downloadDir } from '@tauri-apps/api/path';
 import { getVersion } from '@tauri-apps/api/app';
 import { api, errorText } from '../api';
-import type { Settings, ThemePreference } from '../types';
+import type { Settings, ThemePreference, UpdateInfo } from '../types';
 import { Page, SectionHeader, SettingsCard } from '../components/Page';
 
 const useStyles = makeStyles({
@@ -35,7 +36,19 @@ const useStyles = makeStyles({
     padding: '8px 12px',
     color: tokens.colorPaletteDarkOrangeForeground1,
   },
-  buttons: { display: 'flex', gap: '8px' },
+  buttons: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
+  notes: {
+    margin: 0,
+    padding: '8px 12px',
+    maxHeight: '160px',
+    overflow: 'auto',
+    whiteSpace: 'pre-wrap',
+    fontFamily: 'inherit',
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium,
+  },
 });
 
 const themeLabels: Record<ThemePreference, string> = { system: 'Use system setting', light: 'Light', dark: 'Dark' };
@@ -56,6 +69,10 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
   // The folder last found missing; the warning shows only while it is still the chosen one.
   const [missingDir, setMissingDir] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState<'idle' | 'checking' | 'installing'>('idle');
+  // Result of the last check: `update` when a newer version exists, `upToDate` when it does not.
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [upToDate, setUpToDate] = useState(false);
 
   useEffect(() => {
     downloadDir().then(setOsDownloads).catch(() => {});
@@ -76,6 +93,36 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
     };
   }, [settings.default_save_dir]);
   const folderMissing = settings.default_save_dir !== null && missingDir === settings.default_save_dir;
+
+  const checkForUpdate = async () => {
+    setUpdateBusy('checking');
+    setUpToDate(false);
+    try {
+      const found = await api.checkForUpdate();
+      setUpdate(found);
+      setUpToDate(found === null);
+    } catch (e) {
+      onError(errorText(e));
+    } finally {
+      setUpdateBusy('idle');
+    }
+  };
+
+  // Resolves only if installing failed: on success the installer closes and restarts the app.
+  const installUpdate = async () => {
+    setUpdateBusy('installing');
+    try {
+      await api.installUpdate();
+    } catch (e) {
+      onError(errorText(e));
+    } finally {
+      setUpdateBusy('idle');
+    }
+  };
+
+  const openAbout = (target: 'licenses' | 'repo' | 'releases') => {
+    api.openAboutLink(target).catch((e) => onError(errorText(e)));
+  };
 
   const copyDiagnostics = async () => {
     try {
@@ -238,6 +285,19 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
         />
       </SettingsCard>
 
+      <SettingsCard
+        icon={<ArrowSync20Regular />}
+        title="Check for updates on start"
+        description="Look for a new version shortly after Conflux starts. It only tells you; it never installs by itself. Contacts github.com and sends nothing else."
+      >
+        <Switch
+          checked={settings.check_updates_on_start}
+          onChange={(_, d) => onChange({ check_updates_on_start: d.checked })}
+          label={settings.check_updates_on_start ? 'On' : 'Off'}
+          labelPosition="before"
+        />
+      </SettingsCard>
+
       <SectionHeader>Support</SectionHeader>
       <SettingsCard
         icon={<Bug20Regular />}
@@ -250,13 +310,43 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
         </div>
       </SettingsCard>
 
-      <SectionHeader>About</SectionHeader>
+      <SectionHeader>About &amp; Updates</SectionHeader>
       <SettingsCard
         icon={<Info20Regular />}
         title="Conflux"
         description="Multi-interface download accelerator: splits files into byte ranges and fetches them over every network adapter at once."
       >
         <Text style={{ color: tokens.colorNeutralForeground3 }}>{version && `Version ${version}`}</Text>
+      </SettingsCard>
+      <SettingsCard
+        icon={<ArrowSync20Regular />}
+        title="Updates"
+        description={
+          update
+            ? `Version ${update.version} is available. Running downloads are paused, then resumed after the restart.`
+            : upToDate
+              ? 'You are running the latest version.'
+              : 'Check whether a newer version has been released.'
+        }
+      >
+        <div className={styles.buttons}>
+          <Button onClick={checkForUpdate} disabled={updateBusy !== 'idle'}>
+            {updateBusy === 'checking' ? 'Checking...' : 'Check for updates'}
+          </Button>
+          {update && (
+            <Button appearance="primary" onClick={installUpdate} disabled={updateBusy !== 'idle'}>
+              {updateBusy === 'installing' ? 'Installing...' : 'Install and restart'}
+            </Button>
+          )}
+        </div>
+      </SettingsCard>
+      {update?.notes && <pre className={styles.notes}>{update.notes}</pre>}
+      <SettingsCard icon={<Info20Regular />} title="Open source" description="Source code, release history and third-party licenses.">
+        <div className={styles.buttons}>
+          <Button onClick={() => openAbout('repo')}>Repository</Button>
+          <Button onClick={() => openAbout('releases')}>Releases</Button>
+          <Button onClick={() => openAbout('licenses')}>Third-party licenses</Button>
+        </div>
       </SettingsCard>
     </Page>
   );

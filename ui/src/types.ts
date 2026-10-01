@@ -44,6 +44,10 @@ export interface AdapterStat {
   active_connections: number;
   /** Dropped by the engine after repeated failures. */
   dropped: boolean;
+  /** Human-readable cause of the latest failed attempt on this adapter (never a URL); null if healthy. */
+  last_error?: string | null;
+  /** Why the engine stopped using this adapter in this task; null if still in use. */
+  drop_reason?: string | null;
 }
 
 // Matches Rust DownloadTaskState. Returned by list_tasks/start/pause/resume and emitted as
@@ -87,8 +91,21 @@ export interface Settings {
   notify_on_complete: boolean;
   close_to_tray: boolean;
   auto_aggregate_adapters: boolean;
+  /** Quiet update check shortly after start; only notifies, never installs. */
+  check_updates_on_start: boolean;
   adapter_overrides?: Record<string, boolean>;
 }
+
+// Matches Rust UpdateInfo (check_for_update); null from the command means up to date.
+export interface UpdateInfo {
+  version: string;
+  notes: string | null;
+  /** Publish date as the updater reports it (RFC 3339-like), if the manifest has one. */
+  date: string | null;
+}
+
+/** Targets `open_about_link` accepts; the backend maps them to fixed paths/URLs. */
+export type AboutLink = 'licenses' | 'repo' | 'releases';
 
 // Matches Rust Diagnostics (get_diagnostics): no paths, user names, URLs or full IPs.
 export interface Diagnostics {
@@ -125,6 +142,7 @@ export interface WindowBackdrop {
 }
 
 export const PROGRESS_EVENT = 'download-progress';
+export const UPDATE_AVAILABLE_EVENT = 'update-available';
 export const NETWORK_ADAPTERS_CHANGED_EVENT = 'network-adapters-changed';
 
 export type ViewId = 'all' | 'active' | 'paused' | 'completed' | 'failed' | 'network' | 'settings';

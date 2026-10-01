@@ -37,6 +37,7 @@ let settings: Settings = {
   notify_on_complete: true,
   close_to_tray: true,
   auto_aggregate_adapters: true,
+  check_updates_on_start: true,
   adapter_overrides: {},
 };
 
@@ -108,6 +109,8 @@ function tick() {
         speed_bytes_sec: speed,
         active_connections: settings.connections_per_adapter,
         dropped: false,
+        last_error: null,
+        drop_reason: null,
       };
     });
     t.speed_bytes_sec = t.adapters.reduce((s, a) => s + a.speed_bytes_sec, 0);
@@ -167,6 +170,22 @@ export function installMockBackend() {
           };
           return { ...settings, adapter_overrides: { ...settings.adapter_overrides } };
         }
+        case 'check_for_update':
+          return new Promise((r) =>
+            setTimeout(
+              () =>
+                r({
+                  version: '0.2.0-beta.2',
+                  notes: '### Fixed\n- Resume after an adapter disconnect.\n- Faster startup.',
+                  date: '2026-10-01 10:00:00.0 +00:00:00',
+                }),
+              600,
+            ),
+          );
+        case 'install_update':
+          return new Promise((_, reject) => setTimeout(() => reject('Mock backend: installing is not simulated'), 800));
+        case 'open_about_link':
+          return null;
         case 'take_startup_notices':
           return [];
         case 'folder_exists':

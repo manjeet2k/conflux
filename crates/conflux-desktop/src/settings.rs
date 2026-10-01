@@ -34,7 +34,14 @@ pub struct Settings {
     pub notify_on_complete: bool,
     pub close_to_tray: bool,
     pub auto_aggregate_adapters: bool,
+    /// Quiet update check shortly after start; it only notifies, never installs.
+    #[serde(default = "default_true")]
+    pub check_updates_on_start: bool,
     pub adapter_overrides: std::collections::HashMap<String, bool>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn legacy_schema_version() -> u32 {
@@ -52,6 +59,7 @@ impl Default for Settings {
             notify_on_complete: true,
             close_to_tray: true,
             auto_aggregate_adapters: true,
+            check_updates_on_start: true,
             adapter_overrides: std::collections::HashMap::new(),
         }
     }

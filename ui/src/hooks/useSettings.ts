@@ -10,6 +10,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notify_on_complete: true,
   close_to_tray: true,
   auto_aggregate_adapters: true,
+  check_updates_on_start: true,
 };
 
 /**

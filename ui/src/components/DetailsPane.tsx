@@ -22,7 +22,7 @@ import {
 import type { AdapterInfo, DownloadTask } from '../types';
 import { formatBytes, formatDate, formatEta, formatSpeed, progressOf } from '../utils/formatters';
 import { FileIcon } from './FileIcon';
-import { adapterColor } from '../utils/adapters';
+import { adapterColor, adapterProblem } from '../utils/adapters';
 import { StatusLabel } from './StatusLabel';
 import { progressColor } from '../utils/status';
 import { ChunkMap } from './ChunkMap';
@@ -236,6 +236,11 @@ export const DetailsPane: React.FC<DetailsPaneProps> = (p) => {
                   {a.active_connections} active connection{a.active_connections === 1 ? '' : 's'} ·{' '}
                   {formatBytes(a.downloaded_bytes)} received
                 </Caption1>
+                {adapterProblem(a) && (
+                  <Caption1 role="status" style={{ color: tokens.colorPaletteRedForeground1 }}>
+                    {adapterProblem(a)}
+                  </Caption1>
+                )}
               </div>
             );
           })}
