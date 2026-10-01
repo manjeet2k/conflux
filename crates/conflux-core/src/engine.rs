@@ -1,6 +1,8 @@
 use crate::adapter::{build_bound_http_client, NetworkAdapter, DEFAULT_STALL_TIMEOUT};
-use crate::checksum::compute_sha256;
-use crate::chunk::{plan_chunks, Chunk, ChunkScheduler, ChunkStatus, Claim, FailOutcome};
+use crate::checksum::compute_sha256_cancellable;
+use crate::chunk::{
+    chunk_count, try_plan_chunks, Chunk, ChunkScheduler, ChunkStatus, Claim, FailOutcome,
+};
 use crate::filename::derive_filename;
 use crate::resume::{
     decode_ranges, encode_ranges, read_sidecar, remove_resume_sidecar, resume_sidecar_path,
@@ -21,6 +23,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, watch, Notify};
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{debug, error, info, warn};
+
+pub use crate::chunk::MAX_PLANNED_CHUNKS;
 
 /// Maximum attempts per chunk before it is marked `Failed`.
 pub const MAX_CHUNK_ATTEMPTS: u32 = 5;
@@ -122,6 +126,8 @@ pub struct DownloadEngine {
     connections_per_adapter: usize,
     retry_backoff: Duration,
     stall_timeout: Duration,
+    /// Test hook: sleep after every 64 KiB hashed (see `with_hash_throttle`).
+    hash_throttle: Duration,
 }
 
 impl Default for DownloadEngine {
@@ -131,6 +137,7 @@ impl Default for DownloadEngine {
             connections_per_adapter: 4,
             retry_backoff: DEFAULT_RETRY_BACKOFF,
             stall_timeout: DEFAULT_STALL_TIMEOUT,
+            hash_throttle: Duration::ZERO,
         }
     }
 }
@@ -496,6 +503,14 @@ impl DownloadEngine {
         self
     }
 
+    /// Test hook: slows the final SHA-256 pass (sleep per 64 KiB) so tests can cancel
+    /// inside the hash phase. Not for production use.
+    #[doc(hidden)]
+    pub fn with_hash_throttle(mut self, per_64k: Duration) -> Self {
+        self.hash_throttle = per_64k;
+        self
+    }
+
     /// Sets the stall timeout: an attempt fails when no bytes arrive for this long (default 20s).
     pub fn with_stall_timeout(mut self, timeout: Duration) -> Self {
         self.stall_timeout = timeout;
@@ -608,6 +623,10 @@ impl DownloadEngine {
             bail!("Remote server returned non-success status: {}", status);
         };
 
+        if supports_ranges {
+            Self::check_chunk_plan(total_bytes, self.chunk_size)?;
+        }
+
         Ok(DownloadProbe {
             url: url.to_string(),
             total_bytes,
@@ -616,6 +635,33 @@ impl DownloadEngine {
             etag,
             last_modified,
         })
+    }
+
+    /// Refuses a size that would need more than `MAX_PLANNED_CHUNKS` chunks.
+    fn check_chunk_plan(total_bytes: u64, chunk_size: u64) -> Result<()> {
+        let n = chunk_count(total_bytes, chunk_size);
+        if n > MAX_PLANNED_CHUNKS {
+            bail!(
+                "Refusing download: {} bytes at {} bytes per chunk needs too many chunks ({} > {})",
+                total_bytes,
+                chunk_size,
+                n,
+                MAX_PLANNED_CHUNKS
+            );
+        }
+        Ok(())
+    }
+
+    /// Hashes the finished file; `Err(DownloadCancelled)` if cancelled meanwhile.
+    async fn hash_output(
+        &self,
+        output_path: &Path,
+        cancel: &mut watch::Receiver<bool>,
+    ) -> Result<String> {
+        match compute_sha256_cancellable(output_path, cancel, self.hash_throttle).await? {
+            Some(sha) => Ok(sha),
+            None => Err(cancelled_error()),
+        }
     }
 
     async fn probe_head(
@@ -832,7 +878,8 @@ impl DownloadEngine {
     ) -> Result<(Vec<Chunk>, u64, SparseFileWriter)> {
         let state = read_sidecar(&resume_sidecar_path(output_path))?;
         validate(&state, probe)?;
-        let mut chunks = plan_chunks(probe.total_bytes, state.chunk_size);
+        // A tampered sidecar must not make us allocate an absurd plan.
+        let mut chunks = try_plan_chunks(probe.total_bytes, state.chunk_size)?;
         let done = decode_ranges(&state.completed, chunks.len())?;
         let writer = SparseFileWriter::open_existing(output_path, probe.total_bytes).await?;
         for id in done {
@@ -888,7 +935,7 @@ impl DownloadEngine {
                 remove_resume_sidecar(output_path).with_context(|| {
                     format!("Failed to remove stale resume data for {:?}", output_path)
                 })?;
-                let chunks = plan_chunks(probe.total_bytes, self.chunk_size);
+                let chunks = try_plan_chunks(probe.total_bytes, self.chunk_size)?;
                 if chunks.is_empty() {
                     bail!(
                         "Refusing to download: planned zero chunks for {} bytes (chunk size {})",
@@ -1102,8 +1149,10 @@ impl DownloadEngine {
             error!("Resume sidecar task panicked: {:?}", e);
             None
         });
-        if user_cancelled || !shared.scheduler().all_completed() {
+        {
             // Record the final state so a later `resume` loses at most in-flight chunks.
+            // Also when everything completed: the sidecar must list every chunk until the
+            // SHA-256 is done, so a pause during hashing resumes into a verify-only run.
             persist_sidecar(&shared, &sidecar, &mut last_persisted).await;
         }
 
@@ -1181,12 +1230,6 @@ impl DownloadEngine {
         }
 
         writer.sync().await.context("Failed syncing file to disk")?;
-        if let Err(e) = remove_resume_sidecar(output_path) {
-            warn!(
-                "Failed to remove resume sidecar for {:?}: {}",
-                output_path, e
-            );
-        }
 
         let duration = start_time.elapsed().as_secs_f64();
         info!(
@@ -1195,7 +1238,16 @@ impl DownloadEngine {
             probe.total_bytes as f64 / duration.max(1e-9) / (1024.0 * 1024.0)
         );
 
-        let sha256 = compute_sha256(output_path).await?;
+        // Keep the sidecar until the hash succeeded: if a cancel/abort lands while hashing,
+        // the next resume must still see "all chunks completed" instead of truncating a
+        // finished file.
+        let sha256 = self.hash_output(output_path, &mut cancel).await?;
+        if let Err(e) = remove_resume_sidecar(output_path) {
+            warn!(
+                "Failed to remove resume sidecar for {:?}: {}",
+                output_path, e
+            );
+        }
         info!("File SHA-256: {}", sha256);
         Ok(sha256)
     }
@@ -1309,7 +1361,7 @@ impl DownloadEngine {
 
         let received = result?;
         info!("Single-stream download finished: {} bytes", received);
-        let sha256 = compute_sha256(output_path).await?;
+        let sha256 = self.hash_output(output_path, &mut cancel).await?;
         info!("File SHA-256: {}", sha256);
         Ok(sha256)
     }

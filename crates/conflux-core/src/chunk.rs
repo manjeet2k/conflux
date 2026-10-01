@@ -48,6 +48,35 @@ impl Chunk {
     }
 }
 
+/// Upper bound on the number of chunks one download may be planned into (~100 MB of
+/// bookkeeping). Protects against hostile sizes from a probe or a tampered resume sidecar;
+/// at the default 4 MiB chunk size it still allows files of ~8 TB.
+pub const MAX_PLANNED_CHUNKS: u64 = 2_000_000;
+
+/// Number of chunks `plan_chunks(total_bytes, chunk_size)` would produce (0 if either is 0).
+pub fn chunk_count(total_bytes: u64, chunk_size: u64) -> u64 {
+    if total_bytes == 0 || chunk_size == 0 {
+        return 0;
+    }
+    total_bytes.div_ceil(chunk_size)
+}
+
+/// Like [`plan_chunks`], but refuses plans of more than [`MAX_PLANNED_CHUNKS`] chunks
+/// before allocating anything.
+pub fn try_plan_chunks(total_bytes: u64, chunk_size: u64) -> anyhow::Result<Vec<Chunk>> {
+    let n = chunk_count(total_bytes, chunk_size);
+    if n > MAX_PLANNED_CHUNKS {
+        anyhow::bail!(
+            "refusing to plan too many chunks: {} bytes at {} bytes per chunk is {} chunks (maximum {})",
+            total_bytes,
+            chunk_size,
+            n,
+            MAX_PLANNED_CHUNKS
+        );
+    }
+    Ok(plan_chunks(total_bytes, chunk_size))
+}
+
 /// Splits a file of `total_bytes` into non-overlapping, contiguous chunks of at most `chunk_size`.
 /// Returns an empty plan when `total_bytes == 0` or `chunk_size == 0`.
 pub fn plan_chunks(total_bytes: u64, chunk_size: u64) -> Vec<Chunk> {
@@ -309,6 +338,23 @@ mod tests {
             (chunks[0].start, chunks[0].end, chunks[0].size),
             (0, 499, 500)
         );
+    }
+
+    #[test]
+    fn test_try_plan_chunks_enforces_cap() {
+        let cap = MAX_PLANNED_CHUNKS;
+        // Exactly at the cap is fine and still satisfies the coverage invariant.
+        let ok = try_plan_chunks(cap * 2, 2).unwrap();
+        assert_eq!(ok.len() as u64, cap);
+        assert_eq!(ok.last().unwrap().end, cap * 2 - 1);
+        // One byte over the cap, absurd sizes and u64::MAX are refused without allocating.
+        assert!(try_plan_chunks(cap * 2 + 1, 2).is_err());
+        assert!(try_plan_chunks(1 << 60, 4 << 20).is_err());
+        assert!(try_plan_chunks(u64::MAX, 1).is_err());
+        assert!(try_plan_chunks(u64::MAX, u64::MAX).unwrap().len() == 1);
+        assert!(try_plan_chunks(0, 10).unwrap().is_empty());
+        assert_eq!(chunk_count(10, 3), 4);
+        assert_eq!(chunk_count(u64::MAX, 1), u64::MAX);
     }
 
     #[test]

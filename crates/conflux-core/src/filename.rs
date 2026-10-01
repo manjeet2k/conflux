@@ -223,6 +223,13 @@ fn truncate_preserving_extension(name: &str, max_bytes: usize) -> String {
     format!("{}{}", stem, ext)
 }
 
+/// `true` for names the resume machinery owns: `*.conflux.json` and its temp file
+/// `*.conflux.json.tmp` (compared case-insensitively, like the Windows file system).
+pub(crate) fn is_sidecar_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".conflux.json") || lower.ends_with(".conflux.json.tmp")
+}
+
 /// Produces a bare, Windows-safe file name from an untrusted value (header or URL).
 ///
 /// - keeps only the final component after any `/` or `\` (defeats path traversal)
@@ -231,6 +238,7 @@ fn truncate_preserving_extension(name: &str, max_bytes: usize) -> String {
 /// - rejects `.`/`..`/empty (falls back to `download.bin`)
 /// - prefixes `_` to Windows reserved device names (`CON`, `nul.txt`, `COM1`, ...)
 /// - caps the length at ~200 bytes on a char boundary, preserving the extension
+///   (so it can never collide with a resume sidecar `<name>.conflux.json`, or its `.tmp`)
 pub fn sanitize_filename(raw: &str) -> String {
     let last = raw.rsplit(['/', '\\']).next().unwrap_or("");
     let cleaned: String = last
@@ -249,6 +257,9 @@ pub fn sanitize_filename(raw: &str) -> String {
     if is_reserved_windows_name(&name) {
         name.insert(0, '_');
     }
+    if is_sidecar_name(&name) {
+        name.push('_');
+    }
 
     let name = truncate_preserving_extension(&name, MAX_FILENAME_BYTES);
     if name.is_empty() {
@@ -264,7 +275,17 @@ pub fn sanitize_filename(raw: &str) -> String {
 /// Existence is checked with `symlink_metadata`, so a dangling symlink counts as taken.
 /// Note: this is a check-then-use helper; the caller creates the file afterwards.
 fn unique_path(dir: &Path, filename: &str) -> PathBuf {
-    let taken = |p: &Path| std::fs::symlink_metadata(p).is_ok();
+    // A candidate is also taken if it *is* a sidecar name or if a sidecar of that name
+    // already exists (a paused download whose output file was deleted): claiming it would
+    // let the old sidecar describe the new file.
+    let taken = |p: &Path| {
+        let name_is_sidecar = p
+            .file_name()
+            .is_some_and(|n| is_sidecar_name(&n.to_string_lossy()));
+        name_is_sidecar
+            || std::fs::symlink_metadata(p).is_ok()
+            || std::fs::symlink_metadata(crate::resume::resume_sidecar_path(p)).is_ok()
+    };
 
     let candidate = dir.join(filename);
     if !taken(&candidate) {
@@ -313,6 +334,47 @@ pub fn claim_unique_path(dir: &Path, filename: &str) -> std::io::Result<PathBuf>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sanitize_refuses_sidecar_names() {
+        for raw in [
+            "f.bin.conflux.json",
+            "F.BIN.Conflux.JSON",
+            "f.bin.conflux.json.tmp",
+            "x.conflux.json.",
+        ] {
+            let name = sanitize_filename(raw);
+            assert!(!is_sidecar_name(&name), "{raw} -> {name}");
+            assert!(
+                name.starts_with(raw.trim_end_matches('.')),
+                "{raw} -> {name}"
+            );
+        }
+        assert_eq!(sanitize_filename("ok.json"), "ok.json");
+    }
+
+    #[test]
+    fn test_claim_unique_path_never_claims_a_sidecar_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = claim_unique_path(dir.path(), "f.bin.conflux.json").unwrap();
+        assert!(
+            !is_sidecar_name(p.file_name().unwrap().to_str().unwrap()),
+            "{p:?}"
+        );
+    }
+
+    #[test]
+    fn test_claim_unique_path_skips_candidate_with_existing_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        // A paused download's sidecar whose output file is gone.
+        std::fs::write(dir.path().join("f.bin.conflux.json"), b"{}").unwrap();
+        let p = claim_unique_path(dir.path(), "f.bin").unwrap();
+        assert_eq!(p, dir.path().join("f (1).bin"));
+        assert_eq!(
+            std::fs::read(dir.path().join("f.bin.conflux.json")).unwrap(),
+            b"{}"
+        );
+    }
 
     #[test]
     fn test_percent_decode() {

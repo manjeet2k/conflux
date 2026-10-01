@@ -1405,3 +1405,147 @@ async fn non_ascii_content_disposition_keeps_filename_star() {
     let probe = test_engine().probe(&server.url("/dl?id=7")).await.unwrap();
     assert_eq!(probe.suggested_filename, "résumé.pdf");
 }
+
+// ─── Finished-download safety (hash phase) ───────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_during_hashing_keeps_sidecar_and_resume_does_not_redownload() {
+    let data = payload(PAYLOAD_LEN, 60);
+    let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    // Slow hashing so the cancel reliably lands inside the hash phase.
+    let engine = test_engine().with_hash_throttle(Duration::from_millis(20));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hashing.bin");
+    let probe = engine.probe(&server.url("/hashing.bin")).await.unwrap();
+
+    let (tx, mut rx) = mpsc::channel::<ProgressUpdate>(1024);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let watcher = tokio::spawn(async move {
+        while let Some(p) = rx.recv().await {
+            if p.total_chunks > 0 && p.completed_chunks == p.total_chunks {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                cancel_tx.send(true).unwrap();
+                break;
+            }
+        }
+        // Keep draining so the engine never blocks on the channel.
+        while rx.recv().await.is_some() {}
+    });
+    let started = Instant::now();
+    let err = engine
+        .download(&probe, &path, &[], Some(tx), cancel_rx)
+        .await
+        .expect_err("cancel during hashing must abort");
+    assert!(err.downcast_ref::<DownloadCancelled>().is_some(), "{err:#}");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "cancel did not interrupt hashing"
+    );
+    watcher.await.unwrap();
+    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 17);
+
+    let sidecar = resume_sidecar_path(&path);
+    let json = std::fs::read_to_string(&sidecar).expect("sidecar must survive a hashing cancel");
+    assert!(json.contains("\"completed\":\"0-16\""), "{json}");
+    assert!(
+        std::fs::read(&path).unwrap() == *data,
+        "file must be intact"
+    );
+
+    let fast = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let (result, _) = resume_to_end(&test_engine(), &fast.url("/hashing.bin"), &path).await;
+    assert_eq!(result.expect("resume must succeed"), sha256_hex(&data));
+    assert_eq!(
+        fast.stats.chunk_requests.load(Ordering::SeqCst),
+        0,
+        "a fully downloaded file must not be fetched again"
+    );
+    assert!(std::fs::read(&path).unwrap() == *data, "file byte-exact");
+    assert!(!sidecar.exists(), "sidecar removed after the hash");
+}
+
+// ─── Hostile sizes ───────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn hostile_probe_total_is_rejected_without_allocating() {
+    let mut cfg = ServerConfig::new(payload(1024, 61));
+    cfg.probe_total_override = Some(1 << 60);
+    let server = TestServer::start(cfg).await;
+    let err = test_engine()
+        .probe(&server.url("/huge.bin"))
+        .await
+        .expect_err("absurd size must be refused");
+    assert!(format!("{err:#}").contains("too many chunks"), "{err:#}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hostile_download_probe_is_refused_by_download() {
+    let server = TestServer::start(ServerConfig::new(payload(1024, 62))).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("huge.bin");
+    let probe = DownloadProbe {
+        url: server.url("/huge.bin"),
+        total_bytes: 1 << 60,
+        supports_ranges: true,
+        suggested_filename: "huge.bin".into(),
+        etag: None,
+        last_modified: None,
+    };
+    let (_tx, cancel_rx) = watch::channel(false);
+    let err = test_engine()
+        .download(&probe, &path, &[], None, cancel_rx)
+        .await
+        .expect_err("must refuse");
+    assert!(format!("{err:#}").contains("too many chunks"), "{err:#}");
+    assert!(!path.exists(), "nothing may be created");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hostile_sidecar_chunk_size_falls_back_to_fresh_start() {
+    let data = payload(PAYLOAD_LEN, 63);
+    let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hostile.bin");
+    std::fs::write(&path, vec![0u8; PAYLOAD_LEN]).unwrap();
+    // chunk_size 1 on a 4 MiB file => ~4.2M chunks, above the cap.
+    std::fs::write(
+        resume_sidecar_path(&path),
+        format!(
+            "{{\"version\":1,\"total_bytes\":{PAYLOAD_LEN},\"chunk_size\":1,\"etag\":null,\"last_modified\":null,\"completed\":\"\"}}"
+        ),
+    )
+    .unwrap();
+    let (result, _) = resume_to_end(&test_engine(), &server.url("/hostile.bin"), &path).await;
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 17);
+    assert!(std::fs::read(&path).unwrap() == *data);
+}
+
+// ─── Chunk status handling ───────────────────────────────────────────────────
+
+async fn assert_chunk_status_fails(code: u16, seed: u64) {
+    let data = payload(PAYLOAD_LEN, seed);
+    let mut cfg = ServerConfig::new(Arc::clone(&data));
+    cfg.chunk_status = Some(code);
+    let server = TestServer::start(cfg).await;
+    let out = run_download(&test_engine(), &server, &[]).await;
+    let msg = format!("{:#}", out.result.expect_err("must fail, not complete"));
+    assert!(msg.contains(&code.to_string()), "{msg}");
+    // Bounded retries, and the sidecar must not claim any chunk finished.
+    assert!(server.stats.chunk_requests.load(Ordering::SeqCst) <= 17 * 5);
+    let json = std::fs::read_to_string(resume_sidecar_path(&out.path)).unwrap_or_default();
+    assert!(
+        json.is_empty() || json.contains("\"completed\":\"\""),
+        "{json}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chunk_416_is_a_failure_not_completion() {
+    assert_chunk_status_fails(416, 64).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chunk_redirect_without_location_is_a_failure() {
+    assert_chunk_status_fails(302, 65).await;
+}

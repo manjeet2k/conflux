@@ -61,6 +61,8 @@ pub struct ServerConfig {
     /// Evaluate `If-Range` on chunk requests (mismatch => 200 + full body), like RFC 9110.
     /// `false` simulates a server that ignores the header.
     pub honor_if_range: bool,
+    /// Advertise this total in the probe's `Content-Range` instead of the real length.
+    pub probe_total_override: Option<u64>,
 }
 
 /// A new version of the resource, served from the `after_chunks`-th chunk request on
@@ -92,6 +94,7 @@ impl ServerConfig {
             last_modified: None,
             content_change: None,
             honor_if_range: true,
+            probe_total_override: None,
         }
     }
 
@@ -452,9 +455,13 @@ async fn handle(
     } else {
         (start, end)
     };
+    let advertised_total = match (is_probe, config.probe_total_override) {
+        (true, Some(t)) => t,
+        _ => len,
+    };
     headers.push((
         "Content-Range".to_string(),
-        format!("bytes {}-{}/{}", cr_start, cr_end, len),
+        format!("bytes {}-{}/{}", cr_start, cr_end, advertised_total),
     ));
     if let Some(cd) = &config.content_disposition {
         headers.push(("Content-Disposition".to_string(), cd.clone()));
