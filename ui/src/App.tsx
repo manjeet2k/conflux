@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Button,
   FluentProvider,
   Toast,
+  ToastBody,
   ToastTitle,
   Toaster,
   makeStyles,
@@ -19,8 +21,8 @@ import {
 } from '@fluentui/react-icons';
 import { listen } from '@tauri-apps/api/event';
 import { api, errorText } from './api';
-import type { AdapterInfo, DownloadTask, TaskStatus, ViewId } from './types';
-import { NETWORK_ADAPTERS_CHANGED_EVENT } from './types';
+import type { AdapterInfo, DownloadTask, TaskStatus, UpdateInfo, ViewId } from './types';
+import { NETWORK_ADAPTERS_CHANGED_EVENT, UPDATE_AVAILABLE_EVENT } from './types';
 import { darkTheme, lightTheme, surfaceVars } from './theme';
 import { useDownloads } from './hooks/useDownloads';
 import { useSettings } from './hooks/useSettings';
@@ -153,21 +155,56 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Read by `openAdd` so a second open request (tray, shortcut) never resets an open form.
-  const addOpenRef = useRef(addOpen);
+  // Read by `openAdd` so a second open request (tray, paste, shortcut) never resets an open
+  // form or stacks a dialog on top of another one (e.g. the Remove dialog).
+  const dialogOpenRef = useRef(false);
   useEffect(() => {
-    addOpenRef.current = addOpen;
-  }, [addOpen]);
+    dialogOpenRef.current = addOpen || removeIds.length > 0;
+  }, [addOpen, removeIds]);
 
   const openAdd = useCallback(
     (url = '') => {
-      if (addOpenRef.current) return;
+      if (dialogOpenRef.current) return;
       refreshAdapters();
       setAddUrl(url);
       setAddOpen(true);
     },
     [refreshAdapters]
   );
+
+  const openAbout = useCallback(() => {
+    setView('settings');
+    setSelected(new Set());
+    // The Settings page mounts on the next render; scroll to its About section after that.
+    setTimeout(() => document.getElementById('settings-about')?.scrollIntoView({ block: 'start' }), 50);
+  }, []);
+
+  // The quiet startup check found a newer version: tell the user, don't interrupt them.
+  useEffect(() => {
+    const unlisten = listen<UpdateInfo>(UPDATE_AVAILABLE_EVENT, (event) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle
+            action={
+              <Button appearance="transparent" size="small" onClick={openAbout}>
+                View
+              </Button>
+            }
+          >
+            Update available
+          </ToastTitle>
+          <ToastBody subtitle="Open Settings → About & Updates to install it.">
+            Conflux {event.payload.version} is ready to download.
+          </ToastBody>
+        </Toast>,
+        { intent: 'info', timeout: 15000 }
+      );
+    });
+    unlisten.catch((e) => console.error('Failed to listen for updates:', e));
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => undefined);
+    };
+  }, [dispatchToast, openAbout]);
 
   // ─── Derived lists ───
   const counts = useMemo(
@@ -239,7 +276,7 @@ export const App: React.FC = () => {
       }
     };
     const onPaste = (e: ClipboardEvent) => {
-      if (addOpen || isEditable(e.target)) return;
+      if (dialogOpenRef.current || isEditable(e.target)) return;
       const url = extractUrl(e.clipboardData?.getData('text') ?? '');
       if (url) {
         e.preventDefault();
@@ -266,9 +303,11 @@ export const App: React.FC = () => {
   useEffect(() => {
     const unlistenAdd = listen('open-add-dialog', () => openAdd());
     const unlistenSettings = listen('open-settings', () => setView('settings'));
+    unlistenAdd.catch((e) => console.error('Failed to listen for open-add-dialog:', e));
+    unlistenSettings.catch((e) => console.error('Failed to listen for open-settings:', e));
     return () => {
-      unlistenAdd.then((fn) => fn());
-      unlistenSettings.then((fn) => fn());
+      unlistenAdd.then((fn) => fn()).catch(() => undefined);
+      unlistenSettings.then((fn) => fn()).catch(() => undefined);
     };
   }, [openAdd]);
 

@@ -4,8 +4,10 @@
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import type { AdapterInfo, Diagnostics, DownloadTask, Settings } from '../types';
-import { NETWORK_ADAPTERS_CHANGED_EVENT, PROGRESS_EVENT } from '../types';
+import { NETWORK_ADAPTERS_CHANGED_EVENT, PROGRESS_EVENT, UPDATE_AVAILABLE_EVENT } from '../types';
 
+// Keep in sync with the real app version (Cargo.toml / tauri.conf.json / ui/package.json).
+const APP_VERSION = '0.1.5';
 const MB = 1024 * 1024;
 const adapters: AdapterInfo[] = [
   { id: 'Ethernet:192.168.1.24', name: 'Ethernet', ip: '192.168.1.24', is_ipv4: true, is_loopback: false, enabled: true, usable: true, kind: 'ethernet', disabled_reason: null },
@@ -195,7 +197,7 @@ export function installMockBackend() {
         case 'get_diagnostics': {
           // Same shape and redaction rules as the backend: no paths, user names, URLs, full IPs.
           const diag: Diagnostics = {
-            app_version: '0.1.0',
+            app_version: APP_VERSION,
             os: 'windows',
             arch: 'x86_64',
             webview_version: '130.0.2849.80',
@@ -253,6 +255,24 @@ export function installMockBackend() {
           emit(PROGRESS_EVENT, t);
           return { ...t };
         }
+        case 'pause_all':
+          for (const t of tasks) {
+            if (t.status !== 'downloading') continue;
+            Object.assign(t, { status: 'paused', speed_bytes_sec: 0, eta_seconds: 0, active_chunks: 0, adapters: [] });
+            t.chunk_map = t.chunk_map?.replace(/>/g, '.') ?? null;
+            emit(PROGRESS_EVENT, t);
+          }
+          return null;
+        case 'resume_all':
+          // Like the backend, a task that can't resume is skipped, not an error for the batch.
+          for (const t of tasks) {
+            if (t.status !== 'paused' && t.status !== 'error') continue;
+            if (!adapters.some((a) => a.enabled)) break;
+            Object.assign(t, { status: 'downloading', error: null, speed_bytes_sec: 0, eta_seconds: 0, active_chunks: 0, adapters: [] });
+            t.chunk_map = t.chunk_map?.replace(/[>!]/g, '.') ?? null;
+            emit(PROGRESS_EVENT, t);
+          }
+          return null;
         case 'remove_download': {
           const idx = tasks.findIndex((t) => t.id === args.taskId);
           // Like the backend, removing an unknown task is a no-op.
@@ -265,7 +285,7 @@ export function installMockBackend() {
         case 'plugin:path|resolve_directory':
           return 'C:\\Users\\pc\\Downloads';
         case 'plugin:app|version':
-          return '0.1.0';
+          return APP_VERSION;
         case 'plugin:window|is_maximized':
           return false;
         default:
@@ -276,4 +296,9 @@ export function installMockBackend() {
     { shouldMockEvents: true }
   );
   window.setInterval(tick, 200);
+  // Simulate the startup update check finding a release (exercises the toast).
+  window.setTimeout(
+    () => emit(UPDATE_AVAILABLE_EVENT, { version: '0.2.0-beta.2', notes: null, date: null }),
+    2500,
+  );
 }

@@ -310,7 +310,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
         </div>
       </SettingsCard>
 
-      <SectionHeader>About &amp; Updates</SectionHeader>
+      <SectionHeader id="settings-about">About &amp; Updates</SectionHeader>
       <SettingsCard
         icon={<Info20Regular />}
         title="Conflux"

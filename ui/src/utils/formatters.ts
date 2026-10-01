@@ -18,13 +18,12 @@ export function formatSpeed(bytesPerSec: number): string {
 
 export function formatEta(seconds: number): string {
   if (!seconds || seconds <= 0 || !isFinite(seconds)) return '--';
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.round(seconds % 60);
-  if (mins < 60) return `${mins}m ${secs}s`;
-  const hours = Math.floor(mins / 60);
-  const remMins = mins % 60;
-  return `${hours}h ${remMins}m`;
+  // Round once, then split, so 59.6 s becomes "1m 0s" rather than "60s" or "0m 60s".
+  const total = Math.max(1, Math.round(seconds));
+  if (total < 60) return `${total}s`;
+  const mins = Math.floor(total / 60);
+  if (mins < 60) return `${mins}m ${total % 60}s`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'short' });

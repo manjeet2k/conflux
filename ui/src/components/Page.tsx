@@ -60,10 +60,10 @@ export const Page: React.FC<{ title: string; actions?: React.ReactNode; children
   );
 };
 
-export const SectionHeader: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const SectionHeader: React.FC<{ children: React.ReactNode; id?: string }> = ({ children, id }) => {
   const styles = useStyles();
   return (
-    <Text as="h2" className={styles.section} block>
+    <Text as="h2" id={id} className={styles.section} block>
       {children}
     </Text>
   );

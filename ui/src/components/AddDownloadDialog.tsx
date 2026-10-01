@@ -151,7 +151,11 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
         <DialogBody>
           <DialogTitle>Add download</DialogTitle>
           <DialogContent className={styles.content}>
-            <Field label="Address" required>
+            <Field
+              label="Address"
+              required
+              hint="The link is checked automatically after you paste or type it."
+            >
               <Input
                 autoFocus
                 contentBefore={<Link20Regular />}
