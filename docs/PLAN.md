@@ -1,3 +1,5 @@
+> **Historical document.** This is the original design plan and no longer tracks the code. See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works now and [ROADMAP.md](ROADMAP.md) for what is planned.
+
 # Conflux: Native Windows Multi-Source & Multi-Interface Download Accelerator
 
 A native, blazing-fast Windows download manager (inspired by Free Download Manager / Internet Download Manager) powered by **Rust** and **Tauri v2**, featuring **network channel bonding** to aggregate bandwidth across all active network media (Wi-Fi, Ethernet, USB 4G/5G mobile tethering) and multiple mirror sources.

@@ -85,7 +85,8 @@ conflux/
 │   │   └── App.tsx
 │   └── package.json
 └── docs/
-    └── PLAN.md                        # Architecture & engineering roadmap
+    ├── PLAN.md                        # Original architecture & engineering plan
+    └── ROADMAP.md                     # Production-readiness roadmap (task list for agents)
 ```
 
 ---
