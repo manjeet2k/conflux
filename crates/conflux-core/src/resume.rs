@@ -113,7 +113,8 @@ pub fn remove_resume_sidecar(output_path: &Path) -> std::io::Result<()> {
 }
 
 /// Checks that `state` describes the same remote resource as `probe`.
-/// Validators (ETag / Last-Modified) are compared only when both sides have them.
+/// Validators (ETag / Last-Modified) must be equal, including being absent on both sides:
+/// one that appeared or disappeared means the server can no longer vouch for the old bytes.
 pub(crate) fn validate(state: &ResumeState, probe: &DownloadProbe) -> Result<()> {
     if state.version != SIDECAR_VERSION {
         bail!("unsupported sidecar version {}", state.version);
@@ -131,15 +132,19 @@ pub(crate) fn validate(state: &ResumeState, probe: &DownloadProbe) -> Result<()>
     if state.chunk_size == 0 {
         bail!("sidecar chunk size is 0");
     }
-    if let (Some(a), Some(b)) = (&state.etag, &probe.etag) {
-        if a != b {
-            bail!("ETag changed: sidecar {a:?}, server {b:?}");
-        }
+    if state.etag != probe.etag {
+        bail!(
+            "ETag changed: sidecar {:?}, server {:?}",
+            state.etag,
+            probe.etag
+        );
     }
-    if let (Some(a), Some(b)) = (&state.last_modified, &probe.last_modified) {
-        if a != b {
-            bail!("Last-Modified changed: sidecar {a:?}, server {b:?}");
-        }
+    if state.last_modified != probe.last_modified {
+        bail!(
+            "Last-Modified changed: sidecar {:?}, server {:?}",
+            state.last_modified,
+            probe.last_modified
+        );
     }
     Ok(())
 }
@@ -204,9 +209,18 @@ mod tests {
     #[test]
     fn test_validate() {
         assert!(validate(&state(100, None), &probe(100, None)).is_ok());
-        assert!(validate(&state(100, Some("a")), &probe(100, None)).is_ok());
         assert!(validate(&state(100, Some("a")), &probe(100, Some("a"))).is_ok());
         assert!(validate(&state(100, Some("a")), &probe(100, Some("b"))).is_err());
+        // A validator present on only one side is a change too.
+        assert!(validate(&state(100, Some("a")), &probe(100, None)).is_err());
+        assert!(validate(&state(100, None), &probe(100, Some("a"))).is_err());
+        let mut with_lm = state(100, None);
+        with_lm.last_modified = Some("Mon".into());
+        assert!(validate(&with_lm, &probe(100, None)).is_err());
+        let mut probe_lm = probe(100, None);
+        probe_lm.last_modified = Some("Mon".into());
+        assert!(validate(&with_lm, &probe_lm).is_ok());
+        assert!(validate(&state(100, None), &probe_lm).is_err());
         assert!(validate(&state(100, None), &probe(101, None)).is_err());
         let mut no_ranges = probe(100, None);
         no_ranges.supports_ranges = false;

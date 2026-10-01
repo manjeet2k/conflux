@@ -2,14 +2,15 @@
 //!
 //! One request per connection (`Connection: close`). Behaviour is configured per test via
 //! [`ServerConfig`] to inject faults: ignored ranges, bad statuses, dropped connections,
-//! stalls, wrong Content-Range, overlong bodies, per-peer-IP failures, throttling.
+//! stalls, wrong Content-Range, overlong bodies, per-peer-IP failures, throttling, and a
+//! same-size content change mid-download (with `If-Range` evaluated like a real server).
 
 #![allow(dead_code)]
 
 use sha2::{Digest, Sha256};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -53,6 +54,23 @@ pub struct ServerConfig {
     pub get_status_405: bool,
     /// `ETag` header sent with every 200/206 response (including HEAD).
     pub etag: Option<String>,
+    /// `Last-Modified` header sent with every 200/206 response (including HEAD).
+    pub last_modified: Option<String>,
+    /// Replace the served resource from chunk request number `after_chunks` on.
+    pub content_change: Option<ContentChange>,
+    /// Evaluate `If-Range` on chunk requests (mismatch => 200 + full body), like RFC 9110.
+    /// `false` simulates a server that ignores the header.
+    pub honor_if_range: bool,
+}
+
+/// A new version of the resource, served from the `after_chunks`-th chunk request on
+/// (0-based; the probe always sees the original).
+#[derive(Clone)]
+pub struct ContentChange {
+    pub after_chunks: usize,
+    pub payload: Arc<Vec<u8>>,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
 }
 
 impl ServerConfig {
@@ -71,6 +89,50 @@ impl ServerConfig {
             all_status: None,
             get_status_405: false,
             etag: None,
+            last_modified: None,
+            content_change: None,
+            honor_if_range: true,
+        }
+    }
+
+    /// The resource version served for chunk request `chunk_index` (`None` = not a chunk).
+    fn version(&self, chunk_index: Option<usize>) -> Version<'_> {
+        match (&self.content_change, chunk_index) {
+            (Some(c), Some(n)) if n >= c.after_chunks => Version {
+                payload: &c.payload,
+                etag: c.etag.as_deref(),
+                last_modified: c.last_modified.as_deref(),
+            },
+            _ => Version {
+                payload: &self.payload,
+                etag: self.etag.as_deref(),
+                last_modified: self.last_modified.as_deref(),
+            },
+        }
+    }
+}
+
+/// One version of the served resource and its validators.
+#[derive(Clone, Copy)]
+struct Version<'a> {
+    payload: &'a Arc<Vec<u8>>,
+    etag: Option<&'a str>,
+    last_modified: Option<&'a str>,
+}
+
+impl Version<'_> {
+    /// `If-Range` matches only a strong ETag or the exact Last-Modified date.
+    fn if_range_matches(&self, value: &str) -> bool {
+        let strong_etag = self.etag.filter(|e| !e.starts_with("W/"));
+        strong_etag == Some(value) || self.last_modified == Some(value)
+    }
+
+    fn validator_headers(&self, headers: &mut Vec<(String, String)>) {
+        if let Some(etag) = self.etag {
+            headers.push(("ETag".to_string(), etag.to_string()));
+        }
+        if let Some(lm) = self.last_modified {
+            headers.push(("Last-Modified".to_string(), lm.to_string()));
         }
     }
 }
@@ -82,6 +144,8 @@ pub struct Stats {
     pub head_requests: AtomicUsize,
     pub body_bytes_sent: AtomicU64,
     pub requests_by_peer_127_0_0_2: AtomicUsize,
+    /// `If-Range` value of every chunk request that carried one.
+    pub if_range_values: Mutex<Vec<String>>,
 }
 
 pub struct TestServer {
@@ -142,6 +206,7 @@ pub fn sha256_hex(data: &[u8]) -> String {
 struct Request {
     method: String,
     range: Option<String>,
+    if_range: Option<String>,
 }
 
 async fn read_request(sock: &mut TcpStream) -> std::io::Result<Option<Request>> {
@@ -165,14 +230,21 @@ async fn read_request(sock: &mut TcpStream) -> std::io::Result<Option<Request>> 
     let request_line = lines.next().unwrap_or("");
     let method = request_line.split(' ').next().unwrap_or("").to_string();
     let mut range = None;
+    let mut if_range = None;
     for line in lines {
         if let Some((name, value)) = line.split_once(':') {
             if name.trim().eq_ignore_ascii_case("range") {
                 range = Some(value.trim().to_string());
+            } else if name.trim().eq_ignore_ascii_case("if-range") {
+                if_range = Some(value.trim().to_string());
             }
         }
     }
-    Ok(Some(Request { method, range }))
+    Ok(Some(Request {
+        method,
+        range,
+        if_range,
+    }))
 }
 
 /// Parses `bytes=a-b` (or `bytes=a-`) against `len`. `Err(())` = unsatisfiable.
@@ -245,10 +317,11 @@ async fn send_simple(sock: &mut TcpStream, code: u16) -> std::io::Result<()> {
 async fn send_full(
     sock: &mut TcpStream,
     config: &ServerConfig,
+    version: Version<'_>,
     stats: &Stats,
     with_body: bool,
 ) -> std::io::Result<()> {
-    let data = &config.payload;
+    let data = version.payload;
     let mut headers = Vec::new();
     if config.send_content_length {
         headers.push(("Content-Length".to_string(), data.len().to_string()));
@@ -256,9 +329,7 @@ async fn send_full(
     if let Some(cd) = &config.content_disposition {
         headers.push(("Content-Disposition".to_string(), cd.clone()));
     }
-    if let Some(etag) = &config.etag {
-        headers.push(("ETag".to_string(), etag.clone()));
-    }
+    version.validator_headers(&mut headers);
     write_head(sock, 200, &headers).await?;
     if with_body {
         write_body(sock, data, config, stats).await?;
@@ -294,12 +365,12 @@ async fn handle(
 
     if req.method == "HEAD" {
         stats.head_requests.fetch_add(1, Ordering::SeqCst);
-        send_full(&mut sock, config, stats, false).await?;
+        send_full(&mut sock, config, config.version(None), stats, false).await?;
         return sock.shutdown().await;
     }
 
     let Some(range) = req.range.clone() else {
-        send_full(&mut sock, config, stats, true).await?;
+        send_full(&mut sock, config, config.version(None), stats, true).await?;
         return sock.shutdown().await;
     };
 
@@ -336,14 +407,23 @@ async fn handle(
             return Ok(());
         }
     }
+    let version = config.version(chunk_index);
+    if let (Some(_), Some(value)) = (chunk_index, &req.if_range) {
+        stats.if_range_values.lock().unwrap().push(value.clone());
+        if config.honor_if_range && !version.if_range_matches(value) {
+            // The validator no longer matches: send the whole (new) representation.
+            send_full(&mut sock, config, version, stats, true).await?;
+            return sock.shutdown().await;
+        }
+    }
 
     match config.range_mode {
         RangeMode::Ignore => {
-            send_full(&mut sock, config, stats, true).await?;
+            send_full(&mut sock, config, version, stats, true).await?;
             return sock.shutdown().await;
         }
         RangeMode::ProbeOnly if !is_probe => {
-            send_full(&mut sock, config, stats, true).await?;
+            send_full(&mut sock, config, version, stats, true).await?;
             return sock.shutdown().await;
         }
         _ => {}
@@ -364,7 +444,7 @@ async fn handle(
             return sock.shutdown().await;
         }
     };
-    let body = &config.payload[start as usize..=end as usize];
+    let body = &version.payload[start as usize..=end as usize];
 
     let mut headers = Vec::new();
     let (cr_start, cr_end) = if config.range_mode == RangeMode::WrongContentRange && !is_probe {
@@ -379,9 +459,7 @@ async fn handle(
     if let Some(cd) = &config.content_disposition {
         headers.push(("Content-Disposition".to_string(), cd.clone()));
     }
-    if let Some(etag) = &config.etag {
-        headers.push(("ETag".to_string(), etag.clone()));
-    }
+    version.validator_headers(&mut headers);
     let overlong = config.range_mode == RangeMode::Overlong && !is_probe;
     if !overlong {
         headers.push(("Content-Length".to_string(), body.len().to_string()));

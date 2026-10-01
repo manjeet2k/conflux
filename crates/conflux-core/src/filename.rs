@@ -11,10 +11,32 @@ const MAX_FILENAME_BYTES: usize = 200;
 /// Characters that are invalid in Windows file names (plus path separators).
 const FORBIDDEN_CHARS: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 
+/// Windows device names, matched case-insensitively against the part before the first `.`.
+/// Includes the superscript-digit forms (`COM¹`), which Windows also treats as devices.
 const RESERVED_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "CONIN$",
+    "CONOUT$", "COM0", "LPT0", "COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³",
 ];
+
+/// `true` for invisible Unicode format characters that can disguise a file name, e.g.
+/// RIGHT-TO-LEFT OVERRIDE turning `invoice\u{202E}fdp.exe` into "invoiceexe.pdf" on screen.
+///
+/// Covered: soft hyphen (U+00AD), Arabic letter mark (U+061C), zero-width space/non-joiner/
+/// joiner and LRM/RLM (U+200B-U+200F), bidi embeddings/overrides (U+202A-U+202E), word joiner
+/// and invisible operators (U+2060-U+2064), bidi isolates (U+2066-U+2069), BOM (U+FEFF).
+fn is_invisible_format_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
+}
 
 /// Decodes `%XX` escapes into raw bytes. Malformed escapes are kept literally.
 pub(crate) fn percent_decode(input: &str) -> Vec<u8> {
@@ -204,7 +226,7 @@ fn truncate_preserving_extension(name: &str, max_bytes: usize) -> String {
 /// Produces a bare, Windows-safe file name from an untrusted value (header or URL).
 ///
 /// - keeps only the final component after any `/` or `\` (defeats path traversal)
-/// - strips control characters and `<>:"/\|?*`
+/// - strips control characters, invisible bidi/zero-width format characters and `<>:"/\|?*`
 /// - strips leading whitespace and trailing dots/spaces
 /// - rejects `.`/`..`/empty (falls back to `download.bin`)
 /// - prefixes `_` to Windows reserved device names (`CON`, `nul.txt`, `COM1`, ...)
@@ -213,7 +235,9 @@ pub fn sanitize_filename(raw: &str) -> String {
     let last = raw.rsplit(['/', '\\']).next().unwrap_or("");
     let cleaned: String = last
         .chars()
-        .filter(|c| !c.is_control() && !FORBIDDEN_CHARS.contains(c))
+        .filter(|c| {
+            !c.is_control() && !is_invisible_format_char(*c) && !FORBIDDEN_CHARS.contains(c)
+        })
         .collect();
     let cleaned = cleaned.trim_start().trim_end_matches(['.', ' ']);
 
@@ -264,6 +288,25 @@ pub fn unique_path(dir: &Path, filename: &str) -> PathBuf {
             return candidate;
         }
         n += 1;
+    }
+}
+
+/// Like [`unique_path`], but atomically claims the name by creating an empty file there
+/// (`create_new`), so two concurrent downloads (in this or another process) can never pick
+/// the same path. The caller then opens the claimed file for writing.
+pub fn claim_unique_path(dir: &Path, filename: &str) -> std::io::Result<PathBuf> {
+    loop {
+        let candidate = unique_path(dir, filename);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(_) => return Ok(candidate),
+            // Someone took it between the check and the create: pick the next free name.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
     }
 }
 
@@ -415,6 +458,55 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_more_reserved_device_names() {
+        for name in [
+            "CONIN$",
+            "conin$.txt",
+            "CONOUT$",
+            "Conout$.log",
+            "COM0",
+            "com0.bin",
+            "LPT0",
+            "lpt0.txt",
+            "COM\u{b9}",
+            "COM\u{b2}.txt",
+            "com\u{b3}",
+            "LPT\u{b9}.doc",
+            "lpt\u{b2}",
+            "LPT\u{b3}",
+        ] {
+            assert_eq!(sanitize_filename(name), format!("_{}", name), "{:?}", name);
+        }
+        // Not reserved.
+        assert_eq!(sanitize_filename("CONIN.txt"), "CONIN.txt");
+        assert_eq!(sanitize_filename("COM\u{b9}0.txt"), "COM\u{b9}0.txt");
+        assert_eq!(sanitize_filename("LPT00"), "LPT00");
+    }
+
+    #[test]
+    fn test_sanitize_strips_invisible_format_chars() {
+        // RIGHT-TO-LEFT OVERRIDE would render "invoice\u{202E}fdp.exe" as "invoiceexe.pdf".
+        assert_eq!(
+            sanitize_filename("invoice\u{202E}fdp.exe"),
+            "invoicefdp.exe"
+        );
+        let invisible = [
+            '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2067}',
+            '\u{2068}', '\u{2069}', '\u{200E}', '\u{200F}', '\u{061C}', '\u{200B}', '\u{200C}',
+            '\u{200D}', '\u{2060}', '\u{2061}', '\u{2062}', '\u{2063}', '\u{2064}', '\u{FEFF}',
+            '\u{00AD}',
+        ];
+        for c in invisible {
+            let raw = format!("{c}re{c}port{c}.pdf{c}");
+            assert_eq!(sanitize_filename(&raw), "report.pdf", "U+{:04X}", c as u32);
+        }
+        // A name made only of invisible characters falls back to the default.
+        assert_eq!(sanitize_filename("\u{200B}\u{FEFF}"), "download.bin");
+        // Visible non-ASCII is untouched.
+        assert_eq!(sanitize_filename("日本語.txt"), "日本語.txt");
+    }
+
+    #[test]
     fn test_sanitize_unicode_and_length_cap() {
         assert_eq!(sanitize_filename("résumé 日本語.pdf"), "résumé 日本語.pdf");
 
@@ -456,6 +548,18 @@ mod tests {
                 input
             );
         }
+    }
+
+    #[test]
+    fn test_claim_unique_path_creates_distinct_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let a = claim_unique_path(d, "f.bin").unwrap();
+        let b = claim_unique_path(d, "f.bin").unwrap();
+        assert_eq!(a, d.join("f.bin"));
+        assert_eq!(b, d.join("f (1).bin"));
+        assert!(a.is_file() && b.is_file());
+        assert!(claim_unique_path(&d.join("missing"), "f.bin").is_err());
     }
 
     #[test]

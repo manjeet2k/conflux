@@ -106,7 +106,7 @@ export const App: React.FC = () => {
   );
   const onError = useCallback((message: string) => notify('error', message), [notify]);
 
-  const { settings, update: updateSettings } = useSettings(onError);
+  const { settings, loaded: settingsLoaded, update: updateSettings } = useSettings(onError);
   const { dark, mica } = useWindowTheme(settings.theme);
   const { tasks, start, pause, resume, remove } = useDownloads(onError);
   const history = useSpeedHistory(tasks);
@@ -136,22 +136,24 @@ export const App: React.FC = () => {
   useEffect(refreshAdapters, [refreshAdapters]);
 
   useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
-    listen<AdapterInfo[]>(NETWORK_ADAPTERS_CHANGED_EVENT, (event) => {
+    const unlisten = listen<AdapterInfo[]>(NETWORK_ADAPTERS_CHANGED_EVENT, (event) => {
       setAdapters(event.payload);
-    })
-      .then((fn) => {
-        unlistenFn = fn;
-      })
-      .catch((e) => console.error('Failed to listen for network changes:', e));
-
+    });
+    unlisten.catch((e) => console.error('Failed to listen for network changes:', e));
     return () => {
-      if (unlistenFn) unlistenFn();
+      unlisten.then((fn) => fn()).catch(() => undefined);
     };
   }, []);
 
+  // Read by `openAdd` so a second open request (tray, shortcut) never resets an open form.
+  const addOpenRef = useRef(addOpen);
+  useEffect(() => {
+    addOpenRef.current = addOpen;
+  }, [addOpen]);
+
   const openAdd = useCallback(
     (url = '') => {
+      if (addOpenRef.current) return;
       refreshAdapters();
       setAddUrl(url);
       setAddOpen(true);
@@ -211,7 +213,11 @@ export const App: React.FC = () => {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
-      if (e.ctrlKey && key === 'n') {
+      const dialogOpen = addOpen || removeIds.length > 0;
+      if (dialogOpen && e.ctrlKey && (key === 'n' || key === 'f')) {
+        // A dialog owns the keyboard; don't reset its form or move focus behind it.
+        e.preventDefault();
+      } else if (e.ctrlKey && key === 'n') {
         e.preventDefault();
         openAdd();
       } else if (e.ctrlKey && key === 'f') {
@@ -246,7 +252,7 @@ export const App: React.FC = () => {
       document.removeEventListener('paste', onPaste);
       document.removeEventListener('contextmenu', onContext);
     };
-  }, [addOpen, openAdd, refreshAdapters, notify]);
+  }, [addOpen, removeIds, openAdd, refreshAdapters, notify]);
 
   // ─── System tray context menu events ───
   useEffect(() => {
@@ -387,7 +393,14 @@ export const App: React.FC = () => {
                 onToggleAdapter={handleToggleAdapter}
               />
             )}
-            {view === 'settings' && <SettingsPage settings={settings} onChange={updateSettings} />}
+            {view === 'settings' && (
+              <SettingsPage
+                settings={settings}
+                loaded={settingsLoaded}
+                onChange={updateSettings}
+                onError={onError}
+              />
+            )}
           </main>
         </div>
       </div>

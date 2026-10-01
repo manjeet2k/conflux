@@ -55,6 +55,7 @@ export function useDownloads(onError: (message: string) => void) {
       const results = await Promise.allSettled(ids.map(action));
       const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
       if (failed.length > 0) onError(`${label} failed: ${String(failed[0].reason)}`);
+      return failed.length;
     },
     [onError]
   );
@@ -73,14 +74,35 @@ export function useDownloads(onError: (message: string) => void) {
     [run, upsert]
   );
 
+  /** Drops tasks the backend no longer has (e.g. removed before the command failed). */
+  const reconcile = useCallback(async () => {
+    try {
+      const list = await api.listTasks();
+      const live = new Set(list.map((t) => t.id));
+      setTasks((prev) =>
+        prev.filter((t) => {
+          if (live.has(t.id)) return true;
+          removedIds.current.add(t.id);
+          return false;
+        })
+      );
+      list.forEach((t) => upsert(t, false));
+    } catch (e) {
+      onError(`Failed to refresh downloads: ${String(e)}`);
+    }
+  }, [upsert, onError]);
+
   const remove = useCallback(
-    (ids: string[], deleteFiles: boolean) =>
-      run('Remove', ids, async (id) => {
+    async (ids: string[], deleteFiles: boolean) => {
+      const failed = await run('Remove', ids, async (id) => {
         await api.removeDownload(id, deleteFiles);
         removedIds.current.add(id);
         setTasks((prev) => prev.filter((t) => t.id !== id));
-      }),
-    [run]
+      });
+      // A rejected remove may still have removed the task (e.g. only the file delete failed).
+      if (failed > 0) await reconcile();
+    },
+    [run, reconcile]
   );
 
   return { tasks, start, pause, resume, remove };

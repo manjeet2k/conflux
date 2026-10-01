@@ -4,7 +4,7 @@
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import type { AdapterInfo, DownloadTask, Settings } from '../types';
-import { PROGRESS_EVENT } from '../types';
+import { NETWORK_ADAPTERS_CHANGED_EVENT, PROGRESS_EVENT } from '../types';
 
 const MB = 1024 * 1024;
 const adapters: AdapterInfo[] = [
@@ -16,6 +16,17 @@ const adapters: AdapterInfo[] = [
   { id: 'Loopback:127.0.0.1', name: 'Loopback Pseudo-Interface 1', ip: '127.0.0.1', is_ipv4: true, is_loopback: true, enabled: false, usable: false, kind: 'loopback' },
 ];
 const speeds = [9.5 * MB, 6.2 * MB, 3.1 * MB];
+// Mirrors crates/conflux-desktop/src/settings.rs.
+const MIN_CONNECTIONS = 1;
+const MAX_CONNECTIONS = 16;
+const MIN_CHUNK_MB = 1;
+const MAX_CHUNK_MB = 64;
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v)));
+const NO_ADAPTERS_ERROR = 'No network adapters are enabled. Enable one on the Network page.';
+// Discovery defaults, before user overrides.
+const discoveredEnabled = new Map(adapters.map((a) => [a.id, a.enabled]));
+/** Interface name: the adapter id without its `:<ip>` suffix. */
+const ifaceName = (a: AdapterInfo) => a.id.slice(0, a.id.length - a.ip.length - 1);
 
 let settings: Settings = {
   theme: 'system',
@@ -28,6 +39,18 @@ let settings: Settings = {
   adapter_overrides: {},
 };
 
+/** Like the backend's apply_overrides: unusable adapters are never enabled. */
+function applyOverrides() {
+  const overrides = settings.adapter_overrides ?? {};
+  for (const a of adapters) {
+    a.enabled = a.usable && (overrides[a.id] ?? overrides[ifaceName(a)] ?? discoveredEnabled.get(a.id) ?? false);
+  }
+}
+const adapterCopies = () => adapters.map((a) => ({ ...a }));
+const requireEnabledAdapter = () => {
+  if (!adapters.some((a) => a.enabled)) throw NO_ADAPTERS_ERROR;
+};
+
 const now = Date.now();
 const base = (id: string, filename: string, size: number, over: Partial<DownloadTask>): DownloadTask => ({
   id,
@@ -36,7 +59,7 @@ const base = (id: string, filename: string, size: number, over: Partial<Download
   save_dir: 'C:\\Users\\pc\\Downloads',
   save_path: `C:\\Users\\pc\\Downloads\\${filename}`,
   adapter_ids: adapters.slice(0, 3).map((a) => a.id),
-  total_bytes: Math.round(size),
+  total_bytes: Math.floor(size),
   supports_ranges: true,
   downloaded_bytes: 0,
   status: 'paused',
@@ -52,6 +75,7 @@ const base = (id: string, filename: string, size: number, over: Partial<Download
   adapters: [],
   chunk_map: null,
   ...over,
+  ...(over.downloaded_bytes !== undefined && { downloaded_bytes: Math.floor(over.downloaded_bytes) }),
 });
 
 const tasks: DownloadTask[] = [
@@ -79,14 +103,14 @@ function tick() {
         adapter_id: a.id,
         name: a.name,
         ip: a.ip,
-        downloaded_bytes: prev + speed / 5,
+        downloaded_bytes: Math.floor(prev + speed / 5),
         speed_bytes_sec: speed,
         active_connections: settings.connections_per_adapter,
         dropped: false,
       };
     });
     t.speed_bytes_sec = t.adapters.reduce((s, a) => s + a.speed_bytes_sec, 0);
-    t.downloaded_bytes = Math.min(t.total_bytes, t.downloaded_bytes + t.speed_bytes_sec / 5);
+    t.downloaded_bytes = Math.min(t.total_bytes, Math.floor(t.downloaded_bytes + t.speed_bytes_sec / 5));
     t.eta_seconds = Math.ceil((t.total_bytes - t.downloaded_bytes) / t.speed_bytes_sec);
     t.completed_chunks = Math.floor(t.downloaded_bytes / (4 * MB));
     t.active_chunks = 12;
@@ -112,21 +136,36 @@ export function installMockBackend() {
       };
       switch (cmd) {
         case 'discover_adapters':
-          return adapters;
+          applyOverrides();
+          return adapterCopies();
         case 'set_adapter_enabled': {
-          const id = String(args.id);
-          const enabled = Boolean(args.enabled);
-          const target = adapters.find((a) => a.id === id);
-          if (target) target.enabled = enabled;
-          return [...adapters];
+          const target = adapters.find((a) => a.id === String(args.id));
+          if (!target) throw `Unknown adapter: ${String(args.id)}`;
+          settings = {
+            ...settings,
+            adapter_overrides: { ...settings.adapter_overrides, [ifaceName(target)]: Boolean(args.enabled) },
+          };
+          applyOverrides();
+          emit(NETWORK_ADAPTERS_CHANGED_EVENT, adapterCopies());
+          return adapterCopies();
         }
         case 'list_tasks':
-          return tasks;
+          return tasks.map((t) => ({ ...t }));
         case 'get_settings':
-          return settings;
-        case 'update_settings':
-          settings = args.settings as Settings;
-          return settings;
+          return { ...settings, adapter_overrides: { ...settings.adapter_overrides } };
+        case 'update_settings': {
+          const next = args.settings as Settings;
+          const dir = next.default_save_dir?.trim();
+          // Adapter overrides are owned by set_adapter_enabled; the UI's copy is ignored.
+          settings = {
+            ...next,
+            connections_per_adapter: clamp(next.connections_per_adapter, MIN_CONNECTIONS, MAX_CONNECTIONS),
+            chunk_size_mb: clamp(next.chunk_size_mb, MIN_CHUNK_MB, MAX_CHUNK_MB),
+            default_save_dir: dir ? dir : null,
+            adapter_overrides: settings.adapter_overrides,
+          };
+          return { ...settings, adapter_overrides: { ...settings.adapter_overrides } };
+        }
         case 'apply_window_theme':
           return { mica: false };
         case 'probe_url': {
@@ -135,28 +174,35 @@ export function installMockBackend() {
           return new Promise((r) => setTimeout(() => r({ url, filename: name, total_bytes: 1.4 * 1024 * MB, supports_ranges: true }), 400));
         }
         case 'start_download': {
+          requireEnabledAdapter();
           const name = (args.filename as string) || String(args.url).split('/').pop() || 'download.bin';
           const t = base(`t${Date.now()}`, name, 1.4 * 1024 * MB, { status: 'downloading', url: String(args.url), created_at_ms: Date.now() });
           tasks.unshift(t);
           emit(PROGRESS_EVENT, t);
-          return t;
+          return { ...t };
         }
         case 'pause_download': {
           const t = find();
           Object.assign(t, { status: 'paused', speed_bytes_sec: 0, eta_seconds: 0, active_chunks: 0, adapters: [] });
           t.chunk_map = t.chunk_map?.replace(/>/g, '.') ?? null;
           emit(PROGRESS_EVENT, t);
-          return t;
+          return { ...t };
         }
         case 'resume_download': {
           const t = find();
-          Object.assign(t, { status: 'downloading', error: null });
+          if (t.status === 'completed') throw 'Download is already complete';
+          requireEnabledAdapter();
+          Object.assign(t, { status: 'downloading', error: null, speed_bytes_sec: 0, eta_seconds: 0, active_chunks: 0, adapters: [] });
+          t.chunk_map = t.chunk_map?.replace(/[>!]/g, '.') ?? null;
           emit(PROGRESS_EVENT, t);
-          return t;
+          return { ...t };
         }
-        case 'remove_download':
-          tasks.splice(tasks.findIndex((t) => t.id === args.taskId), 1);
+        case 'remove_download': {
+          const idx = tasks.findIndex((t) => t.id === args.taskId);
+          // Like the backend, removing an unknown task is a no-op.
+          if (idx !== -1) tasks.splice(idx, 1);
           return null;
+        }
         case 'open_file':
         case 'reveal_file':
           return null;

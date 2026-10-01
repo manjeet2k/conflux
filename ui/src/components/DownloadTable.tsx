@@ -274,7 +274,9 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
       button={{ className: c.align === 'end' ? styles.endHeader : undefined }}
       style={c.width ? { width: `${c.width}px` } : undefined}
       sortDirection={sort.key === c.key ? sort.direction : undefined}
-      onClick={() =>
+      onClick={(e) => {
+        // Sorting must not reach the grid's click-to-clear-selection handler.
+        e.stopPropagation();
         onSort({
           key: c.key,
           direction:
@@ -285,8 +287,8 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
                 : c.key === 'name' || c.key === 'status'
                   ? 'ascending'
                   : 'descending',
-        })
-      }
+        });
+      }}
     >
       {c.label}
     </TableHeaderCell>

@@ -12,44 +12,63 @@ export const DEFAULT_SETTINGS: Settings = {
   auto_aggregate_adapters: true,
 };
 
+/**
+ * Settings state. Edits are rejected until the backend copy has loaded (`loaded`), so
+ * defaults never overwrite real settings. Saves are serialised; each one sends the last
+ * confirmed settings plus the patch, so a failed save is simply dropped and the UI
+ * reverts to what the backend actually holds.
+ */
 export function useSettings(onError: (message: string) => void) {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
-  // Latest settings for `update`, which must not close over stale state.
-  const current = useRef(settings);
+  const [loaded, setLoaded] = useState(false);
+  // Last copy confirmed by the backend; saves build on this, never on optimistic state.
+  const confirmed = useRef<Settings | null>(null);
+  // Patches not yet confirmed, in order; shown optimistically on top of `confirmed`.
+  const pending = useRef<Partial<Settings>[]>([]);
   const saveQueue = useRef(Promise.resolve());
 
+  const display = useCallback(() => {
+    if (!confirmed.current) return;
+    setSettings(pending.current.reduce<Settings>((s, p) => ({ ...s, ...p }), confirmed.current));
+  }, []);
+
   useEffect(() => {
+    let disposed = false;
     api
       .getSettings()
       .then((s) => {
-        current.current = s;
-        setSettings(s);
+        if (disposed) return;
+        confirmed.current = s;
+        setLoaded(true);
+        display();
       })
-      .catch((e) => onError(`Failed to load settings: ${String(e)}`));
-  }, [onError]);
+      .catch((e) => !disposed && onError(`Failed to load settings: ${String(e)}`));
+    return () => {
+      disposed = true;
+    };
+  }, [onError, display]);
 
   /** Applies optimistically, then adopts the backend's validated (clamped) copy. */
   const update = useCallback(
     (patch: Partial<Settings>) => {
-      const prev = current.current;
-      const next = { ...prev, ...patch };
-      current.current = next;
-      setSettings(next);
+      if (!confirmed.current) return;
+      pending.current.push(patch);
+      display();
       saveQueue.current = saveQueue.current
-        .catch(() => undefined)
-        .then(() => api.updateSettings(next))
-        .then((saved) => {
-          current.current = saved;
-          setSettings(saved);
+        .then(async () => {
+          const next: Settings = { ...(confirmed.current as Settings), ...patch };
+          // Adapter toggles are owned by `set_adapter_enabled`; never send a stale copy.
+          delete next.adapter_overrides;
+          confirmed.current = await api.updateSettings(next);
         })
-        .catch((e) => {
-          onError(`Failed to save settings: ${String(e)}`);
-          current.current = prev;
-          setSettings(prev);
+        .catch((e) => onError(`Failed to save settings: ${String(e)}`))
+        .finally(() => {
+          pending.current.splice(pending.current.indexOf(patch), 1);
+          display();
         });
     },
-    [onError]
+    [onError, display]
   );
 
-  return { settings, update };
+  return { settings, loaded, update };
 }

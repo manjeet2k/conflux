@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Dropdown, Option, SpinButton, Switch, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Button, Dropdown, Option, SpinButton, Spinner, Switch, Text, makeStyles, tokens } from '@fluentui/react-components';
 import {
   Alert20Regular,
   DarkTheme20Regular,
@@ -12,6 +12,7 @@ import {
 import { open } from '@tauri-apps/plugin-dialog';
 import { downloadDir } from '@tauri-apps/api/path';
 import { getVersion } from '@tauri-apps/api/app';
+import { errorText } from '../api';
 import type { Settings, ThemePreference } from '../types';
 import { Page, SectionHeader, SettingsCard } from '../components/Page';
 
@@ -30,10 +31,15 @@ const useStyles = makeStyles({
 const themeLabels: Record<ThemePreference, string> = { system: 'Use system setting', light: 'Light', dark: 'Dark' };
 const chunkSizes = [1, 2, 4, 8, 16, 32, 64];
 
-export const SettingsPage: React.FC<{ settings: Settings; onChange: (patch: Partial<Settings>) => void }> = ({
-  settings,
-  onChange,
-}) => {
+interface SettingsPageProps {
+  settings: Settings;
+  /** False until the backend's settings arrive; edits before then would save defaults. */
+  loaded: boolean;
+  onChange: (patch: Partial<Settings>) => void;
+  onError: (message: string) => void;
+}
+
+export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, onChange, onError }) => {
   const styles = useStyles();
   const [osDownloads, setOsDownloads] = useState('');
   const [version, setVersion] = useState('');
@@ -44,11 +50,23 @@ export const SettingsPage: React.FC<{ settings: Settings; onChange: (patch: Part
   }, []);
 
   const browse = async () => {
-    const dir = await open({ directory: true, multiple: false, defaultPath: settings.default_save_dir ?? osDownloads });
-    if (typeof dir === 'string') onChange({ default_save_dir: dir });
+    try {
+      const dir = await open({ directory: true, multiple: false, defaultPath: settings.default_save_dir ?? osDownloads });
+      if (typeof dir === 'string') onChange({ default_save_dir: dir });
+    } catch (e) {
+      onError(`Folder picker failed: ${errorText(e)}`);
+    }
   };
 
   const folder = settings.default_save_dir ?? osDownloads;
+
+  if (!loaded) {
+    return (
+      <Page title="Settings">
+        <Spinner size="small" label="Loading settings…" labelPosition="after" />
+      </Page>
+    );
+  }
 
   return (
     <Page title="Settings">

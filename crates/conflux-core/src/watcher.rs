@@ -1,7 +1,7 @@
 use crate::adapter::{discover_adapters, NetworkAdapter};
 use anyhow::Result;
-use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
 
@@ -34,59 +34,112 @@ pub fn diff_adapters(
     (added, removed)
 }
 
+/// Rescan period used when no OS change notifications are available (or they stopped).
+pub const FALLBACK_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Keeps the OS notification registration alive; dropping it unregisters.
+type OsGuard = Box<dyn std::any::Any + Send + Sync>;
+
 /// Watches for OS-level network interface and IP address changes without polling.
 ///
 /// Uses native Win32 IP Helper `NotifyUnicastIpAddressChange` on Windows,
-/// Linux kernel Netlink route sockets (`NETLINK_ROUTE`) on Linux, and a safe
-/// fallback for other environments.
+/// Linux kernel Netlink route sockets (`NETLINK_ROUTE`) on Linux, and periodic
+/// rescans ([`FALLBACK_POLL_INTERVAL`]) when those are unavailable or stop working.
 pub struct NetworkWatcher {
     receiver: watch::Receiver<Vec<NetworkAdapter>>,
     _stop_tx: tokio::sync::oneshot::Sender<()>,
-    _os_watcher: Option<Arc<os::OsWatcher>>,
+    _os_watcher: Option<OsGuard>,
+}
+
+/// Sends a trigger every `period` (first one immediately) until the receiver is gone.
+fn spawn_fallback_poller(
+    handle: &tokio::runtime::Handle,
+    tx: UnboundedSender<()>,
+    period: Duration,
+) {
+    handle.spawn(async move {
+        let mut interval = tokio::time::interval(period);
+        loop {
+            interval.tick().await;
+            if tx.send(()).is_err() {
+                break;
+            }
+        }
+    });
 }
 
 impl NetworkWatcher {
     /// Starts watching network adapter changes with the specified debounce interval.
     pub fn start(debounce: Duration) -> Result<Self> {
+        Self::start_with(
+            debounce,
+            FALLBACK_POLL_INTERVAL,
+            |tx| os::OsWatcher::start(tx).map(|w| Box::new(w) as OsGuard),
+            discover_adapters,
+        )
+    }
+
+    /// [`Self::start`] with injectable OS registration and discovery, for tests.
+    fn start_with<R, D>(
+        debounce: Duration,
+        fallback_period: Duration,
+        register: R,
+        discover: D,
+    ) -> Result<Self>
+    where
+        R: FnOnce(UnboundedSender<()>) -> Result<OsGuard>,
+        D: Fn() -> Result<Vec<NetworkAdapter>> + Send + 'static,
+    {
         let handle = tokio::runtime::Handle::try_current().map_err(|_| {
             anyhow::anyhow!("NetworkWatcher must be started within a Tokio runtime context")
         })?;
-        let initial = discover_adapters().unwrap_or_default();
-        let (watch_tx, watch_rx) = watch::channel(initial);
         let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel::<()>();
         let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
 
-        let os_watcher = match os::OsWatcher::start(trigger_tx.clone()) {
+        // Register for OS notifications *before* the initial scan: a change between the two
+        // is then either reflected in the scan or queued as a trigger, never lost.
+        let os_watcher = match register(trigger_tx.clone()) {
             Ok(w) => {
                 info!("Kernel-level non-polling network adapter watcher active");
-                Some(Arc::new(w))
+                Some(w)
             }
             Err(e) => {
                 warn!(
                     "Failed to start OS network listener ({:#}); falling back to quiet periodic refresh",
                     e
                 );
-                // Fallback timer trigger (every 5 seconds)
-                let fallback_tx = trigger_tx.clone();
-                handle.spawn(async move {
-                    let mut interval = tokio::time::interval(Duration::from_secs(5));
-                    loop {
-                        interval.tick().await;
-                        if fallback_tx.send(()).is_err() {
-                            break;
-                        }
-                    }
-                });
+                spawn_fallback_poller(&handle, trigger_tx.clone(), fallback_period);
                 None
             }
         };
+        // Only the OS listener / poller keep senders, so `recv() == None` means they died.
+        drop(trigger_tx);
 
+        let initial = discover().unwrap_or_else(|e| {
+            error!("Initial network adapter discovery failed: {:#}", e);
+            Vec::new()
+        });
+        let (watch_tx, watch_rx) = watch::channel(initial);
+
+        let loop_handle = handle.clone();
         handle.spawn(async move {
             loop {
                 tokio::select! {
                     biased;
                     _ = &mut stop_rx => break,
-                    Some(()) = trigger_rx.recv() => {
+                    trigger = trigger_rx.recv() => {
+                        if trigger.is_none() {
+                            // The OS listener task exited (e.g. netlink socket error). Without
+                            // this, change detection would silently stop forever.
+                            warn!(
+                                "OS network listener stopped; falling back to periodic refresh every {:?}",
+                                fallback_period
+                            );
+                            let (tx, rx) = mpsc::unbounded_channel::<()>();
+                            spawn_fallback_poller(&loop_handle, tx, fallback_period);
+                            trigger_rx = rx;
+                            continue;
+                        }
                         // Settle burst notifications (e.g. link UP -> DHCP request -> ACK -> IP bound)
                         tokio::select! {
                             biased;
@@ -96,7 +149,7 @@ impl NetworkWatcher {
                         // Drain any additional triggers accumulated during the debounce sleep
                         while trigger_rx.try_recv().is_ok() {}
 
-                        match discover_adapters() {
+                        match discover() {
                             Ok(current) => {
                                 let changed = {
                                     let prev = watch_tx.borrow();
@@ -370,6 +423,7 @@ mod tests {
         let ip = std::net::IpAddr::V4(Ipv4Addr::new(ip.0, ip.1, ip.2, ip.3));
         NetworkAdapter {
             id: format!("{}:{}", name, ip),
+            name: name.to_string(),
             ip,
             is_ipv4: true,
             is_loopback: false,
@@ -424,6 +478,84 @@ mod tests {
         assert_eq!(added[0].id, a2.id);
         assert_eq!(removed.len(), 1);
         assert_eq!(removed[0].id, a1.id);
+    }
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn test_watcher_registers_before_initial_scan() {
+        let log = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let reg_log = log.clone();
+        let scan_log = log.clone();
+        let _watcher = NetworkWatcher::start_with(
+            Duration::from_millis(1),
+            Duration::from_secs(3600),
+            move |_tx| {
+                reg_log.lock().unwrap().push("register");
+                Ok(Box::new(()) as OsGuard)
+            },
+            move || {
+                scan_log.lock().unwrap().push("scan");
+                Ok(Vec::new())
+            },
+        )
+        .unwrap();
+        assert_eq!(log.lock().unwrap().first(), Some(&"register"));
+        assert_eq!(log.lock().unwrap().get(1), Some(&"scan"));
+    }
+
+    #[tokio::test]
+    async fn test_watcher_falls_back_to_polling_when_os_listener_dies() {
+        let scans = Arc::new(AtomicUsize::new(0));
+        let counter = scans.clone();
+        let watcher = NetworkWatcher::start_with(
+            Duration::from_millis(1),
+            Duration::from_millis(20),
+            // The "OS listener" drops its sender right away, like a netlink task that errored.
+            |tx| {
+                drop(tx);
+                Ok(Box::new(()) as OsGuard)
+            },
+            move || {
+                let n = counter.fetch_add(1, Ordering::SeqCst);
+                // A new adapter shows up only after the OS listener is already gone.
+                Ok(if n == 0 {
+                    Vec::new()
+                } else {
+                    vec![make_adapter("usb0", (192, 168, 42, 5), true)]
+                })
+            },
+        )
+        .unwrap();
+        let mut rx = watcher.receiver();
+        tokio::time::timeout(Duration::from_secs(5), rx.changed())
+            .await
+            .expect("change must still be detected after the OS listener died")
+            .unwrap();
+        assert_eq!(rx.borrow().len(), 1);
+        // Polling keeps going.
+        let before = scans.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(scans.load(Ordering::SeqCst) > before);
+    }
+
+    #[tokio::test]
+    async fn test_watcher_polls_when_os_listener_unavailable() {
+        let scans = Arc::new(AtomicUsize::new(0));
+        let counter = scans.clone();
+        let _watcher = NetworkWatcher::start_with(
+            Duration::from_millis(1),
+            Duration::from_millis(20),
+            |_tx| Err(anyhow::anyhow!("not supported")),
+            move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(Vec::new())
+            },
+        )
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(scans.load(Ordering::SeqCst) >= 3);
     }
 
     #[tokio::test]

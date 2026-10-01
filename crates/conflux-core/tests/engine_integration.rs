@@ -96,6 +96,8 @@ fn fake_adapter(ip: &str) -> NetworkAdapter {
     // Loopback aliases flagged as non-loopback so the engine will bind to them in tests.
     NetworkAdapter {
         id: format!("test:{}", ip),
+        // No interface name: these are loopback aliases, not real devices to pin to.
+        name: String::new(),
         ip: ip.parse().unwrap(),
         is_ipv4: true,
         is_loopback: false,
@@ -197,6 +199,22 @@ async fn dropped_connections_are_requeued_and_recovered() {
     assert_file_matches(&out, &data);
     assert_progress_sane(&out.progress, PAYLOAD_LEN as u64);
     assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 17 + 2);
+}
+
+/// A blip that fails every in-flight connection at once (4 > the 3-failure drop threshold)
+/// must not drop the only adapter: chunks still have retries left, so the download recovers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn simultaneous_failures_on_only_adapter_are_retried() {
+    let data = payload(PAYLOAD_LEN, 30);
+    let mut cfg = ServerConfig::new(Arc::clone(&data));
+    cfg.drop_first_n_chunks = 4;
+    let server = TestServer::start(cfg).await;
+
+    let out = run_download(&test_engine(), &server, &[]).await;
+    assert_file_matches(&out, &data);
+    assert_progress_sane(&out.progress, PAYLOAD_LEN as u64);
+    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 17 + 4);
+    assert!(!out.progress.last().unwrap().adapters[0].dropped);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -766,6 +784,7 @@ async fn dynamic_adapter_joins_mid_download_and_aggregates_bandwidth() {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let new_adapter = NetworkAdapter {
             id: "eth_hotplug:127.0.0.1".into(),
+            name: String::new(),
             ip: "127.0.0.1".parse().unwrap(),
             is_ipv4: true,
             is_loopback: false,
@@ -792,6 +811,13 @@ async fn dynamic_adapter_joins_mid_download_and_aggregates_bandwidth() {
     assert!(!progress.is_empty());
     let last = progress.last().unwrap();
     assert!(last.adapters.iter().any(|a| a.label == "127.0.0.1"));
+    // The default route is retired once the joined adapter has proven itself.
+    let default_route = last
+        .adapters
+        .iter()
+        .find(|a| a.label == "default-route")
+        .unwrap();
+    assert!(default_route.dropped);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -844,6 +870,7 @@ async fn all_adapters_removed_falls_back_to_default_route_and_completes() {
 
     let loopback_adapter = NetworkAdapter {
         id: "eth0:127.0.0.1".into(),
+        name: String::new(),
         ip: "127.0.0.1".parse().unwrap(),
         is_ipv4: true,
         is_loopback: false,
@@ -879,4 +906,429 @@ async fn all_adapters_removed_falls_back_to_default_route_and_completes() {
     let last = progress.last().unwrap();
     // Default-route fallback was spun up and completed remaining chunks
     assert!(last.adapters.iter().any(|a| a.label == "default-route"));
+}
+
+// ─── Interface pinning ───────────────────────────────────────────────────────
+
+#[cfg(target_os = "linux")]
+fn named_adapter(ip: &str, name: &str) -> NetworkAdapter {
+    NetworkAdapter {
+        name: name.to_string(),
+        ..fake_adapter(ip)
+    }
+}
+
+/// The adapter's interface name must reach the socket (SO_BINDTODEVICE on Linux): an
+/// adapter pinned to a nonexistent device can never connect, so the server never sees its
+/// IP, both for initial adapters and for hot-added ones. Unnamed adapters keep working.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn adapter_interface_name_is_used_for_binding() {
+    let data = payload(PAYLOAD_LEN, 40);
+    let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+
+    let adapters = [
+        named_adapter("127.0.0.2", "conflux-nodev0"),
+        fake_adapter("127.0.0.1"),
+    ];
+    let out = run_download(&test_engine(), &server, &adapters).await;
+    assert_file_matches(&out, &data);
+    assert_eq!(
+        server
+            .stats
+            .requests_by_peer_127_0_0_2
+            .load(Ordering::SeqCst),
+        0,
+        "adapter pinned to a missing device must not reach the server"
+    );
+    assert!(out.progress.last().unwrap().adapters[0].dropped);
+
+    // Hot-added adapter: same expectation.
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let probe = engine.probe(&server.url("/hot.bin")).await.unwrap();
+    let path = dir.path().join("hot.bin");
+    let (adapter_tx, adapter_rx) = mpsc::channel(4);
+    adapter_tx
+        .send(AdapterUpdate::Add(named_adapter(
+            "127.0.0.2",
+            "conflux-nodev0",
+        )))
+        .await
+        .unwrap();
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let result = engine
+        .download_with_updates(
+            &probe,
+            &path,
+            &[fake_adapter("127.0.0.1")],
+            Some(adapter_rx),
+            None,
+            cancel_rx,
+        )
+        .await;
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+    assert_eq!(
+        server
+            .stats
+            .requests_by_peer_127_0_0_2
+            .load(Ordering::SeqCst),
+        0
+    );
+}
+
+// ─── Shutdown hygiene ────────────────────────────────────────────────────────
+
+/// Paths of every file this process currently has open.
+#[cfg(target_os = "linux")]
+fn open_file_paths() -> Vec<PathBuf> {
+    std::fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|e| std::fs::read_link(e.ok()?.path()).ok())
+        .collect()
+}
+
+/// Dropping the `download()` future (what `JoinHandle::abort` does) must stop every
+/// background task: none may keep the output file open or keep running.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn aborted_download_releases_output_file() {
+    let data = payload(PAYLOAD_LEN, 41);
+    let server = TestServer::start(throttled_config(&data)).await;
+    let engine = Arc::new(test_engine());
+    let dir = tempfile::tempdir().unwrap();
+    let path = std::fs::canonicalize(dir.path()).unwrap().join("abort.bin");
+    let probe = engine.probe(&server.url("/abort.bin")).await.unwrap();
+
+    // The progress receiver stays alive, so the reporter cannot exit via a closed channel.
+    let (tx, _rx) = mpsc::channel(1024);
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let task = {
+        let (engine, path) = (Arc::clone(&engine), path.clone());
+        tokio::spawn(async move {
+            engine
+                .download(&probe, &path, &[], Some(tx), cancel_rx)
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        open_file_paths().contains(&path),
+        "download should hold the file"
+    );
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while open_file_paths().contains(&path) {
+        assert!(
+            Instant::now() < deadline,
+            "output file still open after the download future was dropped"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Cancel guarantees no write is in flight when `download()` returns, so a fresh download
+/// started immediately into the same path must end byte-exact.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_then_immediate_restart_is_byte_exact() {
+    let data = payload(PAYLOAD_LEN, 42);
+    let slow = TestServer::start(throttled_config(&data)).await;
+    let fast = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let engine = DownloadEngine::new(CHUNK, 8)
+        .unwrap()
+        .with_retry_backoff(Duration::from_millis(10));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("restart.bin");
+
+    for _ in 0..3 {
+        cancelled_partial_download(
+            &engine,
+            &slow.url("/restart.bin"),
+            &path,
+            Duration::from_millis(300),
+        )
+        .await;
+        let probe = engine.probe(&fast.url("/restart.bin")).await.unwrap();
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+        let sha = engine
+            .download(&probe, &path, &[], None, cancel_rx)
+            .await
+            .unwrap();
+        assert_eq!(sha, sha256_hex(&data));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            std::fs::read(&path).unwrap() == *data,
+            "a write of the cancelled download landed in the new file"
+        );
+    }
+}
+
+// ─── Resource change detection ───────────────────────────────────────────────
+
+fn if_range_values(server: &TestServer) -> Vec<String> {
+    server.stats.if_range_values.lock().unwrap().clone()
+}
+
+const LAST_MODIFIED: &str = "Wed, 21 Oct 2015 07:28:00 GMT";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chunk_requests_carry_if_range_validator() {
+    let data = payload(PAYLOAD_LEN, 43);
+
+    // Strong ETag wins over Last-Modified.
+    let mut cfg = ServerConfig::new(Arc::clone(&data));
+    cfg.etag = Some("\"v1\"".into());
+    cfg.last_modified = Some(LAST_MODIFIED.into());
+    let server = TestServer::start(cfg).await;
+    let out = run_download(&test_engine(), &server, &[]).await;
+    assert_file_matches(&out, &data);
+    assert_eq!(out.probe.last_modified.as_deref(), Some(LAST_MODIFIED));
+    assert_eq!(if_range_values(&server), vec!["\"v1\"".to_string(); 17]);
+
+    // Weak ETags are not allowed in If-Range: use Last-Modified instead.
+    let mut cfg = ServerConfig::new(Arc::clone(&data));
+    cfg.etag = Some("W/\"v1\"".into());
+    cfg.last_modified = Some(LAST_MODIFIED.into());
+    let server = TestServer::start(cfg).await;
+    let out = run_download(&test_engine(), &server, &[]).await;
+    assert_file_matches(&out, &data);
+    assert_eq!(
+        if_range_values(&server),
+        vec![LAST_MODIFIED.to_string(); 17]
+    );
+
+    // Weak ETag only: no usable validator, no If-Range.
+    let mut cfg = ServerConfig::new(Arc::clone(&data));
+    cfg.etag = Some("W/\"v1\"".into());
+    let server = TestServer::start(cfg).await;
+    let out = run_download(&test_engine(), &server, &[]).await;
+    assert_file_matches(&out, &data);
+    assert!(if_range_values(&server).is_empty());
+}
+
+/// Serves `data` with ETag "v1", then (from the 5th chunk request on) a different payload
+/// of the same size with validator `new_etag`.
+fn changing_config(data: &Arc<Vec<u8>>, new_etag: Option<&str>, honor: bool) -> ServerConfig {
+    let mut cfg = ServerConfig::new(Arc::clone(data));
+    cfg.etag = Some("\"v1\"".into());
+    cfg.honor_if_range = honor;
+    cfg.content_change = Some(support::ContentChange {
+        after_chunks: 4,
+        payload: payload(data.len(), 999),
+        etag: new_etag.map(str::to_string),
+        last_modified: None,
+    });
+    cfg
+}
+
+fn assert_failed_as_changed(out: &Outcome, server: &TestServer) {
+    let msg = format!(
+        "{:#}",
+        out.result
+            .as_ref()
+            .expect_err("a changed resource must fail the download")
+    );
+    assert!(msg.contains("changed on the server"), "{}", msg);
+    // Fails on the first evidence instead of retrying every chunk 5 times.
+    let requests = server.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(requests < 17, "kept requesting chunks: {}", requests);
+    assert!(
+        out.elapsed < Duration::from_secs(5),
+        "took {:?}",
+        out.elapsed
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn same_size_change_mid_download_fails_via_if_range() {
+    let data = payload(PAYLOAD_LEN, 44);
+    let server = TestServer::start(changing_config(&data, Some("\"v2\""), true)).await;
+    let out = run_download(&test_engine(), &server, &[]).await;
+    assert_failed_as_changed(&out, &server);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn same_size_change_mid_download_fails_via_etag_compare() {
+    let data = payload(PAYLOAD_LEN, 45);
+    // The server ignores If-Range and answers 206 with the new ETag.
+    let server = TestServer::start(changing_config(&data, Some("\"v2\""), false)).await;
+    let out = run_download(&test_engine(), &server, &[]).await;
+    assert_failed_as_changed(&out, &server);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn etag_disappearing_mid_download_fails() {
+    let data = payload(PAYLOAD_LEN, 46);
+    for honor in [true, false] {
+        let server = TestServer::start(changing_config(&data, None, honor)).await;
+        let out = run_download(&test_engine(), &server, &[]).await;
+        assert_failed_as_changed(&out, &server);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_with_disappeared_etag_restarts_from_zero() {
+    let data = payload(PAYLOAD_LEN, 47);
+    let mut cfg = throttled_config(&data);
+    cfg.etag = Some("\"v1\"".into());
+    let old = TestServer::start(cfg).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gone.bin");
+    let done = cancelled_partial_download(
+        &engine,
+        &old.url("/gone.bin"),
+        &path,
+        Duration::from_millis(1500),
+    )
+    .await;
+    assert!(done > 0);
+
+    let new = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let (result, _) = resume_to_end(&engine, &new.url("/gone.bin"), &path).await;
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+    assert_eq!(new.stats.chunk_requests.load(Ordering::SeqCst), 17);
+}
+
+// ─── Dynamic adapters ────────────────────────────────────────────────────────
+
+/// A hot-added adapter that never works must not retire the working default route.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failing_hot_added_adapter_keeps_default_route() {
+    let data = payload(PAYLOAD_LEN, 48);
+    let mut cfg = throttled_config(&data);
+    cfg.fail_peer_ip = Some("127.0.0.2".parse().unwrap());
+    let server = TestServer::start(cfg).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let probe = engine.probe(&server.url("/bad-add.bin")).await.unwrap();
+    let path = dir.path().join("bad-add.bin");
+
+    let (progress_tx, mut progress_rx) = mpsc::channel(1024);
+    let collector = tokio::spawn(async move {
+        let mut all = Vec::new();
+        while let Some(p) = progress_rx.recv().await {
+            all.push(p);
+        }
+        all
+    });
+    let (adapter_tx, adapter_rx) = mpsc::channel(4);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = adapter_tx
+            .send(AdapterUpdate::Add(fake_adapter("127.0.0.2")))
+            .await;
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    });
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let result = engine
+        .download_with_updates(
+            &probe,
+            &path,
+            &[],
+            Some(adapter_rx),
+            Some(progress_tx),
+            cancel_rx,
+        )
+        .await;
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+    assert!(
+        server
+            .stats
+            .requests_by_peer_127_0_0_2
+            .load(Ordering::SeqCst)
+            > 0
+    );
+
+    let progress = collector.await.unwrap();
+    let last = progress.last().unwrap();
+    let default_route = last
+        .adapters
+        .iter()
+        .find(|a| a.label == "default-route")
+        .unwrap();
+    assert!(!default_route.dropped, "working default route was retired");
+    let bad = last
+        .adapters
+        .iter()
+        .find(|a| a.label == "127.0.0.2")
+        .unwrap();
+    assert!(bad.dropped);
+}
+
+/// Removing and re-adding the same adapter creates a second stats entry with the same
+/// label; the two must not share speed baselines. The old (dropped, idle) entry receives
+/// no bytes, so its displayed speed may only decay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn readded_adapter_keeps_separate_speed_stats() {
+    let data = payload(PAYLOAD_LEN, 49);
+    let server = TestServer::start(throttled_config(&data)).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let probe = engine.probe(&server.url("/readd.bin")).await.unwrap();
+    let path = dir.path().join("readd.bin");
+
+    let (progress_tx, mut progress_rx) = mpsc::channel(4096);
+    let collector = tokio::spawn(async move {
+        let mut all = Vec::new();
+        while let Some(p) = progress_rx.recv().await {
+            all.push(p);
+        }
+        all
+    });
+    let (adapter_tx, adapter_rx) = mpsc::channel(4);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let ip = "127.0.0.1".parse().unwrap();
+        let _ = adapter_tx.send(AdapterUpdate::Remove(ip)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = adapter_tx
+            .send(AdapterUpdate::Add(fake_adapter("127.0.0.1")))
+            .await;
+        tokio::time::sleep(Duration::from_secs(30)).await;
+    });
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let result = engine
+        .download_with_updates(
+            &probe,
+            &path,
+            &[fake_adapter("127.0.0.1")],
+            Some(adapter_rx),
+            Some(progress_tx),
+            cancel_rx,
+        )
+        .await;
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+
+    let progress = collector.await.unwrap();
+    let readded = progress
+        .iter()
+        .filter(|p| p.adapters.iter().filter(|a| a.label == "127.0.0.1").count() == 2)
+        .count();
+    assert!(readded > 2, "re-added adapter was not observed running");
+    for pair in progress.windows(2) {
+        let (a, b) = (&pair[0].adapters[0], &pair[1].adapters[0]);
+        if a.dropped && a.active_connections == 0 && a.downloaded_bytes == b.downloaded_bytes {
+            assert!(
+                b.speed_bytes_sec <= a.speed_bytes_sec + 1e-6,
+                "idle dropped adapter speed rose from {} to {}",
+                a.speed_bytes_sec,
+                b.speed_bytes_sec
+            );
+        }
+    }
+}
+
+// ─── Filenames ───────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn non_ascii_content_disposition_keeps_filename_star() {
+    let mut cfg = ServerConfig::new(payload(1024, 50));
+    cfg.content_disposition =
+        Some("attachment; filename=\"résumé.pdf\"; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf".into());
+    let server = TestServer::start(cfg).await;
+    let probe = test_engine().probe(&server.url("/dl?id=7")).await.unwrap();
+    assert_eq!(probe.suggested_filename, "résumé.pdf");
 }

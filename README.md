@@ -77,10 +77,11 @@ conflux/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── TitleBar.tsx           # Windows 11 title bar & global speed pill
-│   │   │   ├── Sidebar.tsx            # Category rail & Bonded Adapters Dock
-│   │   │   ├── DownloadList.tsx       # Download table with per-adapter speed pills
-│   │   │   ├── InspectionDrawer.tsx   # Color-coded visual chunk progress map
-│   │   │   └── NewDownloadModal.tsx   # Multi-source & adapter selection modal
+│   │   │   ├── NavPane.tsx            # Category navigation rail
+│   │   │   ├── DownloadTable.tsx      # Download table with per-adapter speed pills
+│   │   │   ├── DetailsPane.tsx        # Selected download details & chunk map
+│   │   │   └── AddDownloadDialog.tsx  # New download dialog
+│   │   ├── pages/                     # Network & Settings pages
 │   │   └── App.tsx
 │   └── package.json
 └── docs/

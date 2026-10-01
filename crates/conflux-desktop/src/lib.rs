@@ -7,9 +7,31 @@ mod tray;
 
 use history::HistoryStore;
 use state::AppState;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
+
+/// Set once a graceful quit has started, so repeated close/quit requests do not race it.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// Hides the window, pauses every running download (concurrently, bounded by one stop
+/// timeout), saves history and exits. Further calls while quitting are ignored.
+pub(crate) fn quit_gracefully(app: &tauri::AppHandle) {
+    if QUITTING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    info!("Quitting: pausing downloads and saving history");
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        commands::pause_all_internal(&app, &state).await;
+        app.exit(0);
+    });
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -65,46 +87,31 @@ pub fn run() {
                         // Keep watcher alive inside this task
                         let _watcher = watcher;
                         let state = app_handle.state::<AppState>();
-                        {
-                            let mut initial_adapters = rx.borrow().clone();
-                            let overrides = state.settings.read().await.adapter_overrides.clone();
-                            for a in initial_adapters.iter_mut() {
-                                adapters::apply_overrides(a, &overrides);
-                            }
-                            *state.last_adapters.write().await = initial_adapters;
-                        }
+                        let initial = rx.borrow().clone();
+                        commands::refresh_adapters(
+                            &state,
+                            initial,
+                            commands::AddPolicy::IfAutoAggregate,
+                        )
+                        .await;
 
                         while rx.changed().await.is_ok() {
-                            let mut current_adapters = rx.borrow().clone();
-                            let settings = state.settings.read().await.clone();
-                            for a in current_adapters.iter_mut() {
-                                adapters::apply_overrides(a, &settings.adapter_overrides);
-                            }
-                            let (added, removed) = {
-                                let mut last = state.last_adapters.write().await;
-                                let diff = conflux_core::diff_adapters(&last, &current_adapters);
-                                *last = current_adapters.clone();
-                                diff
-                            };
+                            let discovered = rx.borrow().clone();
+                            // Applies overrides, updates `last_adapters` and hot-plugs the
+                            // difference into active downloads, all under one lock.
+                            let current_adapters = commands::refresh_adapters(
+                                &state,
+                                discovered,
+                                commands::AddPolicy::IfAutoAggregate,
+                            )
+                            .await;
 
-                            // 1. Emit updated adapter list to UI
                             let infos: Vec<adapters::AdapterInfo> = current_adapters
                                 .into_iter()
                                 .map(adapters::to_info)
                                 .collect();
                             if let Err(e) = app_handle.emit("network-adapters-changed", &infos) {
                                 warn!("Failed to emit network-adapters-changed: {e}");
-                            }
-
-                            // 2. Hot-plug into active downloads
-                            let added_to_apply = if settings.auto_aggregate_adapters {
-                                added
-                            } else {
-                                Vec::new()
-                            };
-                            if !added_to_apply.is_empty() || !removed.is_empty() {
-                                commands::handle_network_change(&state, &added_to_apply, &removed)
-                                    .await;
                             }
                         }
                     }
@@ -118,6 +125,10 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if QUITTING.load(Ordering::SeqCst) {
+                    // A graceful quit already paused everything; let the window go.
+                    return;
+                }
                 let app = window.app_handle();
                 let state = app.state::<AppState>();
                 let close_to_tray = state
@@ -125,9 +136,13 @@ pub fn run() {
                     .try_read()
                     .map(|s| s.close_to_tray)
                     .unwrap_or(true);
+                // Never let the window close directly: downloads must be paused (resume data
+                // flushed) and history saved before the process exits.
+                api.prevent_close();
                 if close_to_tray {
-                    api.prevent_close();
                     let _ = window.hide();
+                } else {
+                    quit_gracefully(app);
                 }
             }
         })

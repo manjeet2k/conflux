@@ -39,7 +39,19 @@ impl SparseFileWriter {
                 .truncate(true)
                 .open(&open_path)
                 .with_context(|| format!("Failed to create output file {:?}", open_path))?;
-            // Pre-allocate the complete file size. On Windows this sets EndOfFile; on Linux it calls ftruncate.
+            // NTFS files are not sparse by default: `set_len` alone only moves EndOfFile, and a
+            // write far past the valid data length then zero-fills everything before it
+            // synchronously. Marking the file sparse first avoids that. Best effort only.
+            #[cfg(windows)]
+            if let Err(e) = mark_sparse(&file) {
+                tracing::warn!(
+                    "Could not mark {:?} as sparse ({}); continuing with a regular file",
+                    open_path,
+                    e
+                );
+            }
+            // Pre-allocate the complete file size. On Windows this sets EndOfFile; on Linux
+            // ftruncate leaves the file sparse.
             file.set_len(total_bytes).with_context(|| {
                 format!(
                     "Failed to pre-allocate {} bytes for {:?}",
@@ -142,6 +154,34 @@ impl SparseFileWriter {
     }
 }
 
+/// Sets the NTFS sparse attribute (`FSCTL_SET_SPARSE`) on an open, writable file.
+#[cfg(windows)]
+fn mark_sparse(file: &File) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Ioctl::FSCTL_SET_SPARSE;
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+
+    let mut bytes_returned = 0u32;
+    // SAFETY: the handle is valid for the lifetime of `file`; no input buffer means "set
+    // sparse", no output buffer is used, and the call is synchronous (no OVERLAPPED).
+    let ok = unsafe {
+        DeviceIoControl(
+            file.as_raw_handle(),
+            FSCTL_SET_SPARSE,
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            0,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn write_all_at(file: &File, buf: &[u8], offset: u64) -> io::Result<()> {
     use std::os::unix::fs::FileExt;
@@ -203,6 +243,20 @@ mod tests {
         assert!(writer.write_at(u64::MAX, b"X").await.is_err());
         writer.write_at(5, b"XYZ").await?;
         assert_eq!(tokio::fs::metadata(&file_path).await?.len(), 8);
+        Ok(())
+    }
+
+    /// On NTFS the pre-allocated file must carry the sparse attribute.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn test_sparse_file_writer_marks_file_sparse() -> Result<()> {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_SPARSE_FILE: u32 = 0x200;
+        let dir = tempdir()?;
+        let file_path = dir.path().join("sparse.bin");
+        let _writer = SparseFileWriter::create(&file_path, 1 << 30).await?;
+        let attributes = std::fs::metadata(&file_path)?.file_attributes();
+        assert_ne!(attributes & FILE_ATTRIBUTE_SPARSE_FILE, 0);
         Ok(())
     }
 

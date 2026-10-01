@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use conflux_core::{
-    discover_adapters, sanitize_filename, unique_path, DownloadCancelled, DownloadEngine,
+    claim_unique_path, discover_adapters, sanitize_filename, DownloadCancelled, DownloadEngine,
     ProgressUpdate,
 };
 use std::path::{Path, PathBuf};
@@ -32,8 +32,9 @@ enum Commands {
         /// URL of the file to download
         url: String,
 
-        /// Destination file path (overwritten if it exists) or an existing directory.
-        /// Without it, the file is saved in the current directory under the server-suggested
+        /// Destination file path (overwritten if it exists), or a directory: an existing one,
+        /// or any path ending in a separator (e.g. `newdir/`), which is created if missing.
+        /// Without it, or with a directory, the file is saved there under the server-suggested
         /// name, auto-renamed to "name (1).ext" etc. if that name is taken.
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -226,23 +227,34 @@ fn validate_url(url: &str) -> Result<()> {
 
 /// Decides where to save the download.
 /// - no `-o`: current directory + suggested name, auto-renamed if taken
-/// - `-o <existing dir>`: that directory + suggested name, auto-renamed if taken
+/// - `-o <existing dir>` or `-o <path ending in a separator>` (created if missing):
+///   that directory + suggested name, auto-renamed if taken
 /// - `-o <file>`: exactly that path (overwritten)
+///
+/// Auto-renamed names are claimed atomically ([`claim_unique_path`] creates the empty file),
+/// so two concurrent runs can never pick the same file.
 fn resolve_output_path(output: Option<&Path>, suggested_filename: &str) -> Result<PathBuf> {
     let name = sanitize_filename(suggested_filename);
-    match output {
-        None => {
-            let cwd = std::env::current_dir().context("Cannot determine current directory")?;
-            Ok(unique_path(&cwd, &name))
+    let dir = match output {
+        None => std::env::current_dir().context("Cannot determine current directory")?,
+        Some(path) if path.as_os_str().is_empty() => bail!("Output path must not be empty"),
+        Some(path) if path.is_dir() => path.to_path_buf(),
+        Some(path) if ends_with_separator(path) => {
+            std::fs::create_dir_all(path)
+                .with_context(|| format!("Cannot create output directory {:?}", path))?;
+            path.to_path_buf()
         }
-        Some(path) if path.is_dir() => Ok(unique_path(path, &name)),
-        Some(path) => {
-            if path.as_os_str().is_empty() {
-                bail!("Output path must not be empty");
-            }
-            Ok(path.to_path_buf())
-        }
-    }
+        Some(path) => return Ok(path.to_path_buf()),
+    };
+    claim_unique_path(&dir, &name)
+        .with_context(|| format!("Cannot create output file for {:?} in {:?}", name, dir))
+}
+
+/// `true` if the path as typed ends in `/` (or `\` on Windows), i.e. names a directory.
+fn ends_with_separator(path: &Path) -> bool {
+    path.as_os_str()
+        .to_string_lossy()
+        .ends_with(std::path::is_separator)
 }
 
 #[cfg(test)]
@@ -268,11 +280,47 @@ mod tests {
             resolve_output_path(Some(&dir), "f.bin").unwrap(),
             dir.join("f (1).bin")
         );
+        // The auto-renamed name is claimed: a second run cannot pick it again.
+        assert!(dir.join("f (1).bin").exists());
+        assert_eq!(
+            resolve_output_path(Some(&dir), "f.bin").unwrap(),
+            dir.join("f (2).bin")
+        );
         // Explicit file: used as-is (overwrite).
         assert_eq!(
             resolve_output_path(Some(&dir.join("f.bin")), "other").unwrap(),
             dir.join("f.bin")
         );
+        // Explicit non-existent file: used as-is, not created as a directory.
+        assert_eq!(
+            resolve_output_path(Some(&dir.join("new.bin")), "other").unwrap(),
+            dir.join("new.bin")
+        );
+        assert!(!dir.join("new.bin").exists());
+        assert!(resolve_output_path(Some(Path::new("")), "x").is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_output_path_trailing_separator_is_directory() {
+        let dir = tempdir_path().with_extension("sep");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Non-existent path ending in a separator: created and used as a directory.
+        let newdir = PathBuf::from(format!("{}/newdir/", dir.display()));
+        let got = resolve_output_path(Some(&newdir), "a.iso").unwrap();
+        assert!(dir.join("newdir").is_dir());
+        assert_eq!(got, dir.join("newdir").join("a.iso"));
+        assert!(got.is_file(), "name must be claimed");
+
+        // Existing directory given with a trailing separator: auto-renamed inside it.
+        let again = resolve_output_path(Some(&newdir), "a.iso").unwrap();
+        assert_eq!(again, dir.join("newdir").join("a (1).iso"));
+
+        assert!(ends_with_separator(Path::new("x/")));
+        assert!(!ends_with_separator(Path::new("x")));
+        #[cfg(windows)]
+        assert!(ends_with_separator(Path::new("x\\")));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

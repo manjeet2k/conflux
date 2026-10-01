@@ -48,8 +48,10 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Clamps numeric fields into their supported ranges and normalizes an empty folder to `None`.
+    /// Clamps numeric fields into their supported ranges, normalizes an empty folder to `None`
+    /// and migrates legacy `"<name>:<ip>"` adapter override keys to interface names.
     pub fn normalized(mut self) -> Self {
+        self.adapter_overrides = crate::adapters::migrate_overrides(self.adapter_overrides);
         self.connections_per_adapter = self
             .connections_per_adapter
             .clamp(MIN_CONNECTIONS, MAX_CONNECTIONS);
@@ -73,6 +75,15 @@ impl Settings {
             }
         }
         Ok(())
+    }
+
+    /// Builds the settings to store from an update sent by the UI. Adapter overrides are
+    /// changed only through `set_adapter_enabled`, so the UI's possibly stale copy is ignored.
+    pub fn apply_update(&self, update: Settings) -> Result<Settings, String> {
+        let mut next = update.normalized();
+        next.validate()?;
+        next.adapter_overrides = self.adapter_overrides.clone();
+        Ok(next)
     }
 
     pub fn chunk_size_bytes(&self) -> u64 {
@@ -161,6 +172,23 @@ mod tests {
     }
 
     #[test]
+    fn load_migrates_legacy_adapter_override_keys() {
+        let dir = std::env::temp_dir().join(format!("conflux-settings-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            br#"{"adapter_overrides":{"Wi-Fi:192.168.1.5":false,"Ethernet:fe80::1":true}}"#,
+        )
+        .unwrap();
+        let s = load(&path);
+        assert_eq!(s.adapter_overrides.len(), 2);
+        assert_eq!(s.adapter_overrides.get("Wi-Fi"), Some(&false));
+        assert_eq!(s.adapter_overrides.get("Ethernet"), Some(&true));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn validate_default_dir() {
         let mut s = Settings::default();
         assert!(s.validate().is_ok());
@@ -171,12 +199,34 @@ mod tests {
     }
 
     #[test]
+    fn apply_update_keeps_current_adapter_overrides() {
+        let mut current = Settings::default();
+        current.adapter_overrides.insert("Wi-Fi".into(), false);
+        // The UI sends its startup copy, which predates the adapter toggle.
+        let update = Settings {
+            theme: ThemePreference::Dark,
+            connections_per_adapter: 0,
+            ..Settings::default()
+        };
+        let next = current.apply_update(update).unwrap();
+        assert_eq!(next.theme, ThemePreference::Dark);
+        assert_eq!(next.connections_per_adapter, 1);
+        assert_eq!(next.adapter_overrides, current.adapter_overrides);
+
+        let bad = Settings {
+            default_save_dir: Some("relative".into()),
+            ..Settings::default()
+        };
+        assert!(current.apply_update(bad).is_err());
+    }
+
+    #[test]
     fn save_and_load_roundtrip() {
         let dir = std::env::temp_dir().join(format!("conflux-settings-{}", uuid::Uuid::new_v4()));
         let path = dir.join("settings.json");
         assert_eq!(load(&path), Settings::default());
         let mut overrides = std::collections::HashMap::new();
-        overrides.insert("eth0:192.168.1.50".into(), false);
+        overrides.insert("eth0".into(), false);
         overrides.insert("wlan0".into(), true);
         let s = Settings {
             theme: ThemePreference::Light,

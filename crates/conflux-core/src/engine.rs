@@ -26,7 +26,7 @@ use tracing::{debug, error, info, warn};
 pub const MAX_CHUNK_ATTEMPTS: u32 = 5;
 
 /// An adapter is dropped for the rest of a download after this many consecutive failed
-/// attempts (with no successful chunk in between).
+/// attempts (with no successful chunk in between), unless it is the last usable adapter.
 pub const MAX_CONSECUTIVE_ADAPTER_FAILURES: u32 = 3;
 
 /// Default base for the exponential retry backoff (0.5s, 1s, 2s, 4s, 8s).
@@ -165,6 +165,15 @@ fn header_str(headers: &header::HeaderMap, name: header::HeaderName) -> Option<&
     headers.get(name).and_then(|v| v.to_str().ok())
 }
 
+/// `Content-Disposition` decoded as (lossy) UTF-8. `HeaderValue::to_str` rejects any
+/// non-ASCII byte, which would also discard a valid RFC 5987 `filename*` next to a raw
+/// UTF-8 `filename="résumé.pdf"`.
+fn content_disposition_header(headers: &header::HeaderMap) -> Option<String> {
+    headers
+        .get(header::CONTENT_DISPOSITION)
+        .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+}
+
 fn content_length_header(headers: &header::HeaderMap) -> Option<u64> {
     header_str(headers, header::CONTENT_LENGTH).and_then(|v| v.trim().parse().ok())
 }
@@ -186,6 +195,9 @@ enum AttemptError {
     Stopped,
     /// The attempt failed and counts against the chunk's and adapter's retry budget.
     Failed(anyhow::Error),
+    /// The remote resource is no longer the one the probe saw; retrying cannot help and
+    /// the bytes already written are from the old version, so the whole download fails.
+    ResourceChanged(anyhow::Error),
 }
 
 impl From<anyhow::Error> for AttemptError {
@@ -202,8 +214,31 @@ struct Counters {
     completed: AtomicUsize,
 }
 
+/// Where one adapter's sockets are bound. `ip: None` is the unbound default OS route.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct BindTarget {
+    ip: Option<IpAddr>,
+    /// OS interface name to pin egress to (SO_BINDTODEVICE on Linux); `None` if unknown.
+    interface: Option<String>,
+}
+
+impl BindTarget {
+    fn of(adapter: &NetworkAdapter) -> Self {
+        Self {
+            ip: Some(adapter.ip),
+            interface: Some(adapter.name.clone()).filter(|n| !n.is_empty()),
+        }
+    }
+}
+
+/// Source of [`AdapterWorkerState::id`].
+static NEXT_ADAPTER_STATE_ID: AtomicU64 = AtomicU64::new(0);
+
 /// Per-adapter state shared by that adapter's workers.
 struct AdapterWorkerState {
+    /// Unique per state. Labels are not: a removed and re-added adapter (or a second
+    /// default-route fallback) gets a new state with the same label.
+    id: u64,
     label: String,
     ip: Option<IpAddr>,
     client: reqwest::Client,
@@ -219,6 +254,7 @@ impl AdapterWorkerState {
     fn new(ip: Option<IpAddr>, client: reqwest::Client) -> Self {
         let (retire_tx, _retire_rx) = watch::channel(false);
         Self {
+            id: NEXT_ADAPTER_STATE_ID.fetch_add(1, Ordering::Relaxed),
             label: DownloadEngine::bind_label(ip),
             ip,
             client,
@@ -253,11 +289,19 @@ struct SidecarTarget {
 struct ChunkedShared {
     url: String,
     total_bytes: u64,
+    /// Sent as `If-Range` on every chunk GET: the probe's strong ETag, else its
+    /// Last-Modified (weak ETags are not allowed in `If-Range`).
+    if_range: Option<String>,
+    /// The probe's validators; every 206 must carry exactly these.
+    etag: Option<String>,
+    last_modified: Option<String>,
     writer: SparseFileWriter,
     scheduler: Mutex<ChunkScheduler>,
     counters: Arc<Counters>,
     stop_tx: watch::Sender<bool>,
     last_error: Mutex<Option<String>>,
+    /// Set when the remote resource changed mid-download; fails the download.
+    resource_changed: Mutex<Option<String>>,
 }
 
 impl ChunkedShared {
@@ -271,12 +315,30 @@ impl ChunkedShared {
     }
 }
 
-/// Signals workers to stop if `download()` is dropped before finishing.
+/// Signals workers and the sidecar persister to stop if `download()` is dropped before
+/// finishing (e.g. its task was aborted).
 struct StopOnDrop(Arc<ChunkedShared>);
 
 impl Drop for StopOnDrop {
     fn drop(&mut self) {
         self.0.stop_tx.send_replace(true);
+    }
+}
+
+/// Notifies on drop, so the progress reporter ends even if `download()` is dropped.
+struct NotifyOnDrop(Arc<Notify>);
+
+impl Drop for NotifyOnDrop {
+    fn drop(&mut self) {
+        self.0.notify_one();
+    }
+}
+
+/// The `If-Range` validator for `probe`: a strong ETag, else Last-Modified.
+fn if_range_validator(probe: &DownloadProbe) -> Option<String> {
+    match &probe.etag {
+        Some(etag) if !etag.trim_start().starts_with("W/") => Some(etag.clone()),
+        _ => probe.last_modified.clone(),
     }
 }
 
@@ -328,7 +390,7 @@ impl DownloadEngine {
     pub async fn probe(&self, url: &str) -> Result<DownloadProbe> {
         let parsed_url =
             reqwest::Url::parse(url).with_context(|| format!("Invalid URL: {}", url))?;
-        let client = build_bound_http_client(None, self.stall_timeout)?;
+        let client = build_bound_http_client(None, None, self.stall_timeout)?;
 
         let get = tokio::time::timeout(
             PROBE_TIMEOUT,
@@ -385,10 +447,8 @@ impl DownloadEngine {
         // for a 200 full-body answer this aborts the transfer.
         drop(resp);
 
-        let suggested_filename = derive_filename(
-            header_str(&headers, header::CONTENT_DISPOSITION),
-            &final_url,
-        );
+        let suggested_filename =
+            derive_filename(content_disposition_header(&headers).as_deref(), &final_url);
         let etag = header_str(&headers, header::ETAG).map(str::to_string);
         let last_modified = header_str(&headers, header::LAST_MODIFIED).map(str::to_string);
 
@@ -448,7 +508,7 @@ impl DownloadEngine {
             // Range support is unverified without a ranged GET; stay on the safe path.
             supports_ranges: false,
             suggested_filename: derive_filename(
-                header_str(headers, header::CONTENT_DISPOSITION),
+                content_disposition_header(headers).as_deref(),
                 resp.url(),
             ),
             etag: header_str(headers, header::ETAG).map(str::to_string),
@@ -456,19 +516,38 @@ impl DownloadEngine {
         })
     }
 
-    /// Selects the adapters to bind to: enabled, non-loopback IPv4. Empty ⇒ `[None]`
-    /// (unbound default OS routing).
-    fn select_bind_ips(adapters: &[NetworkAdapter]) -> Vec<Option<IpAddr>> {
-        let ips: Vec<Option<IpAddr>> = adapters
+    /// Whether the engine can bind to `adapter`: enabled, non-loopback IPv4.
+    fn is_usable(adapter: &NetworkAdapter) -> bool {
+        adapter.enabled && adapter.is_ipv4 && !adapter.is_loopback && adapter.ip.is_ipv4()
+    }
+
+    /// Selects the adapters to bind to (see [`Self::is_usable`]). None usable ⇒ one
+    /// unbound target (default OS routing).
+    fn select_bind_targets(adapters: &[NetworkAdapter]) -> Vec<BindTarget> {
+        let targets: Vec<BindTarget> = adapters
             .iter()
-            .filter(|a| a.enabled && a.is_ipv4 && !a.is_loopback && a.ip.is_ipv4())
-            .map(|a| Some(a.ip))
+            .filter(|a| Self::is_usable(a))
+            .map(BindTarget::of)
             .collect();
-        if ips.is_empty() {
-            vec![None]
+        if targets.is_empty() {
+            vec![BindTarget::default()]
         } else {
-            ips
+            targets
         }
+    }
+
+    /// Builds the HTTP client and worker state for one bind target.
+    fn new_adapter_state(&self, target: &BindTarget) -> Result<Arc<AdapterWorkerState>> {
+        let client =
+            build_bound_http_client(target.ip, target.interface.as_deref(), self.stall_timeout)
+                .with_context(|| {
+                    format!(
+                        "Failed to build HTTP client bound to {} (interface {:?})",
+                        Self::bind_label(target.ip),
+                        target.interface
+                    )
+                })?;
+        Ok(Arc::new(AdapterWorkerState::new(target.ip, client)))
     }
 
     fn bind_label(ip: Option<IpAddr>) -> String {
@@ -484,14 +563,13 @@ impl DownloadEngine {
     ///
     /// Chunked downloads keep a resume sidecar (see [`resume_sidecar_path`]) while running
     /// and after a cancel or failure; it is deleted on success.
-    /// Downloads `probe.url` into `output_path` (created/truncated), returning the SHA-256 hex.
     ///
-    /// Uses parallel ranged GETs across `adapters` when the probe verified range support and
-    /// a known size; otherwise a single stream. When `cancel` becomes `true`, all workers stop
-    /// (no write is in flight when this returns) and the result is `Err(DownloadCancelled)`.
+    /// Chunk requests carry `If-Range` (strong ETag, else Last-Modified). If the server shows
+    /// the resource changed mid-download (200 instead of 206, or different validators on a
+    /// 206), the download fails at once instead of mixing two versions.
     ///
-    /// Chunked downloads keep a resume sidecar (see [`resume_sidecar_path`]) while running
-    /// and after a cancel or failure; it is deleted on success.
+    /// Dropping the returned future stops all background tasks and releases the file, but
+    /// unlike a cancel it cannot wait for an in-flight disk write to finish.
     pub async fn download(
         &self,
         probe: &DownloadProbe,
@@ -581,17 +659,10 @@ impl DownloadEngine {
             return Err(cancelled_error());
         }
 
-        let bind_ips = Self::select_bind_ips(adapters);
+        let targets = Self::select_bind_targets(adapters);
         info!(
             "Download {} -> {:?} (size {} bytes, ranges {}, adapters {:?})",
-            probe.url,
-            output_path,
-            probe.total_bytes,
-            probe.supports_ranges,
-            bind_ips
-                .iter()
-                .map(|ip| Self::bind_label(*ip))
-                .collect::<Vec<_>>()
+            probe.url, output_path, probe.total_bytes, probe.supports_ranges, targets
         );
 
         if !probe.supports_ranges || probe.total_bytes == 0 {
@@ -604,14 +675,14 @@ impl DownloadEngine {
                 format!("Failed to remove stale resume data for {:?}", output_path)
             })?;
             return self
-                .download_single_stream(probe, output_path, bind_ips[0], progress_tx, cancel)
+                .download_single_stream(probe, output_path, &targets[0], progress_tx, cancel)
                 .await;
         }
 
         self.download_chunked(
             probe,
             output_path,
-            &bind_ips,
+            &targets,
             adapter_rx,
             progress_tx,
             cancel,
@@ -645,21 +716,17 @@ impl DownloadEngine {
         &self,
         probe: &DownloadProbe,
         output_path: &Path,
-        bind_ips: &[Option<IpAddr>],
+        targets: &[BindTarget],
         mut adapter_rx: Option<mpsc::Receiver<AdapterUpdate>>,
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         mut cancel: watch::Receiver<bool>,
         resume: bool,
     ) -> Result<String> {
         let mut initial_states = Vec::new();
-        for ip in bind_ips {
-            match build_bound_http_client(*ip, self.stall_timeout) {
-                Ok(client) => initial_states.push(Arc::new(AdapterWorkerState::new(*ip, client))),
-                Err(e) => error!(
-                    "Failed to build HTTP client bound to {}: {:#}",
-                    Self::bind_label(*ip),
-                    e
-                ),
+        for target in targets {
+            match self.new_adapter_state(target) {
+                Ok(state) => initial_states.push(state),
+                Err(e) => error!("{:#}", e),
             }
         }
         if initial_states.is_empty() {
@@ -724,6 +791,9 @@ impl DownloadEngine {
         let shared = Arc::new(ChunkedShared {
             url: probe.url.clone(),
             total_bytes: probe.total_bytes,
+            if_range: if_range_validator(probe),
+            etag: probe.etag.clone(),
+            last_modified: probe.last_modified.clone(),
             writer: writer.clone(),
             scheduler: Mutex::new(ChunkScheduler::new(
                 chunks,
@@ -733,6 +803,7 @@ impl DownloadEngine {
             counters: Arc::clone(&counters),
             stop_tx,
             last_error: Mutex::new(None),
+            resource_changed: Mutex::new(None),
         });
         let _stop_guard = StopOnDrop(Arc::clone(&shared));
 
@@ -763,6 +834,7 @@ impl DownloadEngine {
             probe.total_bytes,
             total_chunks,
         );
+        let _progress_guard = NotifyOnDrop(Arc::clone(&progress_done));
 
         let mut worker_set = JoinSet::new();
         {
@@ -771,6 +843,7 @@ impl DownloadEngine {
                 for worker_idx in 0..self.connections_per_adapter {
                     worker_set.spawn(run_chunk_worker(
                         Arc::clone(&shared),
+                        Arc::clone(&adapter_states),
                         Arc::clone(adapter),
                         worker_idx,
                         stop_rx.clone(),
@@ -800,19 +873,7 @@ impl DownloadEngine {
                 } => {
                     match maybe_update {
                         Some(AdapterUpdate::Add(adapter)) => {
-                            if adapter.enabled && adapter.is_ipv4 && !adapter.is_loopback && adapter.ip.is_ipv4() {
-                                // If default-route fallback was active, retire it now that an explicit adapter joined
-                                {
-                                    let states = adapter_states.read().unwrap();
-                                    for target in states.iter().filter(|s| s.ip.is_none() && !s.dropped.load(Ordering::SeqCst)) {
-                                        info!(
-                                            "Retiring default-route fallback workers now that adapter {} ({}) joined",
-                                            adapter.id, adapter.ip
-                                        );
-                                        target.dropped.store(true, Ordering::SeqCst);
-                                        target.retire_tx.send_replace(true);
-                                    }
-                                }
+                            if Self::is_usable(&adapter) {
                                 let already_exists = {
                                     let states = adapter_states.read().unwrap();
                                     states.iter().any(|s| {
@@ -822,16 +883,18 @@ impl DownloadEngine {
                                 };
                                 if !already_exists {
                                     info!(
-                                        "Dynamically aggregating new network adapter {} ({}) into download",
-                                        adapter.id, adapter.ip
+                                        "Dynamically aggregating new network adapter {} ({}, interface {:?}) into download",
+                                        adapter.id, adapter.ip, adapter.name
                                     );
-                                    match build_bound_http_client(Some(adapter.ip), self.stall_timeout) {
-                                        Ok(client) => {
-                                            let new_state = Arc::new(AdapterWorkerState::new(Some(adapter.ip), client));
+                                    // A default-route fallback is retired only once this adapter
+                                    // completes a chunk (see `retire_default_route`).
+                                    match self.new_adapter_state(&BindTarget::of(&adapter)) {
+                                        Ok(new_state) => {
                                             adapter_states.write().unwrap().push(Arc::clone(&new_state));
                                             for worker_idx in 0..self.connections_per_adapter {
                                                 worker_set.spawn(run_chunk_worker(
                                                     Arc::clone(&shared),
+                                                    Arc::clone(&adapter_states),
                                                     Arc::clone(&new_state),
                                                     worker_idx,
                                                     stop_rx.clone(),
@@ -839,7 +902,7 @@ impl DownloadEngine {
                                             }
                                         }
                                         Err(e) => {
-                                            error!("Failed to build client for newly added adapter {}: {:#}", adapter.id, e);
+                                            error!("Newly added adapter {}: {:#}", adapter.id, e);
                                         }
                                     }
                                 }
@@ -856,14 +919,14 @@ impl DownloadEngine {
                             let has_fallback = states.iter().any(|s| s.ip.is_none() && !s.dropped.load(Ordering::SeqCst));
                             if !has_active && !has_fallback {
                                 info!("All specific network adapters were removed/disabled; falling back to default OS routing");
-                                match build_bound_http_client(None, self.stall_timeout) {
-                                    Ok(client) => {
-                                        let fallback_state = Arc::new(AdapterWorkerState::new(None, client));
+                                match self.new_adapter_state(&BindTarget::default()) {
+                                    Ok(fallback_state) => {
                                         drop(states);
                                         adapter_states.write().unwrap().push(Arc::clone(&fallback_state));
                                         for worker_idx in 0..self.connections_per_adapter {
                                             worker_set.spawn(run_chunk_worker(
                                                 Arc::clone(&shared),
+                                                Arc::clone(&adapter_states),
                                                 Arc::clone(&fallback_state),
                                                 worker_idx,
                                                 stop_rx.clone(),
@@ -871,7 +934,7 @@ impl DownloadEngine {
                                         }
                                     }
                                     Err(e) => {
-                                        error!("Failed to build default-route client fallback: {:#}", e);
+                                        error!("Default-route fallback: {:#}", e);
                                     }
                                 }
                             }
@@ -889,14 +952,12 @@ impl DownloadEngine {
             }
         }
 
-        if user_cancelled {
-            worker_set.abort_all();
-        }
+        // Never abort workers: one may be inside `writer.write_at`, and aborting would leave
+        // that write running on the blocking pool after we return. Stop was already sent and
+        // workers observe it at every network await, so joining them is prompt.
         while let Some(res) = worker_set.join_next().await {
             if let Err(e) = res {
-                if !e.is_cancelled() {
-                    error!("Worker task panicked during shutdown: {:?}", e);
-                }
+                error!("Worker task panicked during shutdown: {:?}", e);
             }
         }
         // A cancel that raced with the last chunk finishing still counts as cancelled.
@@ -916,6 +977,18 @@ impl DownloadEngine {
 
         if user_cancelled {
             return Err(cancelled_error());
+        }
+
+        let resource_changed = shared
+            .resource_changed
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        if let Some(msg) = resource_changed {
+            bail!(
+                "Download failed: the file changed on the server during the download; start it again. {}",
+                msg
+            );
         }
 
         {
@@ -999,12 +1072,11 @@ impl DownloadEngine {
         &self,
         probe: &DownloadProbe,
         output_path: &Path,
-        bind_ip: Option<IpAddr>,
+        target: &BindTarget,
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         mut cancel: watch::Receiver<bool>,
     ) -> Result<String> {
-        let client = build_bound_http_client(bind_ip, self.stall_timeout)?;
-        let adapter = Arc::new(AdapterWorkerState::new(bind_ip, client));
+        let adapter = self.new_adapter_state(target)?;
         let label = adapter.label.clone();
 
         let resp = tokio::select! {
@@ -1048,6 +1120,7 @@ impl DownloadEngine {
             total_for_progress,
             1,
         );
+        let _progress_guard = NotifyOnDrop(Arc::clone(&progress_done));
 
         let result: Result<u64> = async {
             let mut stream = resp.bytes_stream();
@@ -1113,6 +1186,7 @@ impl DownloadEngine {
 /// One worker: repeatedly claims a chunk, downloads it on `adapter`, and reports the result.
 async fn run_chunk_worker(
     shared: Arc<ChunkedShared>,
+    adapter_states: Arc<RwLock<Vec<Arc<AdapterWorkerState>>>>,
     adapter: Arc<AdapterWorkerState>,
     worker_idx: usize,
     mut stop: watch::Receiver<bool>,
@@ -1164,6 +1238,9 @@ async fn run_chunk_worker(
                 shared.scheduler().complete(chunk.id);
                 shared.counters.completed.fetch_add(1, Ordering::SeqCst);
                 adapter.consecutive_failures.store(0, Ordering::SeqCst);
+                if adapter.ip.is_some() {
+                    retire_default_route(&adapter_states, &adapter);
+                }
                 debug!(
                     "Worker {} via {} completed chunk {} ({} bytes)",
                     worker_idx, adapter.label, chunk.id, counted
@@ -1175,6 +1252,25 @@ async fn run_chunk_worker(
                     .downloaded
                     .fetch_sub(counted, Ordering::SeqCst);
                 shared.scheduler().release(chunk.id);
+                return;
+            }
+            Err(AttemptError::ResourceChanged(e)) => {
+                shared
+                    .counters
+                    .downloaded
+                    .fetch_sub(counted, Ordering::SeqCst);
+                shared.scheduler().release(chunk.id);
+                let msg = format!(
+                    "chunk {} range [{}, {}] via {}: {:#}",
+                    chunk.id, chunk.start, chunk.end, adapter.label, e
+                );
+                error!("Remote resource changed; stopping download: {}", msg);
+                shared.record_error(msg.clone());
+                *shared
+                    .resource_changed
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()) = Some(msg);
+                shared.stop_tx.send_replace(true);
                 return;
             }
             Err(AttemptError::Failed(e)) => {
@@ -1206,16 +1302,55 @@ async fn run_chunk_worker(
 
                 let failures = adapter.consecutive_failures.fetch_add(1, Ordering::SeqCst) + 1;
                 if failures >= MAX_CONSECUTIVE_ADAPTER_FAILURES {
-                    if !adapter.dropped.swap(true, Ordering::SeqCst) {
-                        error!(
-                            "Dropping adapter {} for this download after {} consecutive failures",
+                    // Dropping the last usable adapter would end the download while its chunks
+                    // still have retries left, so keep it and let the per-chunk attempt budget
+                    // decide. The write lock makes concurrent drop decisions take turns.
+                    let states = adapter_states.write().unwrap();
+                    let others_alive = states
+                        .iter()
+                        .any(|s| !Arc::ptr_eq(s, &adapter) && !s.dropped.load(Ordering::SeqCst));
+                    if others_alive {
+                        if !adapter.dropped.swap(true, Ordering::SeqCst) {
+                            error!(
+                                "Dropping adapter {} for this download after {} consecutive failures",
+                                adapter.label, failures
+                            );
+                        }
+                        return;
+                    }
+                    if failures == MAX_CONSECUTIVE_ADAPTER_FAILURES {
+                        warn!(
+                            "Adapter {} failed {} times in a row but is the last one left; keeping it",
                             adapter.label, failures
                         );
                     }
-                    return;
                 }
             }
         }
+    }
+}
+
+/// Retires every live default-route fallback once `proven` (an explicit adapter) has
+/// completed a chunk. Retiring earlier could leave the download with only an adapter that
+/// never works.
+fn retire_default_route(
+    adapter_states: &RwLock<Vec<Arc<AdapterWorkerState>>>,
+    proven: &AdapterWorkerState,
+) {
+    if proven.dropped.load(Ordering::SeqCst) {
+        return;
+    }
+    let states = adapter_states.read().unwrap();
+    for fallback in states
+        .iter()
+        .filter(|s| s.ip.is_none() && !s.dropped.load(Ordering::SeqCst))
+    {
+        info!(
+            "Retiring default-route fallback workers now that adapter {} completed a chunk",
+            proven.label
+        );
+        fallback.dropped.store(true, Ordering::SeqCst);
+        fallback.retire_tx.send_replace(true);
     }
 }
 
@@ -1233,11 +1368,14 @@ async fn fetch_chunk(
     retire: &mut watch::Receiver<bool>,
 ) -> Result<(), AttemptError> {
     let range = chunk.to_range_header();
-    let request = adapter
+    let mut request = adapter
         .client
         .get(&shared.url)
-        .header(header::RANGE, &range)
-        .send();
+        .header(header::RANGE, &range);
+    if let Some(validator) = &shared.if_range {
+        request = request.header(header::IF_RANGE, validator);
+    }
+    let request = request.send();
 
     let resp = tokio::select! {
         biased;
@@ -1258,12 +1396,37 @@ async fn fetch_chunk(
         content_range
     );
 
+    if status == StatusCode::OK && shared.if_range.is_some() {
+        // With If-Range, a 200 means the validator no longer matches.
+        return Err(AttemptError::ResourceChanged(anyhow!(
+            "server answered {} with 200 instead of 206: If-Range {:?} no longer matches",
+            range,
+            shared.if_range
+        )));
+    }
     if status != StatusCode::PARTIAL_CONTENT {
         return Err(AttemptError::Failed(anyhow!(
             "expected 206 Partial Content for {}, got {}",
             range,
             status
         )));
+    }
+    // RFC 9110: a 206 carries the same validators a 200 would, so any difference
+    // (including one appearing or disappearing) means a different representation.
+    for (name, expected) in [
+        (header::ETAG, &shared.etag),
+        (header::LAST_MODIFIED, &shared.last_modified),
+    ] {
+        let got = header_str(resp.headers(), name.clone());
+        if got != expected.as_deref() {
+            return Err(AttemptError::ResourceChanged(anyhow!(
+                "{} for {} is {:?}, probe saw {:?}",
+                name,
+                range,
+                got,
+                expected
+            )));
+        }
     }
     let parsed = content_range
         .as_deref()
@@ -1366,18 +1529,26 @@ async fn persist_sidecar(
 }
 
 /// Writes the sidecar immediately and then every [`SIDECAR_INTERVAL`] until `done` is
-/// notified. Returns the last completed set it recorded.
+/// notified or the download stops (which also covers `download()` being dropped, via
+/// [`StopOnDrop`]; otherwise this task would hold the open file forever).
+/// Returns the last completed set it recorded.
 async fn run_sidecar_persister(
     shared: Arc<ChunkedShared>,
     sidecar: Arc<SidecarTarget>,
     done: Arc<Notify>,
 ) -> Option<Vec<usize>> {
+    let mut stop = shared.stop_tx.subscribe();
     let mut last = None;
     persist_sidecar(&shared, &sidecar, &mut last).await;
     loop {
         tokio::select! {
             _ = tokio::time::sleep(SIDECAR_INTERVAL) => {}
             _ = done.notified() => return last,
+            _ = wait_for_true(&mut stop) => {
+                // Record what is durably complete so far, then end.
+                persist_sidecar(&shared, &sidecar, &mut last).await;
+                return last;
+            }
         }
         persist_sidecar(&shared, &sidecar, &mut last).await;
     }
@@ -1434,13 +1605,13 @@ fn spawn_progress_reporter(
         let mut last_bytes = counters.downloaded.load(Ordering::SeqCst);
         let mut last_instant = Instant::now();
         let mut speed_ema: Option<f64> = None;
-        let mut adapter_last: HashMap<String, u64> = HashMap::new();
-        let mut adapter_ema: HashMap<String, Option<f64>> = HashMap::new();
+        // Keyed by state id, not label: labels repeat when an adapter is re-added.
+        let mut adapter_last: HashMap<u64, u64> = HashMap::new();
+        let mut adapter_ema: HashMap<u64, f64> = HashMap::new();
         {
             let init = adapters.read().unwrap();
             for a in init.iter() {
-                adapter_last.insert(a.label.clone(), a.received.load(Ordering::SeqCst));
-                adapter_ema.insert(a.label.clone(), None);
+                adapter_last.insert(a.id, a.received.load(Ordering::SeqCst));
             }
         }
         let mut tick: u32 = 0;
@@ -1468,17 +1639,16 @@ fn spawn_progress_reporter(
                 speed_ema = Some(ema(speed_ema, instant_speed));
                 for a in &active {
                     let received = a.received.load(Ordering::SeqCst);
-                    let prev = *adapter_last.get(&a.label).unwrap_or(&received);
+                    let prev = *adapter_last.get(&a.id).unwrap_or(&received);
                     let sample = received.saturating_sub(prev) as f64 / elapsed;
-                    let prev_ema = adapter_ema.get(&a.label).copied().flatten();
-                    let new_ema = ema(prev_ema, sample);
-                    adapter_ema.insert(a.label.clone(), Some(new_ema));
-                    adapter_last.insert(a.label.clone(), received);
+                    let new_ema = ema(adapter_ema.get(&a.id).copied(), sample);
+                    adapter_ema.insert(a.id, new_ema);
+                    adapter_last.insert(a.id, received);
                     adapter_speeds.push(new_ema);
                 }
             } else {
                 for a in &active {
-                    let s = adapter_ema.get(&a.label).copied().flatten().unwrap_or(0.0);
+                    let s = adapter_ema.get(&a.id).copied().unwrap_or(0.0);
                     adapter_speeds.push(s);
                 }
             }
@@ -1564,15 +1734,21 @@ mod tests {
     }
 
     #[test]
-    fn test_select_bind_ips() {
+    fn test_select_bind_targets() {
         let mk = |ip: &str, enabled: bool, loopback: bool| NetworkAdapter {
             id: ip.to_string(),
+            name: String::new(),
             ip: ip.parse().unwrap(),
             is_ipv4: ip.contains('.'),
             is_loopback: loopback,
             enabled,
         };
-        assert_eq!(DownloadEngine::select_bind_ips(&[]), vec![None]);
+        let unbound = vec![BindTarget::default()];
+        let bound = |ip: &str, interface: Option<&str>| BindTarget {
+            ip: Some(ip.parse().unwrap()),
+            interface: interface.map(str::to_string),
+        };
+        assert_eq!(DownloadEngine::select_bind_targets(&[]), unbound);
         let adapters = [
             mk("192.168.1.2", true, false),
             mk("10.0.0.2", false, false),
@@ -1580,9 +1756,50 @@ mod tests {
             mk("fe80::1", true, false),
         ];
         assert_eq!(
-            DownloadEngine::select_bind_ips(&adapters),
-            vec![Some("192.168.1.2".parse().unwrap())]
+            DownloadEngine::select_bind_targets(&adapters),
+            vec![bound("192.168.1.2", None)]
         );
-        assert_eq!(DownloadEngine::select_bind_ips(&adapters[1..]), vec![None]);
+        assert_eq!(DownloadEngine::select_bind_targets(&adapters[1..]), unbound);
+
+        // A non-empty interface name is carried through for egress pinning.
+        let named = NetworkAdapter {
+            name: "wlan0".into(),
+            ..mk("10.1.1.5", true, false)
+        };
+        assert_eq!(
+            DownloadEngine::select_bind_targets(&[named, mk("10.2.2.2", true, false)]),
+            vec![bound("10.1.1.5", Some("wlan0")), bound("10.2.2.2", None)]
+        );
+    }
+
+    fn probe_with(etag: Option<&str>, last_modified: Option<&str>) -> DownloadProbe {
+        DownloadProbe {
+            url: "http://x/y".into(),
+            total_bytes: 10,
+            supports_ranges: true,
+            suggested_filename: "y".into(),
+            etag: etag.map(str::to_string),
+            last_modified: last_modified.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn test_if_range_validator_prefers_strong_etag() {
+        let lm = "Wed, 21 Oct 2015 07:28:00 GMT";
+        let v = |e, l| if_range_validator(&probe_with(e, l));
+        assert_eq!(v(Some("\"a\""), Some(lm)).as_deref(), Some("\"a\""));
+        assert_eq!(v(Some("W/\"a\""), Some(lm)).as_deref(), Some(lm));
+        assert_eq!(v(Some("W/\"a\""), None), None);
+        assert_eq!(v(None, Some(lm)).as_deref(), Some(lm));
+        assert_eq!(v(None, None), None);
+    }
+
+    #[test]
+    fn test_adapter_state_ids_are_unique() {
+        let client = reqwest::Client::new();
+        let a = AdapterWorkerState::new(None, client.clone());
+        let b = AdapterWorkerState::new(None, client);
+        assert_eq!(a.label, b.label);
+        assert_ne!(a.id, b.id);
     }
 }

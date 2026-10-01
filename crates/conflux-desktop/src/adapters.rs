@@ -31,13 +31,39 @@ pub struct AdapterInfo {
     pub kind: AdapterKind,
 }
 
-/// Interface name part of an adapter id (`"<name>:<ip>"`; the ip may itself contain ':').
+/// OS interface name of the adapter (falls back to the name part of its `"<name>:<ip>"` id).
 pub fn adapter_name(adapter: &NetworkAdapter) -> String {
+    if !adapter.name.is_empty() {
+        return adapter.name.clone();
+    }
     adapter
         .id
         .strip_suffix(&format!(":{}", adapter.ip))
         .unwrap_or(&adapter.id)
         .to_string()
+}
+
+/// Splits an adapter id `"<name>:<ip>"` into its parts. The name is everything before the
+/// first ':' whose remainder parses as an IP address (IPv6 addresses contain ':' themselves).
+/// `None` if no such split exists, i.e. `id` is a plain interface name.
+pub fn split_adapter_id(id: &str) -> Option<(&str, IpAddr)> {
+    id.match_indices(':').find_map(|(idx, _)| {
+        let ip = id[idx + 1..].parse::<IpAddr>().ok()?;
+        Some((&id[..idx], ip))
+    })
+}
+
+/// The adapter-overrides key for an adapter id sent by the UI: the interface name, so the
+/// override survives DHCP address changes. Uses the discovered adapter when known, else
+/// parses the id.
+pub fn override_key(id: &str, known: &[NetworkAdapter]) -> String {
+    if let Some(adapter) = known.iter().find(|a| a.id == id) {
+        return adapter_name(adapter);
+    }
+    match split_adapter_id(id) {
+        Some((name, _)) => name.to_string(),
+        None => id.to_string(),
+    }
 }
 
 pub fn is_usable(adapter: &NetworkAdapter) -> bool {
@@ -74,15 +100,42 @@ pub fn classify_kind(name: &str, is_loopback: bool) -> AdapterKind {
     AdapterKind::Other
 }
 
+/// Applies the user's enable/disable choice. Overrides are keyed by interface name; a legacy
+/// full-id key (`"<name>:<ip>"`, from before keys were migrated) is used only when there is
+/// no name key. Unusable adapters are always disabled.
 pub fn apply_overrides(adapter: &mut NetworkAdapter, overrides: &HashMap<String, bool>) {
     if !is_usable(adapter) {
         adapter.enabled = false;
         return;
     }
     let name = adapter_name(adapter);
-    if let Some(&enabled) = overrides.get(&adapter.id).or_else(|| overrides.get(&name)) {
+    if let Some(&enabled) = overrides.get(&name).or_else(|| overrides.get(&adapter.id)) {
         adapter.enabled = enabled;
     }
+}
+
+/// Rewrites legacy `"<name>:<ip>"` override keys to `"<name>"`. Conflicts resolve
+/// deterministically: an existing plain-name key always wins; among several legacy keys for
+/// the same name (different addresses), disabled wins, so an opt-out (e.g. a metered link)
+/// is never silently turned back on.
+pub fn migrate_overrides(overrides: HashMap<String, bool>) -> HashMap<String, bool> {
+    let mut migrated: HashMap<String, bool> = HashMap::new();
+    let mut legacy: HashMap<String, bool> = HashMap::new();
+    for (key, enabled) in overrides {
+        match split_adapter_id(&key) {
+            Some((name, _)) => {
+                let entry = legacy.entry(name.to_string()).or_insert(enabled);
+                *entry = *entry && enabled;
+            }
+            None => {
+                migrated.insert(key, enabled);
+            }
+        }
+    }
+    for (name, enabled) in legacy {
+        migrated.entry(name).or_insert(enabled);
+    }
+    migrated
 }
 
 pub fn to_info(adapter: NetworkAdapter) -> AdapterInfo {
@@ -133,6 +186,7 @@ mod tests {
         let ip: std::net::IpAddr = ip.parse().unwrap();
         NetworkAdapter {
             id: format!("{name}:{ip}"),
+            name: name.to_string(),
             ip,
             is_ipv4: ip.is_ipv4(),
             is_loopback: loopback,
@@ -191,6 +245,7 @@ mod tests {
         let ip: IpAddr = "192.168.1.5".parse().unwrap();
         let adapters = vec![NetworkAdapter {
             id: format!("Wi-Fi:{ip}"),
+            name: "Wi-Fi".into(),
             ip,
             is_ipv4: true,
             is_loopback: false,
@@ -234,6 +289,7 @@ mod tests {
         let ip: IpAddr = "192.168.1.5".parse().unwrap();
         let mut wifi = NetworkAdapter {
             id: format!("Wi-Fi:{ip}"),
+            name: "Wi-Fi".into(),
             ip,
             is_ipv4: true,
             is_loopback: false,
@@ -246,14 +302,28 @@ mod tests {
         apply_overrides(&mut wifi, &overrides);
         assert!(!wifi.enabled);
 
-        // Override by full id: re-enable Wi-Fi
+        // A legacy full-id key never beats the name key.
         overrides.insert(format!("Wi-Fi:{ip}"), true);
         apply_overrides(&mut wifi, &overrides);
+        assert!(!wifi.enabled);
+
+        // Without a name key the legacy full-id key applies.
+        overrides.remove("Wi-Fi");
+        wifi.enabled = false;
+        apply_overrides(&mut wifi, &overrides);
         assert!(wifi.enabled);
+
+        // A name key survives a DHCP address change.
+        let mut moved = adapter("Ethernet", "10.0.0.7", false);
+        overrides.insert("Ethernet".into(), false);
+        overrides.insert("Ethernet:10.0.0.3".into(), true);
+        apply_overrides(&mut moved, &overrides);
+        assert!(!moved.enabled);
 
         // Non-usable (loopback) cannot be enabled
         let mut loopback = NetworkAdapter {
             id: "lo:127.0.0.1".into(),
+            name: "lo".into(),
             ip: "127.0.0.1".parse().unwrap(),
             is_ipv4: true,
             is_loopback: true,
@@ -269,6 +339,7 @@ mod tests {
         let ip: IpAddr = "192.168.1.10".parse().unwrap();
         let mut adapter = NetworkAdapter {
             id: format!("Ethernet:{ip}"),
+            name: "Ethernet".into(),
             ip,
             is_ipv4: true,
             is_loopback: false,
@@ -282,5 +353,59 @@ mod tests {
         assert_eq!(info.name, "Ethernet");
         assert!(!info.enabled);
         assert!(info.usable);
+    }
+
+    #[test]
+    fn split_ids_with_ipv4_and_ipv6() {
+        let v4: IpAddr = "192.168.1.5".parse().unwrap();
+        let v6: IpAddr = "fe80::1".parse().unwrap();
+        assert_eq!(split_adapter_id("Wi-Fi:192.168.1.5"), Some(("Wi-Fi", v4)));
+        assert_eq!(
+            split_adapter_id("Ethernet 2:fe80::1"),
+            Some(("Ethernet 2", v6))
+        );
+        assert_eq!(
+            split_adapter_id("odd:name:192.168.1.5"),
+            Some(("odd:name", v4))
+        );
+        assert_eq!(split_adapter_id("Wi-Fi"), None);
+        assert_eq!(split_adapter_id("a:b"), None);
+    }
+
+    #[test]
+    fn override_key_uses_interface_name() {
+        let known = vec![adapter("Wi-Fi", "192.168.1.5", false)];
+        assert_eq!(override_key("Wi-Fi:192.168.1.5", &known), "Wi-Fi");
+        // Not discovered (adapter went away): parse the id.
+        assert_eq!(override_key("Ethernet:fe80::1", &known), "Ethernet");
+        assert_eq!(override_key("Ethernet", &known), "Ethernet");
+    }
+
+    #[test]
+    fn migrate_legacy_override_keys() {
+        let overrides: HashMap<String, bool> = [
+            ("Wi-Fi:192.168.1.5", false),
+            ("Ethernet", true),
+            ("Ethernet:10.0.0.3", false),
+            ("usb0:10.1.1.2", true),
+            ("usb0:10.1.1.9", false),
+            ("eth1:fe80::2", true),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let migrated = migrate_overrides(overrides);
+        let expected: HashMap<String, bool> = [
+            ("Wi-Fi", false),
+            ("Ethernet", true),
+            ("usb0", false),
+            ("eth1", true),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        assert_eq!(migrated, expected);
+        // Idempotent.
+        assert_eq!(migrate_overrides(migrated.clone()), migrated);
     }
 }

@@ -152,14 +152,7 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             show_main_window(app);
             let _ = app.emit("open-settings", ());
         }
-        "quit" => {
-            let app_clone = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let state = app_clone.state::<AppState>();
-                commands::pause_all_internal(&app_clone, &state).await;
-                app_clone.exit(0);
-            });
-        }
+        "quit" => crate::quit_gracefully(app),
         _ => {}
     }
 }

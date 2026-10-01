@@ -3,9 +3,9 @@ use crate::history::HistoryStore;
 use crate::settings::{self, Settings};
 use crate::state::{AppState, DownloadTaskState, TaskHandle, TaskStatus};
 use conflux_core::{
-    discover_adapters as core_discover, remove_resume_sidecar, sanitize_filename, unique_path,
-    AdapterUpdate, DownloadCancelled, DownloadEngine, DownloadProbe, NetworkAdapter,
-    ProgressUpdate,
+    discover_adapters as core_discover, remove_resume_sidecar, resume_sidecar_path,
+    sanitize_filename, AdapterUpdate, DownloadCancelled, DownloadEngine, DownloadProbe,
+    NetworkAdapter, ProgressUpdate,
 };
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -86,13 +86,49 @@ fn emit(app: &AppHandle, task: &DownloadTaskState) {
 // ─── 1. Adapter Discovery ───────────────────────────────────
 #[tauri::command]
 pub async fn discover_adapters(state: State<'_, AppState>) -> Result<Vec<AdapterInfo>, String> {
-    let mut adapters = core_discover().map_err(|e| e.to_string())?;
-    let overrides = state.settings.read().await.adapter_overrides.clone();
-    for a in adapters.iter_mut() {
-        crate::adapters::apply_overrides(a, &overrides);
-    }
-    *state.last_adapters.write().await = adapters.clone();
+    let discovered = core_discover().map_err(|e| e.to_string())?;
+    let adapters = refresh_adapters(&state, discovered, AddPolicy::IfAutoAggregate).await;
     Ok(adapters.into_iter().map(to_info).collect())
+}
+
+/// Whether adapters that became enabled are hot-added to running downloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddPolicy {
+    /// Only when the `auto_aggregate_adapters` setting is on (passive refreshes).
+    IfAutoAggregate,
+    /// Always (the user explicitly enabled an adapter).
+    Always,
+}
+
+/// Applies the current overrides to `discovered`, records it as `last_adapters`, and forwards
+/// the difference to running downloads. Returns the adapters with overrides applied.
+///
+/// Every writer of `last_adapters` goes through here. The settings are read only after the
+/// `last_adapters` write lock is taken, and the diff is forwarded before it is released, so
+/// a concurrent adapter toggle can never be overwritten with stale overrides (which would
+/// re-add a just-disabled adapter) and add/remove updates reach the engine in order.
+/// Lock order: `last_adapters` -> `settings` -> `handles` -> `tasks`; nothing may take
+/// `last_adapters` while holding `settings`.
+pub async fn refresh_adapters(
+    state: &AppState,
+    mut discovered: Vec<NetworkAdapter>,
+    policy: AddPolicy,
+) -> Vec<NetworkAdapter> {
+    let mut last = state.last_adapters.write().await;
+    let apply_added = {
+        let settings = state.settings.read().await;
+        for a in discovered.iter_mut() {
+            crate::adapters::apply_overrides(a, &settings.adapter_overrides);
+        }
+        policy == AddPolicy::Always || settings.auto_aggregate_adapters
+    };
+    let (added, removed) = conflux_core::diff_adapters(&last, &discovered);
+    *last = discovered.clone();
+    let added = if apply_added { added } else { Vec::new() };
+    if !added.is_empty() || !removed.is_empty() {
+        handle_network_change(state, &added, &removed).await;
+    }
+    discovered
 }
 
 // ─── 2. URL Probe ───────────────────────────────────────────
@@ -150,7 +186,7 @@ pub async fn start_download(
         .map(|f| sanitize_filename(&f))
         .filter(|f| !f.is_empty())
         .unwrap_or_else(|| probe.suggested_filename.clone());
-    let output_path = reserve_output_path(&state.reserved_paths, &dir, &requested_name).await;
+    let output_path = reserve_output_path(&state.reserved_paths, &dir, &requested_name).await?;
     let save_path = output_path.to_string_lossy().to_string();
     let filename = output_path
         .file_name()
@@ -309,8 +345,19 @@ pub async fn pause_all_internal(app: &AppHandle, state: &AppState) {
             .collect()
     };
     let shared = Shared::new(app, state);
+    // Stop concurrently: each stop may wait up to `STOP_TIMEOUT`, and quitting waits for this,
+    // so the total wait is bounded by one timeout rather than one per task.
+    let mut stops = tokio::task::JoinSet::new();
     for id in running_ids {
-        stop_task(&shared, &id).await;
+        let shared = shared.clone();
+        stops.spawn(async move {
+            stop_task(&shared, &id).await;
+        });
+    }
+    while let Some(result) = stops.join_next().await {
+        if let Err(e) = result {
+            warn!("Stopping a task failed: {e}");
+        }
     }
     shared.save_history().await;
 }
@@ -356,8 +403,9 @@ pub async fn resume_all(app: AppHandle, state: State<'_, AppState>) -> Result<()
 }
 
 // ─── 6. Remove ──────────────────────────────────────────────
-/// Stops the task if running and removes it from the list. An incomplete download's
-/// partial file and resume data are always deleted; a completed file only if `delete_file`.
+/// Stops the task if running and removes it from the list. An incomplete download's resume
+/// data is deleted, and its partial file too when it is evidently Conflux's (see
+/// `partial_file_is_ours`); a completed file is deleted only if `delete_file`.
 #[tauri::command]
 pub async fn remove_download(
     app: AppHandle,
@@ -398,8 +446,27 @@ pub async fn remove_download(
         return Ok(());
     }
 
-    if let Err(e) = remove_resume_sidecar(&path) {
-        warn!(task_id = %task_id, path = %task.save_path, "Failed to delete resume data: {e}");
+    if !completed {
+        let sidecar_exists = tokio::fs::try_exists(resume_sidecar_path(&path))
+            .await
+            .unwrap_or(false);
+        let file_len = tokio::fs::metadata(&path).await.ok().map(|m| m.len());
+        let ours = partial_file_is_ours(&task, file_len, sidecar_exists);
+        if let Err(e) = remove_resume_sidecar(&path) {
+            warn!(task_id = %task_id, path = %task.save_path, "Failed to delete resume data: {e}");
+        }
+        if !ours {
+            if file_len.is_some() {
+                info!(
+                    task_id = %task_id,
+                    path = %task.save_path,
+                    ?file_len,
+                    total_bytes = task.total_bytes,
+                    "File does not look like this download's partial file; not deleting"
+                );
+            }
+            return Ok(());
+        }
     }
     match tokio::fs::remove_file(&path).await {
         Ok(()) => info!(task_id = %task_id, path = %task.save_path, "Deleted file"),
@@ -414,6 +481,23 @@ pub async fn remove_download(
         }
     }
     Ok(())
+}
+
+/// Whether the file at an incomplete task's `save_path` is evidently the one Conflux wrote,
+/// so removing the task may delete it. The path may since have been taken by something else
+/// (the user deleted the partial file and saved another file under the same name), so a
+/// file is only deleted with positive evidence:
+/// - its resume sidecar exists (written next to the file by the chunked engine), or
+/// - it is a chunked download and the file length equals the pre-allocated `total_bytes`, or
+/// - it is empty (the placeholder claimed when the download started; nothing to lose).
+///
+/// `file_len` is `None` when there is no file.
+fn partial_file_is_ours(task: &DownloadTaskState, file_len: Option<u64>, sidecar: bool) -> bool {
+    let Some(len) = file_len else {
+        return false;
+    };
+    let chunked = task.supports_ranges && task.total_bytes > 0;
+    sidecar || len == 0 || (chunked && len == task.total_bytes)
 }
 
 // ─── 7. List Tasks ──────────────────────────────────────────
@@ -438,12 +522,14 @@ pub async fn update_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<Settings, String> {
-    let settings = settings.normalized();
-    settings.validate()?;
+    // Holding the write lock across the save serialises settings writers, so neither this
+    // nor `set_adapter_enabled` can overwrite the other's change.
+    let mut current = state.settings.write().await;
+    let settings = current.apply_update(settings)?;
     if let Some(path) = &state.settings_path {
         settings::save(path, &settings)?;
     }
-    *state.settings.write().await = settings.clone();
+    *current = settings.clone();
     info!(?settings, "Settings updated");
     Ok(settings)
 }
@@ -553,6 +639,27 @@ async fn spawn_task(
     // Hold the handles lock across spawn + insert: the task removes its own handle when it
     // finishes, and that removal must not run before the handle has been inserted.
     let mut handles = shared.handles.lock().await;
+    // A pause or remove between marking the task Downloading and this point found no handle,
+    // and (under this same lock) paused or removed it. Starting the engine now would leave
+    // a download running that nothing can stop.
+    let still_wanted = shared
+        .tasks
+        .read()
+        .await
+        .get(&task_id)
+        .is_some_and(|t| t.status == TaskStatus::Downloading);
+    if !still_wanted {
+        info!(task_id = %task_id, "Task was paused or removed before it started; not starting the engine");
+        let removed = !shared.tasks.read().await.contains_key(&task_id);
+        drop(handles);
+        // `remove_download` skipped the file because it was still reserved by this task.
+        // A new download's placeholder is still empty and nobody else's: delete it.
+        if removed && !resume {
+            remove_empty_placeholder(&output_path).await;
+        }
+        shared.reserved_paths.lock().await.remove(&output_path);
+        return;
+    }
     let join_handle = tokio::spawn(run_download(
         shared.clone(),
         task_id.clone(),
@@ -674,6 +781,8 @@ async fn run_download(
     let (status, sha256, err_msg) = match result {
         Ok(hash) => {
             info!(task_id = %task_id, sha256 = %hash, "Download completed");
+            #[cfg(windows)]
+            write_mark_of_the_web(&output_path, &probe.url).await;
             (TaskStatus::Completed, Some(hash), None)
         }
         // Also treat any error after a stop request as a pause: tearing down sockets
@@ -742,39 +851,49 @@ async fn notify_finished(shared: &Shared, task: &DownloadTaskState) {
 /// Signals the task to stop, waits for it to wind down (aborting after `STOP_TIMEOUT`),
 /// and returns the task's resulting snapshot. `None` if the task id is unknown.
 async fn stop_task(shared: &Shared, task_id: &str) -> Option<DownloadTaskState> {
-    // Take the handle out and release the lock before awaiting: the task itself locks
-    // `handles` during cleanup.
-    let handle = shared.handles.lock().await.remove(task_id);
-
-    if let Some(TaskHandle {
+    let mut handles = shared.handles.lock().await;
+    let Some(TaskHandle {
         cancel_tx,
         mut join_handle,
         output_path,
         ..
-    }) = handle
-    {
-        let _ = cancel_tx.send(true);
-        if tokio::time::timeout(STOP_TIMEOUT, &mut join_handle)
-            .await
-            .is_err()
-        {
-            warn!(
-                task_id,
-                "Download did not stop within {:?}; aborting", STOP_TIMEOUT
-            );
-            join_handle.abort();
-            let _ = join_handle.await;
-        }
-        // Normally released by the task itself; required if it was aborted.
-        shared.reserved_paths.lock().await.remove(&output_path);
-        drop(cancel_tx);
-    }
+    }) = handles.remove(task_id)
+    else {
+        // No engine yet: a start or resume may be about to spawn one. Pausing while still
+        // holding `handles` guarantees `spawn_task` sees the new status and stands down.
+        let snapshot = pause_if_downloading(shared, task_id).await;
+        drop(handles);
+        return snapshot;
+    };
+    // Release the lock before awaiting: the task itself locks `handles` during cleanup.
+    drop(handles);
 
+    let _ = cancel_tx.send(true);
+    if tokio::time::timeout(STOP_TIMEOUT, &mut join_handle)
+        .await
+        .is_err()
+    {
+        warn!(
+            task_id,
+            "Download did not stop within {:?}; aborting", STOP_TIMEOUT
+        );
+        join_handle.abort();
+        let _ = join_handle.await;
+    }
+    // Normally released by the task itself; required if it was aborted.
+    shared.reserved_paths.lock().await.remove(&output_path);
+    drop(cancel_tx);
+
+    // The task records its own final status unless it was aborted.
+    pause_if_downloading(shared, task_id).await
+}
+
+/// Marks a `Downloading` task `Paused` and returns its snapshot; `None` if the id is unknown.
+async fn pause_if_downloading(shared: &Shared, task_id: &str) -> Option<DownloadTaskState> {
     let current = shared.tasks.read().await.get(task_id).cloned()?;
     if current.status != TaskStatus::Downloading {
         return Some(current);
     }
-    // The task was aborted before it could record its own final status.
     shared
         .update(task_id, |task| {
             if task.status == TaskStatus::Downloading {
@@ -854,39 +973,38 @@ pub async fn set_adapter_enabled(
     id: String,
     enabled: bool,
 ) -> Result<Vec<AdapterInfo>, String> {
-    let mut current_settings = state.settings.read().await.clone();
-    current_settings
-        .adapter_overrides
-        .insert(id.clone(), enabled);
-    if let Some(path) = &state.settings_path {
-        if let Err(e) = settings::save(path, &current_settings) {
-            warn!("Failed to save settings with updated adapter override: {e:#}");
+    let discovered = core_discover().map_err(|e| e.to_string())?;
+    // Overrides are keyed by interface name so they survive DHCP address changes.
+    let key = crate::adapters::override_key(&id, &discovered);
+    {
+        // Released before `refresh_adapters`, which takes `last_adapters` then `settings`.
+        let mut current = state.settings.write().await;
+        let mut next = current.clone();
+        set_override(&mut next.adapter_overrides, &key, enabled);
+        if let Some(path) = &state.settings_path {
+            if let Err(e) = settings::save(path, &next) {
+                warn!("Failed to save settings with updated adapter override: {e:#}");
+            }
         }
+        *current = next;
     }
-    *state.settings.write().await = current_settings.clone();
+    info!(id = %id, name = %key, enabled, "Adapter override set");
 
-    let mut adapters = core_discover().map_err(|e| e.to_string())?;
-    for a in adapters.iter_mut() {
-        crate::adapters::apply_overrides(a, &current_settings.adapter_overrides);
-    }
-
-    let (added, removed) = {
-        let mut last = state.last_adapters.write().await;
-        let diff = conflux_core::diff_adapters(&last, &adapters);
-        *last = adapters.clone();
-        diff
-    };
-
-    if !added.is_empty() || !removed.is_empty() {
-        handle_network_change(&state, &added, &removed).await;
-    }
-
+    let adapters = refresh_adapters(&state, discovered, AddPolicy::Always).await;
     let infos: Vec<AdapterInfo> = adapters.into_iter().map(to_info).collect();
     let _ = app.emit("network-adapters-changed", &infos);
     Ok(infos)
 }
 
 // ─── Helpers ────────────────────────────────────────────────
+/// Stores `enabled` under the interface name `key`, dropping any legacy `"<key>:<ip>"` keys
+/// so they cannot linger and disagree.
+fn set_override(overrides: &mut HashMap<String, bool>, key: &str, enabled: bool) {
+    overrides
+        .retain(|k, _| crate::adapters::split_adapter_id(k).is_none_or(|(name, _)| name != key));
+    overrides.insert(key.to_string(), enabled);
+}
+
 fn engine_from_settings(settings: &Settings) -> Result<DownloadEngine, String> {
     DownloadEngine::new(
         settings.chunk_size_bytes(),
@@ -895,13 +1013,29 @@ fn engine_from_settings(settings: &Settings) -> Result<DownloadEngine, String> {
     .map_err(|e| format!("Invalid engine settings: {e:#}"))
 }
 
+pub const NO_ADAPTERS_ENABLED: &str =
+    "No network adapters are enabled. Enable one on the Network page.";
+
 /// Discovers adapters and applies app-level user overrides from settings.
 fn select_adapters(settings: &Settings) -> Result<Vec<NetworkAdapter>, String> {
     let mut adapters = core_discover().map_err(|e| format!("Adapter discovery failed: {e:#}"))?;
     for adapter in adapters.iter_mut() {
         crate::adapters::apply_overrides(adapter, &settings.adapter_overrides);
     }
+    check_adapter_selection(&adapters)?;
     Ok(adapters)
+}
+
+/// Refuses to start when the user has disabled every usable adapter: silently downloading
+/// over the OS default route would ignore their choice. With no usable adapter at all (e.g.
+/// an IPv6-only host) there is nothing to choose, so the engine's default route is allowed.
+fn check_adapter_selection(adapters: &[NetworkAdapter]) -> Result<(), String> {
+    let any_usable = adapters.iter().any(crate::adapters::is_usable);
+    let any_enabled = adapters.iter().any(|a| a.enabled);
+    if any_usable && !any_enabled {
+        return Err(NO_ADAPTERS_ENABLED.to_string());
+    }
+    Ok(())
 }
 
 fn enabled_ids(adapters: &[NetworkAdapter]) -> Vec<&str> {
@@ -929,23 +1063,90 @@ fn validate_save_dir(save_dir: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// Picks a path that neither exists on disk nor is reserved by a running task, and reserves it.
+/// Picks `dir/filename` or the first free `dir/"name (n).ext"`, claims it on disk by creating
+/// an empty placeholder file, and reserves it for this process.
+///
+/// The claim uses `create_new`, so it is atomic across processes (e.g. the desktop app and
+/// the CLI can never pick the same file). This mirrors `conflux_core::claim_unique_path`,
+/// but additionally skips paths reserved by running tasks: a resumed task's file may be
+/// missing on disk while its engine is about to recreate it.
 async fn reserve_output_path(
     reserved: &Mutex<HashSet<PathBuf>>,
     dir: &Path,
     filename: &str,
-) -> PathBuf {
+) -> Result<PathBuf, String> {
     let mut reserved = reserved.lock().await;
-    // `unique_path` only knows about the filesystem; running tasks may not have created
-    // their file yet, so also skip reserved candidates.
-    let mut candidate = unique_path(dir, filename);
-    let mut n: u32 = 1;
-    while reserved.contains(&candidate) || candidate.exists() {
-        candidate = dir.join(numbered_filename(filename, n));
+    let mut n: u32 = 0;
+    loop {
+        let candidate = if n == 0 {
+            dir.join(filename)
+        } else {
+            dir.join(numbered_filename(filename, n))
+        };
         n += 1;
+        if reserved.contains(&candidate) {
+            continue;
+        }
+        let created = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate);
+        match created {
+            Ok(_) => {
+                reserved.insert(candidate.clone());
+                return Ok(candidate);
+            }
+            // Taken on disk (possibly a moment ago by another process): try the next name.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(format!("Cannot create {}: {e}", candidate.display()));
+            }
+        }
     }
-    reserved.insert(candidate.clone());
-    candidate
+}
+
+/// Contents of the `Zone.Identifier` stream marking a file as downloaded from the Internet
+/// (zone 3), so SmartScreen and Office Protected View treat it as untrusted. Credentials in
+/// the URL are dropped and CR/LF removed so the URL cannot inject extra lines.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn zone_identifier_contents(url: &str) -> String {
+    let mut host_url: String = url.chars().filter(|c| *c != '\r' && *c != '\n').collect();
+    if let Some(scheme_end) = host_url.find("://") {
+        let authority_start = scheme_end + 3;
+        let authority_end = host_url[authority_start..]
+            .find(['/', '?', '#'])
+            .map_or(host_url.len(), |i| authority_start + i);
+        if let Some(at) = host_url[authority_start..authority_end].rfind('@') {
+            host_url.replace_range(authority_start..authority_start + at + 1, "");
+        }
+    }
+    format!("[ZoneTransfer]\r\nZoneId=3\r\nHostUrl={host_url}\r\n")
+}
+
+/// Writes Mark-of-the-Web (`<path>:Zone.Identifier` NTFS alternate data stream). Best effort:
+/// fails on non-NTFS volumes (e.g. FAT32 USB drives), which is only logged.
+#[cfg(windows)]
+async fn write_mark_of_the_web(path: &Path, url: &str) {
+    let mut stream = path.as_os_str().to_os_string();
+    stream.push(":Zone.Identifier");
+    match tokio::fs::write(&stream, zone_identifier_contents(url)).await {
+        Ok(()) => info!(path = %path.display(), "Wrote Mark-of-the-Web"),
+        Err(e) => warn!(path = %path.display(), "Failed to write Mark-of-the-Web: {e}"),
+    }
+}
+
+/// Deletes the file at `path` only if it is empty (an unused placeholder from
+/// `reserve_output_path`). Best effort.
+async fn remove_empty_placeholder(path: &Path) {
+    let is_empty = tokio::fs::metadata(path)
+        .await
+        .is_ok_and(|m| m.is_file() && m.len() == 0);
+    if !is_empty {
+        return;
+    }
+    if let Err(e) = tokio::fs::remove_file(path).await {
+        warn!(path = %path.display(), "Failed to delete unused placeholder file: {e}");
+    }
 }
 
 /// "name.ext" -> "name (n).ext"; "name" -> "name (n)"; ".hidden" -> ".hidden (n)".
@@ -990,15 +1191,159 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let reserved = Mutex::new(HashSet::new());
 
-        let a = reserve_output_path(&reserved, &dir, "file.bin").await;
-        let b = reserve_output_path(&reserved, &dir, "file.bin").await;
-        let c = reserve_output_path(&reserved, &dir, "file.bin").await;
+        let a = reserve_output_path(&reserved, &dir, "file.bin")
+            .await
+            .unwrap();
+        let b = reserve_output_path(&reserved, &dir, "file.bin")
+            .await
+            .unwrap();
+        let c = reserve_output_path(&reserved, &dir, "file.bin")
+            .await
+            .unwrap();
 
         assert_eq!(a, dir.join("file.bin"));
         assert_eq!(b, dir.join("file (1).bin"));
         assert_eq!(c, dir.join("file (2).bin"));
         assert_eq!(reserved.lock().await.len(), 3);
+        // Each name is claimed on disk with an empty placeholder.
+        for p in [&a, &b, &c] {
+            assert_eq!(std::fs::metadata(p).unwrap().len(), 0);
+        }
+
+        // A file created by someone else (another process) is skipped, even unreserved.
+        std::fs::write(dir.join("other.bin"), b"keep").unwrap();
+        let d = reserve_output_path(&reserved, &dir, "other.bin")
+            .await
+            .unwrap();
+        assert_eq!(d, dir.join("other (1).bin"));
+        assert_eq!(std::fs::read(dir.join("other.bin")).unwrap(), b"keep");
+
+        // A reserved path missing on disk (resumed task) is skipped too.
+        let resumed = dir.join("resumed.bin");
+        reserved.lock().await.insert(resumed.clone());
+        let e = reserve_output_path(&reserved, &dir, "resumed.bin")
+            .await
+            .unwrap();
+        assert_eq!(e, dir.join("resumed (1).bin"));
+        assert!(!resumed.exists());
+
+        assert!(
+            reserve_output_path(&reserved, &dir.join("missing"), "x.bin")
+                .await
+                .is_err()
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn task(supports_ranges: bool, total_bytes: u64) -> DownloadTaskState {
+        DownloadTaskState {
+            id: "t".into(),
+            url: "https://example.com/f".into(),
+            filename: "f".into(),
+            save_dir: "d".into(),
+            save_path: "d/f".into(),
+            adapter_ids: vec![],
+            total_bytes,
+            supports_ranges,
+            downloaded_bytes: 0,
+            status: TaskStatus::Paused,
+            speed_bytes_sec: 0.0,
+            eta_seconds: 0,
+            active_chunks: 0,
+            completed_chunks: 0,
+            total_chunks: 0,
+            sha256: None,
+            error: None,
+            created_at_ms: 0,
+            completed_at_ms: None,
+            adapters: vec![],
+            chunk_map: None,
+        }
+    }
+
+    #[test]
+    fn partial_file_deleted_only_with_evidence() {
+        let chunked = task(true, 1000);
+        // No file: nothing to delete.
+        assert!(!partial_file_is_ours(&chunked, None, true));
+        // Resume sidecar present.
+        assert!(partial_file_is_ours(&chunked, Some(123), true));
+        // Pre-allocated to exactly the download size.
+        assert!(partial_file_is_ours(&chunked, Some(1000), false));
+        // Empty placeholder.
+        assert!(partial_file_is_ours(&chunked, Some(0), false));
+        // Some other file now sits at the path.
+        assert!(!partial_file_is_ours(&chunked, Some(999), false));
+        assert!(!partial_file_is_ours(&chunked, Some(5000), false));
+
+        // Streaming downloads are not pre-allocated: length alone is no evidence.
+        let streaming = task(false, 1000);
+        assert!(!partial_file_is_ours(&streaming, Some(1000), false));
+        assert!(partial_file_is_ours(&streaming, Some(1000), true));
+        let unknown_size = task(true, 0);
+        assert!(!partial_file_is_ours(&unknown_size, Some(42), false));
+        assert!(partial_file_is_ours(&unknown_size, Some(0), false));
+    }
+
+    fn adapter(name: &str, ip: &str, enabled: bool) -> NetworkAdapter {
+        let ip: std::net::IpAddr = ip.parse().unwrap();
+        NetworkAdapter {
+            id: format!("{name}:{ip}"),
+            name: name.into(),
+            ip,
+            is_ipv4: ip.is_ipv4(),
+            is_loopback: false,
+            enabled,
+        }
+    }
+
+    #[test]
+    fn refuses_when_every_usable_adapter_is_disabled() {
+        let wifi_off = adapter("Wi-Fi", "192.168.1.5", false);
+        let eth_on = adapter("Ethernet", "10.0.0.2", true);
+        let v6 = adapter("Ethernet", "fe80::1", false);
+        assert_eq!(
+            check_adapter_selection(&[wifi_off.clone(), v6.clone()]),
+            Err(NO_ADAPTERS_ENABLED.to_string())
+        );
+        assert!(check_adapter_selection(&[wifi_off, eth_on]).is_ok());
+        // Nothing usable at all: the engine's default route is allowed.
+        assert!(check_adapter_selection(&[v6]).is_ok());
+        assert!(check_adapter_selection(&[]).is_ok());
+    }
+
+    #[test]
+    fn set_override_replaces_legacy_keys_for_the_name() {
+        let mut overrides: HashMap<String, bool> = [
+            ("Wi-Fi:192.168.1.5", true),
+            ("Wi-Fi:fe80::1", true),
+            ("Wi-Fi 2:10.0.0.1", true),
+            ("Ethernet", false),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        set_override(&mut overrides, "Wi-Fi", false);
+        let mut keys: Vec<&str> = overrides.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["Ethernet", "Wi-Fi", "Wi-Fi 2:10.0.0.1"]);
+        assert_eq!(overrides.get("Wi-Fi"), Some(&false));
+    }
+
+    #[test]
+    fn zone_identifier_marks_internet_zone() {
+        assert_eq!(
+            zone_identifier_contents("https://example.com/a.exe"),
+            "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://example.com/a.exe\r\n"
+        );
+        assert_eq!(
+            zone_identifier_contents("https://user:pw@example.com/a.exe?x=a@b"),
+            "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://example.com/a.exe?x=a@b\r\n"
+        );
+        assert_eq!(
+            zone_identifier_contents("https://example.com/a\r\nZoneId=0"),
+            "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://example.com/aZoneId=0\r\n"
+        );
     }
 }
