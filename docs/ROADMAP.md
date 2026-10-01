@@ -17,7 +17,7 @@ This file is the single source of truth for that work. It is written so that **a
 open it, pick the next unblocked task, finish it, and leave the file accurate for the next
 agent.** Read [How to use this roadmap](#how-to-use-this-roadmap) first.
 
-Last reviewed against the repo: version `0.1.5`, branch `main`.
+Last reviewed against the repo: version `0.2.0-beta.1`, branch `main`.
 
 ---
 

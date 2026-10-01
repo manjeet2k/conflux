@@ -9,57 +9,50 @@ All notable changes to Conflux are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0-beta.1] - 2026-10-01
+
+First public beta. **Windows 10/11 (64-bit) only. The installer is not code-signed yet**, so
+Windows SmartScreen will say "unknown publisher" (More info -> Run anyway); verify the download
+with `SHA256SUMS.txt`. Expect rough edges and please report bugs.
+
 ### Added
-- `scripts/test-windows.sh`: runs the core, CLI and desktop tests as real Windows executables from WSL2 (core 72+45, cli 4, desktop 65 pass), so Windows-only code paths are exercised locally.
-- In-app updates (Settings -> About & Updates, optional quiet check on start): running downloads
-  are paused before installing and resume automatically after the restart. Release workflow
-  (`release.yml`) builds a draft prerelease with standard and offline-WebView2 installers,
-  checksums and the updater manifest; release runbook in `docs/RELEASING.md`.
-- Installer polish: publisher, license page, description, and an uninstall prompt that never
-  touches downloaded files. `THIRD_PARTY_LICENSES.md` is generated and bundled.
-- Platform policy made explicit: Windows 10/11 (64-bit) only. README, AGENTS.md, architecture,
-  development guide and roadmap say so; Linux code paths remain only as a test/dev host.
-- Documentation reorganised: docs index (`docs/README.md`), development guide
-  (`docs/DEVELOPMENT.md`), guides/ and archive/ folders, `scripts/roadmap-status.mjs` and
-  `scripts/check-docs.mjs`, and a corrected README layout and testing section.
-- Non-polling network adapter watcher: adapters that appear or disappear are hot-joined to or
-  dropped from running downloads without a restart.
-- Adapter selection is now an app-level global setting, with runtime fallback when a selected
-  adapter goes away.
-- Interface-name overrides for friendlier adapter labels.
-- Mark-of-the-Web (`Zone.Identifier`) on completed downloads on Windows.
-- Version tooling (`scripts/bump-version.mjs`, `scripts/check-version.mjs`) and
-  `version:bump` / `version:check` npm scripts.
-- Continuous integration (fmt, clippy, tests, UI build on Linux and Windows) and supply-chain
-  checks (`cargo deny`, `cargo audit`, `npm audit`) and a monthly dependency report issue; Dependabot alerts on, no update PRs.
+- **Bonded downloads across all your connections.** Wi-Fi, Ethernet and USB/phone tethering are
+  used at the same time; each connection takes byte ranges as fast as it can. Adapters that appear
+  or disappear mid-download are joined or dropped without restarting, and an adapter that fails
+  shows *why* (for example "connect timed out" or "no route to host") on the Network page.
+- **In-app updates** (Settings -> About & Updates, plus an optional quiet check at start).
+  Running downloads are paused before installing and resume automatically after the restart.
+- **Adapter choices by name.** Enable or disable an adapter once; the choice survives address
+  changes. If every adapter is disabled, starting a download tells you so instead of silently
+  using the default route.
+- **Safer downloads on Windows:** NTFS sparse pre-allocation, Mark-of-the-Web (`Zone.Identifier`)
+  on finished files, and filenames sanitised so a server cannot write outside your folder or use
+  reserved Windows names.
+- **Support tools:** rotating log files with URLs, credentials and your Windows username redacted,
+  "Copy diagnostics" and "Open logs folder" in Settings, a single running instance, and a backup of
+  any settings or history file that cannot be read instead of silently resetting it.
+- Installer: publisher, licence page, bundled third-party licence notices, and an uninstall
+  prompt that never touches your downloaded files. An offline-WebView2 installer is also published.
 
 ### Changed
-- Core engine hardened: If-Range/ETag validation so a changed remote file is detected on resume,
-  `SO_BINDTODEVICE` on Linux, and handling of single-adapter connection blips.
-- Adapter discovery filters out links that are down or in a non-usable state (Windows).
-- Windows downloads use NTFS sparse files for pre-allocation.
-- Filenames are sanitised and output paths are claimed atomically to avoid collisions.
-- Strict Content Security Policy and trimmed Tauri capabilities for the webview.
-- Quitting the app now shuts down gracefully, persisting in-flight download state.
+- Stricter webview security (content security policy, minimal permissions).
+- Quitting (or closing the window with "close to tray" off) now pauses downloads and saves state
+  first.
+- The Add dialog says that links are checked automatically after you paste or type them.
 
 ### Fixed
-- Credentials and tokens are redacted from error messages shown in the UI and written to logs,
-  not only from the URLs themselves.
-- A download that was paused and resumed could end up truncated; the file is now only completed
-  when every byte is present.
-- A hostile or corrupt server-reported size (absurdly large, or inconsistent with the ranged
-  responses) no longer makes the app preallocate or accept it; the download fails cleanly.
-- The `.conflux.json` sidecar name no longer collides when two downloads would share a file name.
-- Release workflow safeguards: a published release can no longer be rebuilt over; the updater
-  manifest is verified (signature, newer version, release-local URLs) before going live; the
-  tagged commit must be on `main`; release builds use `--locked`; release notes must come from a
-  real changelog section; GitHub Actions are pinned to commit SHAs.
-- Settings could be overwritten by a concurrent save (race).
-- Start/pause race that could leave a download in the wrong state.
-- Adapter-scan errors are surfaced instead of silently ignored.
-- Persister and cancellation resource leaks.
-- Startup crash caused by starting the network watcher outside the Tokio runtime.
-- Various UI settings and state fixes.
+- A finished download could be truncated after pause or quit during the final integrity check; the
+  file is now completed only when every byte is verified, and a cancelled check resumes without
+  re-downloading.
+- A hostile or corrupt server-reported size no longer makes the app allocate huge amounts of
+  memory; the download fails cleanly.
+- Credentials and tokens in URLs no longer appear in error messages, notifications or logs.
+- A brief network drop on a single adapter no longer kills the whole download.
+- Settings could be overwritten by a concurrent save; pause/remove right after start could leave a
+  download in the wrong state; adapter-scan errors were silently ignored.
+- Adapter add/remove events could be dropped under load; two downloads could pick the same file
+  name or collide with a resume file.
+- Various UI state, dialog and formatting fixes.
 
 ## [0.1.5]
 

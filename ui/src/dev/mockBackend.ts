@@ -7,7 +7,7 @@ import type { AdapterInfo, Diagnostics, DownloadTask, Settings } from '../types'
 import { NETWORK_ADAPTERS_CHANGED_EVENT, PROGRESS_EVENT, UPDATE_AVAILABLE_EVENT } from '../types';
 
 // Keep in sync with the real app version (Cargo.toml / tauri.conf.json / ui/package.json).
-const APP_VERSION = '0.1.5';
+const APP_VERSION = '0.2.0-beta.1';
 const MB = 1024 * 1024;
 const adapters: AdapterInfo[] = [
   { id: 'Ethernet:192.168.1.24', name: 'Ethernet', ip: '192.168.1.24', is_ipv4: true, is_loopback: false, enabled: true, usable: true, kind: 'ethernet', disabled_reason: null },

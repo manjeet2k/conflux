@@ -621,7 +621,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-cli"
-version = "0.1.5"
+version = "0.2.0-beta.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-core"
-version = "0.1.5"
+version = "0.2.0-beta.1"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "conflux-desktop"
-version = "0.1.5"
+version = "0.2.0-beta.1"
 dependencies = [
  "anyhow",
  "conflux-core",
