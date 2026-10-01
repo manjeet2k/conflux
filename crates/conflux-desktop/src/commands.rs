@@ -1,5 +1,6 @@
 use crate::adapters::{adapter_names, adapter_stat, AdapterInfo};
 use crate::history::HistoryStore;
+use crate::redact::redact_error;
 use crate::settings::{self, Settings};
 use crate::state::{AppState, DownloadTaskState, TaskHandle, TaskStatus};
 use conflux_core::{
@@ -86,8 +87,7 @@ fn emit(app: &AppHandle, task: &DownloadTaskState) {
 // ─── 1. Adapter Discovery ───────────────────────────────────
 #[tauri::command]
 pub async fn discover_adapters(state: State<'_, AppState>) -> Result<Vec<AdapterInfo>, String> {
-    let discovered = core_discover().map_err(|e| e.to_string())?;
-    let adapters = refresh_adapters(&state, discovered, AddPolicy::IfAutoAggregate).await;
+    let adapters = refresh_adapters(&state, None, AddPolicy::IfAutoAggregate).await?;
     Ok(state.adapter_infos(adapters))
 }
 
@@ -100,21 +100,44 @@ pub enum AddPolicy {
     Always,
 }
 
-/// Applies the current overrides to `discovered`, records it as `last_adapters`, and forwards
-/// the difference to running downloads. Returns the adapters with overrides applied.
+/// Discovers the adapters, applies the current overrides, records the result as
+/// `last_adapters`, and forwards the difference to running downloads. Returns the adapters
+/// with overrides applied. If discovery fails, `fallback` (the watcher's own snapshot) is used
+/// when given, otherwise the error is returned.
 ///
-/// Every writer of `last_adapters` goes through here. The settings are read only after the
-/// `last_adapters` write lock is taken, and the diff is forwarded before it is released, so
-/// a concurrent adapter toggle can never be overwritten with stale overrides (which would
-/// re-add a just-disabled adapter) and add/remove updates reach the engine in order.
+/// Every writer of `last_adapters` goes through here (or [`set_adapter_enabled`], which holds
+/// the same lock and calls [`refresh_locked`]). Discovery itself happens only after the
+/// `last_adapters` write lock is taken, so two concurrent refreshes cannot publish an older
+/// snapshot over a newer one. The settings are read under that lock too, and the diff is
+/// forwarded before it is released, so a concurrent adapter toggle can never be overwritten
+/// with stale overrides (which would re-add a just-disabled adapter) and add/remove updates
+/// reach the engine in order.
 /// Lock order: `last_adapters` -> `settings` -> `handles` -> `tasks`; nothing may take
 /// `last_adapters` while holding `settings`.
 pub async fn refresh_adapters(
     state: &AppState,
+    fallback: Option<Vec<NetworkAdapter>>,
+    policy: AddPolicy,
+) -> Result<Vec<NetworkAdapter>, String> {
+    let mut last = state.last_adapters.write().await;
+    let discovered = match (core_discover(), fallback) {
+        (Ok(discovered), _) => discovered,
+        (Err(e), Some(snapshot)) => {
+            warn!("Adapter discovery failed, using the watcher snapshot: {e:#}");
+            snapshot
+        }
+        (Err(e), None) => return Err(redact_error(&format!("{e:#}"))),
+    };
+    Ok(refresh_locked(state, &mut last, discovered, policy).await)
+}
+
+/// The body of [`refresh_adapters`], for callers that already hold the `last_adapters` lock.
+async fn refresh_locked(
+    state: &AppState,
+    last: &mut Vec<NetworkAdapter>,
     mut discovered: Vec<NetworkAdapter>,
     policy: AddPolicy,
 ) -> Vec<NetworkAdapter> {
-    let mut last = state.last_adapters.write().await;
     if let Ok(mut defaults) = state.adapter_defaults.lock() {
         // Discovery's verdict, recorded before overrides change `enabled`.
         *defaults = discovered
@@ -129,7 +152,7 @@ pub async fn refresh_adapters(
         }
         policy == AddPolicy::Always || settings.auto_aggregate_adapters
     };
-    let (added, removed) = conflux_core::diff_adapters(&last, &discovered);
+    let (added, removed) = conflux_core::diff_adapters(last, &discovered);
     *last = discovered.clone();
     let added = if apply_added { added } else { Vec::new() };
     if !added.is_empty() || !removed.is_empty() {
@@ -156,7 +179,7 @@ pub async fn probe_url(url: String) -> Result<ProbeResult, String> {
     let probe = DownloadEngine::default()
         .probe(&url)
         .await
-        .map_err(|e| format!("{e:#}"))?;
+        .map_err(|e| redact_error(&format!("{e:#}")))?;
     Ok(ProbeResult {
         url: probe.url,
         filename: probe.suggested_filename,
@@ -187,7 +210,7 @@ pub async fn start_download(
     let probe = engine
         .probe(&url)
         .await
-        .map_err(|e| format!("Probe failed: {e:#}"))?;
+        .map_err(|e| format!("Probe failed: {}", redact_error(&format!("{e:#}"))))?;
 
     let requested_name = filename
         .map(|f| sanitize_filename(&f))
@@ -292,7 +315,7 @@ pub async fn resume_task_internal(
     let probe = engine
         .probe(&task.url)
         .await
-        .map_err(|e| format!("Probe failed: {e:#}"))?;
+        .map_err(|e| format!("Probe failed: {}", redact_error(&format!("{e:#}"))))?;
 
     let output_path = PathBuf::from(&task.save_path);
     if output_path.parent() != Some(dir.as_path()) {
@@ -695,7 +718,7 @@ async fn spawn_task(
 ) {
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let (adapter_tx, adapter_rx) = if probe.supports_ranges && probe.total_bytes > 0 {
-        let (tx, rx) = mpsc::channel(16);
+        let (tx, rx) = mpsc::channel(64);
         (Some(tx), Some(rx))
     } else {
         (None, None)
@@ -857,8 +880,11 @@ async fn run_download(
             (TaskStatus::Paused, None, None)
         }
         Err(e) => {
-            error!(task_id = %task_id, "Download failed: {e:#}");
-            (TaskStatus::Error, None, Some(format!("{e:#}")))
+            // The one place an engine error becomes task text (UI, downloads.json, toast):
+            // reqwest embeds the full request URL, credentials and query included.
+            let msg = redact_error(&format!("{e:#}"));
+            error!(task_id = %task_id, "Download failed: {msg}");
+            (TaskStatus::Error, None, Some(msg))
         }
     };
 
@@ -896,7 +922,7 @@ async fn notify_finished(shared: &Shared, task: &DownloadTaskState) {
             format!(
                 "{}: {}",
                 task.filename,
-                task.error.as_deref().unwrap_or("unknown error")
+                redact_error(task.error.as_deref().unwrap_or("unknown error"))
             ),
         ),
         TaskStatus::Paused | TaskStatus::Downloading => return,
@@ -995,27 +1021,22 @@ pub async fn handle_network_change(
             .collect::<Vec<_>>()
     };
 
+    let updates = crate::adapter_updates::adapter_updates(added, removed);
     for (task_id, tx, names) in targets {
         let Some(tx) = tx else { continue };
         for new_adapter in added {
-            {
-                let mut names = names.write().await;
-                names.insert(
-                    new_adapter.ip,
-                    (
-                        new_adapter.id.clone(),
-                        crate::adapters::adapter_name(new_adapter),
-                    ),
-                );
-            }
+            names.write().await.insert(
+                new_adapter.ip,
+                (
+                    new_adapter.id.clone(),
+                    crate::adapters::adapter_name(new_adapter),
+                ),
+            );
             info!(
                 task_id = %task_id,
                 adapter = %new_adapter.id,
                 "Auto-aggregating active adapter into download"
             );
-            if let Err(e) = tx.try_send(AdapterUpdate::Add(new_adapter.clone())) {
-                warn!(task_id = %task_id, "Could not queue adapter addition: {e}");
-            }
         }
         for drop_adapter in removed {
             info!(
@@ -1023,10 +1044,17 @@ pub async fn handle_network_change(
                 adapter = %drop_adapter.id,
                 "Retiring disabled/disconnected adapter from download"
             );
-            if let Err(e) = tx.try_send(AdapterUpdate::Remove(drop_adapter.ip)) {
-                warn!(task_id = %task_id, "Could not queue adapter removal: {e}");
-            }
         }
+        // `refresh_adapters` has already recorded the new adapter list, so nothing would ever
+        // re-send a dropped update: delivery must not be lossy. A full queue (engine busy)
+        // is waited out, but off this task, so the watcher / UI call holding the
+        // `last_adapters` lock never blocks. One task per download keeps add/remove order.
+        tokio::spawn(crate::adapter_updates::deliver(
+            task_id,
+            tx,
+            updates.clone(),
+            crate::adapter_updates::SEND_TIMEOUT,
+        ));
     }
 }
 
@@ -1038,11 +1066,13 @@ pub async fn set_adapter_enabled(
     id: String,
     enabled: bool,
 ) -> Result<Vec<AdapterInfo>, String> {
-    let discovered = core_discover().map_err(|e| e.to_string())?;
+    // Same lock as `refresh_adapters`, taken before discovering, so this snapshot cannot be
+    // overwritten by (or overwrite) a concurrent refresh's. Order: last_adapters -> settings.
+    let mut last = state.last_adapters.write().await;
+    let discovered = core_discover().map_err(|e| redact_error(&format!("{e:#}")))?;
     // Overrides are keyed by interface name so they survive DHCP address changes.
     let key = crate::adapters::override_key(&id, &discovered);
     {
-        // Released before `refresh_adapters`, which takes `last_adapters` then `settings`.
         let mut current = state.settings.write().await;
         let mut next = current.clone();
         set_override(&mut next.adapter_overrides, &key, enabled);
@@ -1055,7 +1085,14 @@ pub async fn set_adapter_enabled(
     }
     info!(id = %id, name = %key, enabled, "Adapter override set");
 
-    let adapters = refresh_adapters(&state, discovered, AddPolicy::Always).await;
+    // OPEN DESIGN QUESTION: disabling the LAST enabled adapter here is accepted, and
+    // `handle_network_change` then retires its workers from running downloads. Per
+    // `check_adapter_selection`, start/resume would refuse in that state, but a download that
+    // is already running instead continues over the OS default route (the engine falls back
+    // to unbound sockets) and so ignores the user's choice. Behaviour intentionally
+    // unchanged; whether to pause such downloads or refuse the toggle is the user's call.
+    let adapters = refresh_locked(&state, &mut last, discovered, AddPolicy::Always).await;
+    drop(last);
     let infos: Vec<AdapterInfo> = state.adapter_infos(adapters);
     let _ = app.emit("network-adapters-changed", &infos);
     Ok(infos)
@@ -1094,6 +1131,10 @@ fn select_adapters(settings: &Settings) -> Result<Vec<NetworkAdapter>, String> {
 /// Refuses to start when the user has disabled every usable adapter: silently downloading
 /// over the OS default route would ignore their choice. With no usable adapter at all (e.g.
 /// an IPv6-only host) there is nothing to choose, so the engine's default route is allowed.
+///
+/// OPEN DESIGN QUESTION: this only guards start/resume. Disabling the last enabled adapter
+/// while a download is running (`set_adapter_enabled`) is not refused and leaves that download
+/// running over the default route; see the note there.
 fn check_adapter_selection(adapters: &[NetworkAdapter]) -> Result<(), String> {
     let any_usable = adapters.iter().any(crate::adapters::is_usable);
     let any_enabled = adapters.iter().any(|a| a.enabled);

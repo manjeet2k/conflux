@@ -51,15 +51,104 @@ mod logic {
         std::fs::write(path, json)
     }
 
-    /// Reads and deletes the resume file. A missing file is "nothing to resume"; a corrupt one
-    /// is deleted and also yields nothing, so it can never wedge startup.
-    pub fn take_resume_file(path: &Path) -> Vec<String> {
-        let ids = match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice::<Vec<String>>(&bytes).unwrap_or_default(),
-            Err(_) => return Vec::new(),
+    /// Reads the resume file without deleting it: it must survive until every id has been
+    /// resumed or has permanently failed (see [`resume_with_retry`]). A missing file is
+    /// "nothing to resume"; a corrupt one is deleted and also yields nothing, so it can never
+    /// wedge startup.
+    pub fn read_resume_file(path: &Path) -> Vec<String> {
+        match std::fs::read(path) {
+            Ok(bytes) => match serde_json::from_slice::<Vec<String>>(&bytes) {
+                Ok(ids) => ids,
+                Err(_) => {
+                    let _ = std::fs::remove_file(path);
+                    Vec::new()
+                }
+            },
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Persists the ids still to resume; deletes the file when none are left.
+    pub fn save_remaining(path: &Path, ids: &[String]) {
+        let result = if ids.is_empty() {
+            std::fs::remove_file(path)
+        } else {
+            write_resume_file(path, ids)
         };
-        let _ = std::fs::remove_file(path);
-        ids
+        if let Err(e) = result {
+            if e.kind() != io::ErrorKind::NotFound {
+                tracing::warn!("Could not update the resume-after-update file: {e}");
+            }
+        }
+    }
+
+    /// Delays between resume rounds: 3 attempts over ~30 s, enough for the network to come up
+    /// right after the installer relaunches the app.
+    pub const RESUME_BACKOFF: [std::time::Duration; 2] = [
+        std::time::Duration::from_secs(10),
+        std::time::Duration::from_secs(20),
+    ];
+
+    /// Errors no retry can fix: the task is gone, finished, or the user disabled every adapter.
+    pub fn is_permanent_resume_error(err: &str) -> bool {
+        err.starts_with("Unknown task")
+            || err.contains("already complete")
+            || err.starts_with("No network adapters are enabled")
+    }
+
+    pub trait Resumer {
+        fn resume(&mut self, id: &str) -> impl Future<Output = Result<(), String>>;
+        fn sleep(&mut self, d: std::time::Duration) -> impl Future<Output = ()>;
+    }
+
+    /// Resumes `ids` in order, in rounds: ids that fail transiently are retried after each
+    /// `backoff` delay. After each round the file is rewritten with the ids still outstanding
+    /// (and deleted once none are left), so a crash mid-way never forgets a download. Returns the ids given up on.
+    pub async fn resume_with_retry<R: Resumer>(
+        path: &Path,
+        ids: Vec<String>,
+        backoff: &[std::time::Duration],
+        r: &mut R,
+    ) -> Vec<String> {
+        let mut pending = ids;
+        let mut abandoned = Vec::new();
+        let mut round = 0;
+        while !pending.is_empty() {
+            let mut failed = Vec::new();
+            for id in std::mem::take(&mut pending) {
+                match r.resume(&id).await {
+                    Ok(()) => {
+                        tracing::info!(task_id = %id, "Resumed after the update");
+                    }
+                    Err(e) if is_permanent_resume_error(&e) => {
+                        tracing::warn!(task_id = %id, "Not resuming after the update: {e}");
+                        abandoned.push(id.clone());
+                    }
+                    Err(e) => {
+                        tracing::warn!(task_id = %id, attempt = round + 1, "Could not resume after the update: {e}");
+                        failed.push(id);
+                        continue;
+                    }
+                }
+            }
+            pending = failed;
+            // Persist what is still outstanding. Done once per round: a crash mid-round
+            // leaves the whole round in the file, and re-resuming a running task is a no-op.
+            save_remaining(path, &pending);
+            let Some(delay) = backoff.get(round).copied().filter(|_| !pending.is_empty()) else {
+                break;
+            };
+            r.sleep(delay).await;
+            round += 1;
+        }
+        for id in &pending {
+            tracing::warn!(task_id = %id, "Giving up resuming after the update; it stays paused");
+        }
+        // Out of attempts counts as settled: the user can resume these by hand, and a stale
+        // file must not re-trigger resumes on every later launch.
+        save_remaining(path, &[]);
+        abandoned.extend(pending);
+        abandoned
     }
 
     /// The side effects of installing an update, in the order [`install_flow`] runs them.
@@ -104,28 +193,135 @@ mod logic {
             assert!(!is_newer("garbage", "0.2.0"));
         }
 
+        fn temp_path(tag: &str) -> std::path::PathBuf {
+            let dir = std::env::temp_dir().join(format!("conflux-{tag}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            dir.join(RESUME_FILE)
+        }
+
         #[test]
-        fn resume_file_round_trips_and_is_deleted_once_read() {
-            let dir = std::env::temp_dir().join(format!("conflux-resume-{}", std::process::id()));
-            let path = dir.join(RESUME_FILE);
+        fn resume_file_round_trips_and_is_kept_until_saved_empty() {
+            let path = temp_path("resume");
             let ids = vec!["a".to_string(), "b".to_string()];
             write_resume_file(&path, &ids).unwrap();
-            assert_eq!(take_resume_file(&path), ids);
+            assert_eq!(read_resume_file(&path), ids);
+            assert!(path.exists(), "reading must not delete the file");
+            save_remaining(&path, &["b".to_string()]);
+            assert_eq!(read_resume_file(&path), ["b"]);
+            save_remaining(&path, &[]);
             assert!(!path.exists());
-            assert!(take_resume_file(&path).is_empty());
-            let _ = std::fs::remove_dir_all(&dir);
+            assert!(read_resume_file(&path).is_empty());
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
         }
 
         #[test]
         fn corrupt_resume_file_yields_nothing_and_is_removed() {
-            let dir =
-                std::env::temp_dir().join(format!("conflux-resume-bad-{}", std::process::id()));
-            std::fs::create_dir_all(&dir).unwrap();
-            let path = dir.join(RESUME_FILE);
+            let path = temp_path("resume-bad");
             std::fs::write(&path, b"{not json").unwrap();
-            assert!(take_resume_file(&path).is_empty());
+            assert!(read_resume_file(&path).is_empty());
             assert!(!path.exists());
-            let _ = std::fs::remove_dir_all(&dir);
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        }
+
+        #[test]
+        fn permanent_errors_are_classified() {
+            assert!(is_permanent_resume_error("Unknown task: x"));
+            assert!(is_permanent_resume_error("Download is already complete"));
+            assert!(is_permanent_resume_error(
+                "No network adapters are enabled. Enable one on the Network page."
+            ));
+            assert!(!is_permanent_resume_error("Probe failed: dns error"));
+        }
+
+        /// Fails each id a scripted number of times, recording calls and sleeps.
+        struct Scripted {
+            fail_times: std::collections::HashMap<String, (u32, String)>,
+            log: Vec<String>,
+            path: std::path::PathBuf,
+            file_at_sleep: Vec<Vec<String>>,
+        }
+
+        impl Resumer for Scripted {
+            async fn resume(&mut self, id: &str) -> Result<(), String> {
+                self.log.push(format!("try:{id}"));
+                match self.fail_times.get_mut(id) {
+                    Some((n, msg)) if *n > 0 => {
+                        *n -= 1;
+                        Err(msg.clone())
+                    }
+                    _ => Ok(()),
+                }
+            }
+            async fn sleep(&mut self, d: std::time::Duration) {
+                self.log.push(format!("sleep:{}", d.as_secs()));
+                self.file_at_sleep.push(read_resume_file(&self.path));
+            }
+        }
+
+        fn run_retry(
+            tag: &str,
+            fails: &[(&str, u32, &str)],
+        ) -> (Vec<String>, Vec<String>, Vec<Vec<String>>, bool) {
+            let path = temp_path(tag);
+            let ids: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
+            write_resume_file(&path, &ids).unwrap();
+            let mut r = Scripted {
+                fail_times: fails
+                    .iter()
+                    .map(|(i, n, m)| (i.to_string(), (*n, m.to_string())))
+                    .collect(),
+                log: Vec::new(),
+                path: path.clone(),
+                file_at_sleep: Vec::new(),
+            };
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            let abandoned = rt.block_on(resume_with_retry(&path, ids, &RESUME_BACKOFF, &mut r));
+            let exists = path.exists();
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
+            (abandoned, r.log, r.file_at_sleep, exists)
+        }
+
+        #[test]
+        fn all_resumed_first_try_deletes_file_without_sleeping() {
+            let (abandoned, log, _, exists) = run_retry("retry-ok", &[]);
+            assert!(abandoned.is_empty());
+            assert_eq!(log, ["try:a", "try:b", "try:c"]);
+            assert!(!exists);
+        }
+
+        #[test]
+        fn transient_failure_is_retried_in_order_with_file_kept() {
+            let (abandoned, log, file_at_sleep, exists) =
+                run_retry("retry-transient", &[("b", 2, "Probe failed: no network")]);
+            assert!(abandoned.is_empty());
+            assert_eq!(
+                log,
+                ["try:a", "try:b", "try:c", "sleep:10", "try:b", "sleep:20", "try:b"]
+            );
+            // While waiting, the file holds exactly the id still outstanding.
+            assert_eq!(
+                file_at_sleep,
+                [vec!["b".to_string()], vec!["b".to_string()]]
+            );
+            assert!(!exists);
+        }
+
+        #[test]
+        fn gives_up_after_three_attempts_and_permanent_errors_are_not_retried() {
+            let (abandoned, log, _, exists) = run_retry(
+                "retry-giveup",
+                &[
+                    ("a", 99, "Probe failed: no network"),
+                    ("c", 99, "Unknown task: c"),
+                ],
+            );
+            assert_eq!(abandoned, ["c", "a"]);
+            let tries = |id: &str| log.iter().filter(|l| **l == format!("try:{id}")).count();
+            assert_eq!((tries("a"), tries("b"), tries("c")), (3, 1, 1));
+            // Nothing outstanding after giving up: the file is not kept forever.
+            assert!(!exists);
         }
 
         #[derive(Default)]
@@ -200,7 +396,10 @@ mod logic {
 // END-PURE-LOGIC
 
 pub use logic::RESUME_FILE;
-use logic::{install_flow, is_newer, take_resume_file, write_resume_file, InstallSteps};
+use logic::{
+    install_flow, is_newer, read_resume_file, resume_with_retry, write_resume_file, InstallSteps,
+    Resumer, RESUME_BACKOFF,
+};
 
 /// What the UI shows about an available update.
 #[derive(Debug, Clone, Serialize)]
@@ -338,7 +537,7 @@ pub async fn resume_after_update(app: &AppHandle) {
     let Some(path) = resume_file_path(app) else {
         return;
     };
-    let ids = take_resume_file(&path);
+    let ids = read_resume_file(&path);
     if ids.is_empty() {
         return;
     }
@@ -347,10 +546,33 @@ pub async fn resume_after_update(app: &AppHandle) {
         "Resuming downloads paused for the update"
     );
     let state = app.state::<AppState>();
-    for id in ids {
-        if let Err(e) = commands::resume_task_internal(app, &state, &id).await {
-            warn!(task_id = %id, "Could not resume after the update: {e}");
+    struct Live<'a> {
+        app: &'a AppHandle,
+        state: &'a AppState,
+    }
+    impl Resumer for Live<'_> {
+        async fn resume(&mut self, id: &str) -> Result<(), String> {
+            commands::resume_task_internal(self.app, self.state, id)
+                .await
+                .map(|_| ())
         }
+        async fn sleep(&mut self, d: std::time::Duration) {
+            tokio::time::sleep(d).await;
+        }
+    }
+    // The file stays on disk until each id is resumed or given up on.
+    let given_up = resume_with_retry(
+        &path,
+        ids,
+        &RESUME_BACKOFF,
+        &mut Live { app, state: &state },
+    )
+    .await;
+    if !given_up.is_empty() {
+        warn!(
+            count = given_up.len(),
+            "Downloads left paused after the update: {given_up:?}"
+        );
     }
 }
 

@@ -3,7 +3,7 @@
 //! a timestamped report next to the logs.
 
 use crate::fileutil::utc_stamp_now;
-use crate::redact::{redact_urls, scrub_diagnostic_line};
+use crate::redact::{redact_urls, redact_user_paths, scrub_diagnostic_line};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -126,7 +126,12 @@ pub fn install_panic_hook() {
             info,
             std::backtrace::Backtrace::force_capture()
         );
-        let report = redact_urls(&report);
+        // Backtrace frames carry absolute paths (C:\Users\<name>\...): drop the account name
+        // and the literal profile dir so a shared report does not identify the user.
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .ok();
+        let report = redact_user_paths(&redact_urls(&report), home.as_deref());
         eprintln!("{report}");
         let dir = log_dir().map_or_else(std::env::temp_dir, Path::to_path_buf);
         let _ = std::fs::create_dir_all(&dir);

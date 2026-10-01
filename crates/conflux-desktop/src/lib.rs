@@ -1,3 +1,4 @@
+mod adapter_updates;
 mod adapters;
 mod commands;
 mod diagnostics;
@@ -114,23 +115,29 @@ pub fn run() {
                         let _watcher = watcher;
                         let state = app_handle.state::<AppState>();
                         let initial = rx.borrow().clone();
-                        commands::refresh_adapters(
+                        if let Err(e) = commands::refresh_adapters(
                             &state,
-                            initial,
+                            Some(initial),
                             commands::AddPolicy::IfAutoAggregate,
                         )
-                        .await;
+                        .await
+                        {
+                            warn!("Initial adapter refresh failed: {e}");
+                        }
 
                         while rx.changed().await.is_ok() {
                             let discovered = rx.borrow().clone();
                             // Applies overrides, updates `last_adapters` and hot-plugs the
                             // difference into active downloads, all under one lock.
-                            let current_adapters = commands::refresh_adapters(
+                            let Ok(current_adapters) = commands::refresh_adapters(
                                 &state,
-                                discovered,
+                                Some(discovered),
                                 commands::AddPolicy::IfAutoAggregate,
                             )
-                            .await;
+                            .await
+                            else {
+                                continue;
+                            };
 
                             let infos = state.adapter_infos(current_adapters);
                             if let Err(e) = app_handle.emit("network-adapters-changed", &infos) {

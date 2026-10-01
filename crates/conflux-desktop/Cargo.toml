@@ -15,6 +15,12 @@ description = "Conflux desktop app (Tauri v2, Windows): multi-interface download
 name = "conflux_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = []
+# Passed by `tauri build`; also enable it for `cargo run --release --features custom-protocol`
+# so the built UI is embedded instead of loading `devUrl`.
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

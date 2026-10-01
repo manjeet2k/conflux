@@ -152,6 +152,79 @@ pub fn redact_paths(line: &str) -> String {
     out
 }
 
+/// Scrubs an error message before it is stored, shown or notified: URL credentials and
+/// queries (reqwest embeds the full request URL, `https://user:pw@host/f?token=...`, in its
+/// errors). The single entry point for every error string that leaves the engine.
+pub fn redact_error(text: &str) -> String {
+    redact_urls(text)
+}
+
+fn is_sep(c: char) -> bool {
+    matches!(c, '\\' | '/')
+}
+
+/// Replaces the account name in profile paths (`C:\Users\<name>\`, `/home/<name>/`,
+/// `/Users/<name>/`, also with doubled backslashes as in `Debug` output) with `<user>`, and
+/// the literal `home` directory (when given) with `<home>`. The name runs to the next
+/// separator, quote, colon or end of line, so a name containing a space is covered.
+pub fn redact_user_paths(text: &str, home: Option<&str>) -> String {
+    let mut out = scrub_profile_names(text);
+    if let Some(home) = home.map(str::trim_end).filter(|h| h.len() > 3) {
+        let trimmed = home.trim_end_matches(is_sep);
+        for variant in [
+            trimmed.to_string(),
+            trimmed.replace('\\', "\\\\"),
+            trimmed.replace('\\', "/"),
+        ] {
+            if variant.len() > 3 {
+                out = out.replace(&variant, "<home>");
+            }
+        }
+    }
+    out
+}
+
+fn scrub_profile_names(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut pos = 0;
+    while pos < text.len() {
+        // Next "users" / "home" segment that starts right after a separator.
+        let hit = ["users", "home"]
+            .iter()
+            .filter_map(|m| {
+                let mut from = pos;
+                while let Some(i) = lower[from..].find(m).map(|i| i + from) {
+                    let after = i + m.len();
+                    let preceded = text[..i].chars().next_back().is_some_and(is_sep);
+                    if preceded && text[after..].starts_with(is_sep) {
+                        return Some((i, after));
+                    }
+                    from = i + m.len();
+                }
+                None
+            })
+            .min_by_key(|(i, _)| *i);
+        let Some((_, after)) = hit else { break };
+        let seps = text[after..]
+            .find(|c| !is_sep(c))
+            .unwrap_or(text.len() - after);
+        let name_start = after + seps;
+        let name_len = text[name_start..]
+            .find(|c: char| is_sep(c) || matches!(c, '"' | '\'' | ':' | '\n' | '\r'))
+            .unwrap_or(text.len() - name_start);
+        out.push_str(&text[pos..name_start]);
+        if name_len > 0 && !text[name_start..].starts_with('<') {
+            out.push_str("<user>");
+        } else {
+            out.push_str(&text[name_start..name_start + name_len]);
+        }
+        pos = name_start + name_len;
+    }
+    out.push_str(&text[pos..]);
+    out
+}
+
 /// Everything a diagnostics line must lose before it leaves the machine.
 pub fn scrub_diagnostic_line(line: &str) -> String {
     mask_ips(&redact_paths(&redact_urls(line)))
@@ -246,5 +319,62 @@ mod tests {
         for secret in ["u:p", "t=1", "57", "bob", "Users"] {
             assert!(!out.contains(secret), "{secret} leaked: {out}");
         }
+    }
+
+    #[test]
+    fn error_messages_lose_credentials() {
+        let msg = "error sending request for url (https://alice:hunter2@files.example.com/f.iso?token=SECRET&x=1): connection refused";
+        let out = redact_error(msg);
+        assert_eq!(
+            out,
+            "error sending request for url (https://files.example.com/f.iso?<redacted>): connection refused"
+        );
+        for secret in ["alice", "hunter2", "SECRET"] {
+            assert!(!out.contains(secret), "{secret} leaked: {out}");
+        }
+        assert_eq!(redact_error("disk full"), "disk full");
+    }
+
+    #[test]
+    fn profile_names_are_redacted() {
+        assert_eq!(
+            redact_user_paths(r"at C:\Users\John Smith\.cargo\x.rs:12:5", None),
+            r"at C:\Users\<user>\.cargo\x.rs:12:5"
+        );
+        assert_eq!(
+            redact_user_paths(r#"p=Some("c:\\users\\bob\\a.json")"#, None),
+            r#"p=Some("c:\\users\\<user>\\a.json")"#
+        );
+        assert_eq!(
+            redact_user_paths("/home/bob/src/x.rs and /Users/amy/y.rs", None),
+            "/home/<user>/src/x.rs and /Users/<user>/y.rs"
+        );
+        assert_eq!(
+            redact_user_paths(r"C:\Users\bob: denied", None),
+            r"C:\Users\<user>: denied"
+        );
+        assert_eq!(
+            redact_user_paths(r"D:/Users/bob/x", None),
+            "D:/Users/<user>/x"
+        );
+        // Idempotent, and unrelated text is untouched.
+        let once = redact_user_paths(r"C:\Users\bob\a", None);
+        assert_eq!(redact_user_paths(&once, None), once);
+        assert_eq!(
+            redact_user_paths("users and home alone, /home", None),
+            "users and home alone, /home"
+        );
+    }
+
+    #[test]
+    fn literal_home_dir_is_redacted() {
+        assert_eq!(
+            redact_user_paths(
+                r"open D:\Profiles\carol\f and D:\\Profiles\\carol\\g",
+                Some(r"D:\Profiles\carol")
+            ),
+            r"open <home>\f and <home>\\g"
+        );
+        assert_eq!(redact_user_paths("x", Some("/")), "x");
     }
 }
