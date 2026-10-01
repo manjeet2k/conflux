@@ -1,9 +1,20 @@
 name: Security
 
+# Dependency advisories change on their own schedule, so scan weekly, and on pushes/PRs
+# only when dependency or policy files change.
 on:
   pull_request:
+    paths: &dep_files
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/*/Cargo.toml"
+      - "deny.toml"
+      - "ui/package.json"
+      - "ui/package-lock.json"
+      - ".github/workflows/security.yml"
   push:
     branches: [main]
+    paths: *dep_files
   schedule:
     - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
   workflow_dispatch:
