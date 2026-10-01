@@ -5,6 +5,14 @@
   "description": "Conflux Desktop - Multi-Interface Download Accelerator",
   "author": "Manjeet Singh <manjeetsgh11@gmail.com>",
   "license": "MIT OR Apache-2.0",
+  "homepage": "https://github.com/manjeet2k/conflux",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/manjeet2k/conflux.git"
+  },
+  "bugs": {
+    "url": "https://github.com/manjeet2k/conflux/issues"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
