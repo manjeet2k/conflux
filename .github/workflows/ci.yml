@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Version consistency
+        run: node scripts/check-version.mjs
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy (core, Linux)
+        run: cargo clippy -p conflux-core --tests -- -D warnings
+      - name: Clippy (core, Windows target)
+        run: cargo clippy -p conflux-core --target x86_64-pc-windows-gnu --tests -- -D warnings
+      - name: Clippy (cli)
+        run: cargo clippy -p conflux-cli --tests -- -D warnings
+      # Engine/watcher integration tests are timing-sensitive: run core 3x to catch flakes.
+      - name: Test (core, 3 runs)
+        run: |
+          for i in 1 2 3; do
+            echo "::group::conflux-core run $i"
+            cargo test -p conflux-core
+            echo "::endgroup::"
+          done
+      - name: Test (cli)
+        run: cargo test -p conflux-cli
+      - name: UI install
+        run: npm --prefix ui ci
+      - name: UI lint
+        run: npm --prefix ui run lint
+      - name: UI build
+        run: npm --prefix ui run build
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      # conflux-desktop embeds ui/dist at compile time, so build the UI first.
+      - name: UI install
+        run: npm --prefix ui ci
+      - name: UI lint
+        run: npm --prefix ui run lint
+      - name: UI build
+        run: npm --prefix ui run build
+      - name: Clippy (core, cli, desktop)
+        run: cargo clippy -p conflux-core -p conflux-cli -p conflux-desktop --tests -- -D warnings
+      - name: Test (core, cli, desktop)
+        run: cargo test -p conflux-core -p conflux-cli -p conflux-desktop

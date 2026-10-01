@@ -11,7 +11,9 @@
     "build": "tsc -b && vite build",
     "tauri": "tauri",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "version:check": "node ../scripts/check-version.mjs",
+    "version:bump": "node ../scripts/bump-version.mjs"
   },
   "dependencies": {
     "@fluentui/react-components": "^9.74.9",
