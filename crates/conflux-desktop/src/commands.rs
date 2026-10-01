@@ -1,4 +1,4 @@
-use crate::adapters::{adapter_names, adapter_stat, to_info, AdapterInfo};
+use crate::adapters::{adapter_names, adapter_stat, AdapterInfo};
 use crate::history::HistoryStore;
 use crate::settings::{self, Settings};
 use crate::state::{AppState, DownloadTaskState, TaskHandle, TaskStatus};
@@ -88,7 +88,7 @@ fn emit(app: &AppHandle, task: &DownloadTaskState) {
 pub async fn discover_adapters(state: State<'_, AppState>) -> Result<Vec<AdapterInfo>, String> {
     let discovered = core_discover().map_err(|e| e.to_string())?;
     let adapters = refresh_adapters(&state, discovered, AddPolicy::IfAutoAggregate).await;
-    Ok(adapters.into_iter().map(to_info).collect())
+    Ok(state.adapter_infos(adapters))
 }
 
 /// Whether adapters that became enabled are hot-added to running downloads.
@@ -115,6 +115,13 @@ pub async fn refresh_adapters(
     policy: AddPolicy,
 ) -> Vec<NetworkAdapter> {
     let mut last = state.last_adapters.write().await;
+    if let Ok(mut defaults) = state.adapter_defaults.lock() {
+        // Discovery's verdict, recorded before overrides change `enabled`.
+        *defaults = discovered
+            .iter()
+            .map(|a| (a.id.clone(), a.enabled))
+            .collect();
+    }
     let apply_added = {
         let settings = state.settings.read().await;
         for a in discovered.iter_mut() {
@@ -532,6 +539,64 @@ pub async fn update_settings(
     *current = settings.clone();
     info!(?settings, "Settings updated");
     Ok(settings)
+}
+
+// ─── 8b. Startup notices, folder check, diagnostics, logs ───
+/// Messages produced during startup (e.g. a corrupt data file was reset). Each is returned
+/// once, then cleared.
+#[tauri::command]
+pub fn take_startup_notices(state: State<'_, AppState>) -> Vec<String> {
+    state.take_notices()
+}
+
+/// Whether `path` is an existing directory (the Settings page warns when the default
+/// download folder, e.g. on an unplugged drive, is gone).
+#[tauri::command]
+pub async fn folder_exists(path: String) -> bool {
+    let path = path.trim().to_string();
+    tokio::task::spawn_blocking(move || Path::new(&path).is_dir())
+        .await
+        .unwrap_or(false)
+}
+
+/// Support information with no paths, user names, URLs or full IP addresses.
+#[tauri::command]
+pub async fn get_diagnostics(
+    state: State<'_, AppState>,
+) -> Result<crate::diagnostics::Diagnostics, String> {
+    let settings = state.settings.read().await.clone();
+    let adapters = state.last_adapters.read().await.clone();
+    let infos = state.adapter_infos(adapters);
+    let recent = match crate::logging::log_dir() {
+        Some(dir) => {
+            let dir = dir.to_path_buf();
+            tokio::task::spawn_blocking(move || crate::logging::read_recent_errors(&dir, 20))
+                .await
+                .unwrap_or_default()
+        }
+        None => Vec::new(),
+    };
+    Ok(crate::diagnostics::build(
+        &settings,
+        &infos,
+        tauri::webview_version().ok(),
+        recent,
+    ))
+}
+
+/// Opens the folder holding the log files in the file manager.
+#[tauri::command]
+pub fn open_logs_folder(app: AppHandle) -> Result<(), String> {
+    let dir = match crate::logging::log_dir() {
+        Some(dir) => dir.to_path_buf(),
+        None => tauri::Manager::path(&app)
+            .app_log_dir()
+            .map_err(|e| format!("No log folder: {e}"))?,
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create log folder: {e}"))?;
+    app.opener()
+        .open_path(dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| format!("Failed to open log folder: {e}"))
 }
 
 // ─── 9. Open / Reveal ───────────────────────────────────────
@@ -991,7 +1056,7 @@ pub async fn set_adapter_enabled(
     info!(id = %id, name = %key, enabled, "Adapter override set");
 
     let adapters = refresh_adapters(&state, discovered, AddPolicy::Always).await;
-    let infos: Vec<AdapterInfo> = adapters.into_iter().map(to_info).collect();
+    let infos: Vec<AdapterInfo> = state.adapter_infos(adapters);
     let _ = app.emit("network-adapters-changed", &infos);
     Ok(infos)
 }

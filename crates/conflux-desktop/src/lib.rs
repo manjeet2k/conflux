@@ -1,6 +1,10 @@
 mod adapters;
 mod commands;
+mod diagnostics;
+mod fileutil;
 mod history;
+mod logging;
+mod redact;
 mod settings;
 mod state;
 mod tray;
@@ -10,7 +14,6 @@ use state::AppState;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager};
 use tracing::{info, warn};
-use tracing_subscriber::EnvFilter;
 
 /// Set once a graceful quit has started, so repeated close/quit requests do not race it.
 static QUITTING: AtomicBool = AtomicBool::new(false);
@@ -35,15 +38,32 @@ pub(crate) fn quit_gracefully(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
-        .init();
+    logging::install_panic_hook();
 
     tauri::Builder::default()
+        // Registered first so a second launch exits before touching shared data files.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Args are logged redacted (they may be a download URL) and forwarded to the UI
+            // for later protocol-handler / "open with" support.
+            info!(
+                args = %redact::redact_urls(&format!("{:?}", args.iter().skip(1).collect::<Vec<_>>())),
+                "Second instance launched; focusing the main window"
+            );
+            tray::show_main_window(app);
+            let _ = app.emit("second-instance", args);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            let log_dir = app.path().app_log_dir().ok();
+            if let Some(problem) = logging::init(log_dir.as_deref()) {
+                eprintln!("{problem}");
+            }
+            info!("{} starting", logging::build_info());
+            if log_dir.is_none() {
+                warn!("No log dir; logs go to stderr only");
+            }
             let settings_path = match app.path().app_config_dir() {
                 Ok(dir) => Some(dir.join("settings.json")),
                 Err(e) => {
@@ -60,14 +80,17 @@ pub fn run() {
             };
             info!(?settings_path, ?history_path, "Resolved storage paths");
 
-            let settings = settings_path
+            let (settings, settings_notice) = settings_path
                 .as_deref()
                 .map(settings::load)
                 .unwrap_or_default();
             let history = HistoryStore::new(history_path);
-            let tasks = history.load();
+            let (tasks, history_notice) = history.load();
             info!(restored = tasks.len(), "Loaded download history");
             app.manage(AppState::new(settings, settings_path, history, tasks));
+            for notice in [settings_notice, history_notice].into_iter().flatten() {
+                app.state::<AppState>().push_notice(notice);
+            }
 
             if let Err(e) = tray::setup_tray(app.handle()) {
                 warn!("Failed to setup system tray: {e}");
@@ -106,10 +129,7 @@ pub fn run() {
                             )
                             .await;
 
-                            let infos: Vec<adapters::AdapterInfo> = current_adapters
-                                .into_iter()
-                                .map(adapters::to_info)
-                                .collect();
+                            let infos = state.adapter_infos(current_adapters);
                             if let Err(e) = app_handle.emit("network-adapters-changed", &infos) {
                                 warn!("Failed to emit network-adapters-changed: {e}");
                             }
@@ -162,6 +182,10 @@ pub fn run() {
             commands::open_file,
             commands::reveal_file,
             commands::apply_window_theme,
+            commands::take_startup_notices,
+            commands::folder_exists,
+            commands::get_diagnostics,
+            commands::open_logs_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Conflux desktop");

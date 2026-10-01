@@ -2,10 +2,33 @@
 
 use crate::settings::write_atomic;
 use crate::state::{DownloadTaskState, TaskStatus};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::sync::{Mutex, RwLock};
 use tracing::warn;
+
+/// Version of the on-disk history layout. Version 0 is the original bare JSON array.
+pub const SCHEMA_VERSION: u32 = 1;
+
+/// Current layout: `{"schema_version": 1, "tasks": [...]}`.
+#[derive(Serialize)]
+struct OnDiskRef<'a> {
+    schema_version: u32,
+    tasks: &'a [DownloadTaskState],
+}
+
+/// Everything `load_from` accepts: the current layout or the legacy bare array.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum OnDisk {
+    Versioned {
+        #[allow(dead_code)]
+        schema_version: u32,
+        tasks: Vec<DownloadTaskState>,
+    },
+    Legacy(Vec<DownloadTaskState>),
+}
 
 pub struct HistoryStore {
     /// `None` disables persistence (data dir could not be resolved).
@@ -24,9 +47,11 @@ impl HistoryStore {
 
     /// Loads saved tasks, newest first. Tasks that were running when the app exited
     /// become `Paused` (they can be resumed from their sidecar).
-    pub fn load(&self) -> Vec<DownloadTaskState> {
+    /// An unparseable file is renamed to `downloads.json.corrupt-<timestamp>` (at most 3
+    /// kept); the second value is then a notice for the UI.
+    pub fn load(&self) -> (Vec<DownloadTaskState>, Option<String>) {
         let Some(path) = &self.path else {
-            return Vec::new();
+            return (Vec::new(), None);
         };
         load_from(path)
     }
@@ -40,7 +65,10 @@ impl HistoryStore {
         let mut snapshot: Vec<DownloadTaskState> = tasks.read().await.values().cloned().collect();
         snapshot.sort_by_key(|t| std::cmp::Reverse(t.created_at_ms));
         let result = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-            let json = serde_json::to_vec(&snapshot)?;
+            let json = serde_json::to_vec(&OnDiskRef {
+                schema_version: SCHEMA_VERSION,
+                tasks: &snapshot,
+            })?;
             write_atomic(&path, &json)
         })
         .await;
@@ -52,20 +80,21 @@ impl HistoryStore {
     }
 }
 
-fn load_from(path: &Path) -> Vec<DownloadTaskState> {
+fn load_from(path: &Path) -> (Vec<DownloadTaskState>, Option<String>) {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), None),
         Err(e) => {
-            warn!(path = %path.display(), "Cannot read download history: {e}");
-            return Vec::new();
+            warn!("Cannot read download history: {e}");
+            return (Vec::new(), None);
         }
     };
     let mut tasks: Vec<DownloadTaskState> = match serde_json::from_str(&text) {
-        Ok(t) => t,
+        Ok(OnDisk::Versioned { tasks, .. } | OnDisk::Legacy(tasks)) => tasks,
         Err(e) => {
-            warn!(path = %path.display(), "Invalid download history, starting empty: {e}");
-            return Vec::new();
+            warn!("Invalid download history, starting empty: {e}");
+            let notice = crate::fileutil::quarantine_with_notice(path, "download history");
+            return (Vec::new(), Some(notice));
         }
     };
     for task in &mut tasks {
@@ -75,7 +104,7 @@ fn load_from(path: &Path) -> Vec<DownloadTaskState> {
         task.clear_runtime();
     }
     tasks.sort_by_key(|t| std::cmp::Reverse(t.created_at_ms));
-    tasks
+    (tasks, None)
 }
 
 #[cfg(test)]
@@ -121,7 +150,7 @@ mod tests {
     async fn save_then_load_pauses_running_tasks_and_clears_runtime_fields() {
         let dir = std::env::temp_dir().join(format!("conflux-history-{}", uuid::Uuid::new_v4()));
         let store = HistoryStore::new(Some(dir.join("downloads.json")));
-        assert!(store.load().is_empty());
+        assert!(store.load().0.is_empty());
 
         let tasks = RwLock::new(HashMap::from([
             ("a".to_string(), task("a", TaskStatus::Downloading, 1)),
@@ -129,7 +158,8 @@ mod tests {
         ]));
         store.save(&tasks).await;
 
-        let loaded = store.load();
+        let (loaded, notice) = store.load();
+        assert!(notice.is_none());
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].id, "b", "newest first");
         let a = &loaded[1];
@@ -141,8 +171,47 @@ mod tests {
         assert_eq!(a.chunk_map.as_deref(), Some("#..."));
         assert_eq!(loaded[0].status, TaskStatus::Completed);
 
-        std::fs::write(dir.join("downloads.json"), b"not json").unwrap();
-        assert!(store.load().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn saved_file_carries_schema_version() {
+        let dir = std::env::temp_dir().join(format!("conflux-history-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("downloads.json");
+        let store = HistoryStore::new(Some(path.clone()));
+        let tasks = RwLock::new(HashMap::from([(
+            "a".to_string(),
+            task("a", TaskStatus::Completed, 1),
+        )]));
+        store.save(&tasks).await;
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(value["schema_version"], SCHEMA_VERSION);
+        assert_eq!(value["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(store.load().0.len(), 1, "versioned file round-trips");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn corrupt_history_is_backed_up_not_lost() {
+        let dir = std::env::temp_dir().join(format!("conflux-history-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("downloads.json");
+        std::fs::write(&path, b"not json").unwrap();
+        let store = HistoryStore::new(Some(path.clone()));
+        let (tasks, notice) = store.load();
+        assert!(tasks.is_empty());
+        assert!(notice.unwrap().contains("downloads.json.corrupt-"));
+        assert!(!path.exists());
+        let backup = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap())
+            .find(|e| e.file_name().to_string_lossy().contains(".corrupt-"))
+            .expect("backup exists");
+        assert_eq!(std::fs::read(backup.path()).unwrap(), b"not json");
+        // A second load finds nothing to complain about.
+        let (tasks, notice) = store.load();
+        assert!(tasks.is_empty() && notice.is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -156,7 +225,8 @@ mod tests {
             value[0].as_object_mut().unwrap().remove(key);
         }
         std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-        let loaded = load_from(&path);
+        let (loaded, notice) = load_from(&path);
+        assert!(notice.is_none());
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].status, TaskStatus::Error);
         assert!(loaded[0].adapters.is_empty());

@@ -26,3 +26,5 @@ anyhow = { workspace = true }
 uuid = { workspace = true }
 tauri-plugin-notification = "2"
 window-vibrancy = "0.8"
+tracing-appender = "0.2.5"
+tauri-plugin-single-instance = "2.5.2"

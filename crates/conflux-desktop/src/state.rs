@@ -99,6 +99,12 @@ pub struct AppState {
     /// Last known snapshot of network adapters with user overrides applied,
     /// shared between background NetworkWatcher and UI toggle commands.
     pub last_adapters: Arc<RwLock<Vec<conflux_core::NetworkAdapter>>>,
+    /// Adapter id -> `enabled` as discovery reported it, before user overrides. Written by
+    /// `refresh_adapters` (under the `last_adapters` lock), read when building UI records.
+    /// A plain mutex, never held across an await.
+    pub adapter_defaults: std::sync::Mutex<HashMap<String, bool>>,
+    /// One-shot messages for the UI (e.g. a data file was reset), drained by the UI once.
+    notices: std::sync::Mutex<Vec<String>>,
 }
 
 impl AppState {
@@ -118,13 +124,57 @@ impl AppState {
             settings_path,
             history: Arc::new(history),
             last_adapters: Arc::new(RwLock::new(Vec::new())),
+            adapter_defaults: std::sync::Mutex::new(HashMap::new()),
+            notices: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn push_notice(&self, notice: String) {
+        if let Ok(mut notices) = self.notices.lock() {
+            notices.push(notice);
+        }
+    }
+
+    /// Returns and clears the pending notices, so each is shown once.
+    pub fn take_notices(&self) -> Vec<String> {
+        self.notices
+            .lock()
+            .map(|mut n| std::mem::take(&mut *n))
+            .unwrap_or_default()
+    }
+
+    /// UI records for `adapters`, including why each was disabled by default.
+    pub fn adapter_infos(
+        &self,
+        adapters: Vec<conflux_core::NetworkAdapter>,
+    ) -> Vec<crate::adapters::AdapterInfo> {
+        let defaults = self
+            .adapter_defaults
+            .lock()
+            .map(|d| d.clone())
+            .unwrap_or_default();
+        crate::adapters::to_infos(adapters, &defaults)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notices_are_delivered_once() {
+        let state = AppState::new(
+            Settings::default(),
+            None,
+            crate::history::HistoryStore::new(None),
+            vec![],
+        );
+        assert!(state.take_notices().is_empty());
+        state.push_notice("a".into());
+        state.push_notice("b".into());
+        assert_eq!(state.take_notices(), ["a", "b"]);
+        assert!(state.take_notices().is_empty());
+    }
 
     /// Field names are the IPC contract with `ui/src/types.ts` (`DownloadTask`).
     #[test]

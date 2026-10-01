@@ -17,6 +17,18 @@ pub enum AdapterKind {
     Other,
 }
 
+/// Why discovery leaves an adapter disabled by default (shown as a hint on the Network page).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisabledReason {
+    Loopback,
+    LinkLocal,
+    NoIpv4,
+    /// Usable address, but the OS description / interface type / name marks it virtual
+    /// (VPN, TAP, bridge, container). A real uplink behind such a name can be enabled by hand.
+    Virtual,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AdapterInfo {
     pub id: String,
@@ -29,6 +41,8 @@ pub struct AdapterInfo {
     /// The engine can bind to it (IPv4, not loopback, not link-local).
     pub usable: bool,
     pub kind: AdapterKind,
+    /// Set when discovery disables the adapter by default, whatever the user chose since.
+    pub disabled_reason: Option<DisabledReason>,
 }
 
 /// OS interface name of the adapter (falls back to the name part of its `"<name>:<ip>"` id).
@@ -138,18 +152,62 @@ pub fn migrate_overrides(overrides: HashMap<String, bool>) -> HashMap<String, bo
     migrated
 }
 
-pub fn to_info(adapter: NetworkAdapter) -> AdapterInfo {
+/// Why discovery disabled `adapter` by default. `discovery_default` is the adapter's
+/// `enabled` flag as discovery reported it, before user overrides: for an otherwise usable
+/// adapter, discovery only says "disabled" when its Windows description, interface type or
+/// name marks it virtual, signals the desktop app cannot see on `NetworkAdapter`.
+pub fn disabled_reason(
+    adapter: &NetworkAdapter,
+    discovery_default: bool,
+) -> Option<DisabledReason> {
+    if adapter.is_loopback {
+        Some(DisabledReason::Loopback)
+    } else if is_link_local(&adapter.ip) {
+        Some(DisabledReason::LinkLocal)
+    } else if !(adapter.is_ipv4 && adapter.ip.is_ipv4()) {
+        Some(DisabledReason::NoIpv4)
+    } else if !discovery_default {
+        Some(DisabledReason::Virtual)
+    } else {
+        None
+    }
+}
+
+/// `discovery_default`: see [`disabled_reason`].
+pub fn to_info(adapter: NetworkAdapter, discovery_default: bool) -> AdapterInfo {
     let name = adapter_name(&adapter);
+    let disabled_reason = disabled_reason(&adapter, discovery_default);
+    let mut kind = classify_kind(&name, adapter.is_loopback);
+    if disabled_reason == Some(DisabledReason::Virtual) {
+        // e.g. a TAP adapter called "Local Area Connection 2": only the description gives it away.
+        kind = AdapterKind::Virtual;
+    }
     AdapterInfo {
-        kind: classify_kind(&name, adapter.is_loopback),
+        kind,
         usable: is_usable(&adapter),
         name,
         ip: adapter.ip.to_string(),
         is_ipv4: adapter.is_ipv4,
         is_loopback: adapter.is_loopback,
         enabled: adapter.enabled,
+        disabled_reason,
         id: adapter.id,
     }
+}
+
+/// Converts adapters to UI records; `defaults` maps adapter id -> discovery default
+/// (missing = enabled by default).
+pub fn to_infos(
+    adapters: Vec<NetworkAdapter>,
+    defaults: &HashMap<String, bool>,
+) -> Vec<AdapterInfo> {
+    adapters
+        .into_iter()
+        .map(|a| {
+            let default = defaults.get(&a.id).copied().unwrap_or(true);
+            to_info(a, default)
+        })
+        .collect()
 }
 
 /// Bound IP -> (adapter id, interface name) for the adapters of one run.
@@ -224,6 +282,71 @@ mod tests {
     }
 
     #[test]
+    fn disabled_reasons_and_virtual_kind_from_discovery_default() {
+        // A TAP adapter with a generic Windows name: only discovery's description check
+        // knows it is virtual (it reported enabled = false for a usable address).
+        let tap = adapter("Local Area Connection 2", "10.8.0.2", false);
+        assert_eq!(classify_kind(&tap.name, false), AdapterKind::Ethernet);
+        let info = to_info(tap.clone(), false);
+        assert_eq!(info.kind, AdapterKind::Virtual);
+        assert_eq!(info.disabled_reason, Some(DisabledReason::Virtual));
+        assert_eq!(
+            serde_json::to_value(&info).unwrap()["disabled_reason"],
+            "virtual"
+        );
+        // The same adapter that discovery enabled keeps its name-based kind.
+        let info = to_info(tap, true);
+        assert_eq!(info.kind, AdapterKind::Ethernet);
+        assert_eq!(info.disabled_reason, None);
+
+        // Other reasons do not depend on the discovery flag.
+        let cases = [
+            (adapter("lo", "127.0.0.1", true), DisabledReason::Loopback),
+            (
+                adapter("Ethernet", "169.254.3.4", false),
+                DisabledReason::LinkLocal,
+            ),
+            (
+                adapter("Ethernet", "fe80::1", false),
+                DisabledReason::LinkLocal,
+            ),
+            (
+                adapter("Ethernet", "2401:4900::1", false),
+                DisabledReason::NoIpv4,
+            ),
+            (
+                adapter("br0", "192.168.1.9", false),
+                DisabledReason::Virtual,
+            ),
+        ];
+        for (a, reason) in cases {
+            assert_eq!(disabled_reason(&a, false), Some(reason), "{}", a.id);
+        }
+        // A user override never invents or hides the default reason.
+        let mut overridden = adapter("br0", "192.168.1.9", false);
+        overridden.enabled = true;
+        assert_eq!(
+            to_info(overridden, false).disabled_reason,
+            Some(DisabledReason::Virtual)
+        );
+        assert_eq!(
+            disabled_reason(&adapter("Wi-Fi", "192.168.1.5", false), true),
+            None
+        );
+
+        let defaults = HashMap::from([("br0:192.168.1.9".to_string(), false)]);
+        let infos = to_infos(
+            vec![
+                adapter("br0", "192.168.1.9", false),
+                adapter("Wi-Fi", "192.168.1.5", false),
+            ],
+            &defaults,
+        );
+        assert_eq!(infos[0].disabled_reason, Some(DisabledReason::Virtual));
+        assert_eq!(infos[1].disabled_reason, None);
+    }
+
+    #[test]
     fn name_and_usability() {
         let v6 = adapter("Ethernet", "fe80::4022:7688:97e1:1", false);
         assert_eq!(adapter_name(&v6), "Ethernet");
@@ -235,7 +358,8 @@ mod tests {
         assert!(!is_usable(&adapter("lo", "127.0.0.1", true)));
         assert!(!is_usable(&adapter("Ethernet", "2401:4900::1", false)));
 
-        let info = to_info(v4);
+        let info = to_info(v4, true);
+        assert_eq!(info.disabled_reason, None);
         assert_eq!(info.kind, AdapterKind::Wifi);
         assert_eq!(serde_json::to_value(&info).unwrap()["kind"], "wifi");
     }
@@ -349,7 +473,7 @@ mod tests {
         overrides.insert("Ethernet".to_string(), false);
         apply_overrides(&mut adapter, &overrides);
 
-        let info = to_info(adapter);
+        let info = to_info(adapter, true);
         assert_eq!(info.name, "Ethernet");
         assert!(!info.enabled);
         assert!(info.usable);

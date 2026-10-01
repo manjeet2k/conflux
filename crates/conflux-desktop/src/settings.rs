@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
+/// Version of the on-disk settings layout, bumped when a migration is needed.
+/// Files written before the field existed load as version 0.
+pub const SCHEMA_VERSION: u32 = 1;
 pub const MIN_CONNECTIONS: u32 = 1;
 pub const MAX_CONNECTIONS: u32 = 16;
 pub const MIN_CHUNK_MB: u32 = 1;
@@ -21,6 +24,8 @@ pub enum ThemePreference {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    #[serde(default = "legacy_schema_version")]
+    pub schema_version: u32,
     pub theme: ThemePreference,
     /// `None` = the OS Downloads folder.
     pub default_save_dir: Option<String>,
@@ -32,9 +37,14 @@ pub struct Settings {
     pub adapter_overrides: std::collections::HashMap<String, bool>,
 }
 
+fn legacy_schema_version() -> u32 {
+    0
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            schema_version: SCHEMA_VERSION,
             theme: ThemePreference::System,
             default_save_dir: None,
             connections_per_adapter: 4,
@@ -51,6 +61,8 @@ impl Settings {
     /// Clamps numeric fields into their supported ranges, normalizes an empty folder to `None`
     /// and migrates legacy `"<name>:<ip>"` adapter override keys to interface names.
     pub fn normalized(mut self) -> Self {
+        // Migrations for older `schema_version`s would run here, oldest first.
+        self.schema_version = SCHEMA_VERSION;
         self.adapter_overrides = crate::adapters::migrate_overrides(self.adapter_overrides);
         self.connections_per_adapter = self
             .connections_per_adapter
@@ -91,20 +103,23 @@ impl Settings {
     }
 }
 
-/// Loads settings; a missing or unreadable file yields defaults (logged, never fatal).
-pub fn load(path: &Path) -> Settings {
+/// Loads settings. A missing file yields defaults. An unparseable file is renamed to
+/// `settings.json.corrupt-<timestamp>` (at most 3 kept), defaults are used, and the second
+/// value is a notice for the UI. Never fatal.
+pub fn load(path: &Path) -> (Settings, Option<String>) {
     match std::fs::read_to_string(path) {
         Ok(text) => match serde_json::from_str::<Settings>(&text) {
-            Ok(s) => s.normalized(),
+            Ok(s) => (s.normalized(), None),
             Err(e) => {
-                warn!(path = %path.display(), "Invalid settings file, using defaults: {e}");
-                Settings::default()
+                warn!("Invalid settings file, using defaults: {e}");
+                let notice = crate::fileutil::quarantine_with_notice(path, "settings");
+                (Settings::default(), Some(notice))
             }
         },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Settings::default(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Settings::default(), None),
         Err(e) => {
-            warn!(path = %path.display(), "Cannot read settings file, using defaults: {e}");
-            Settings::default()
+            warn!("Cannot read settings file, using defaults: {e}");
+            (Settings::default(), None)
         }
     }
 }
@@ -181,7 +196,8 @@ mod tests {
             br#"{"adapter_overrides":{"Wi-Fi:192.168.1.5":false,"Ethernet:fe80::1":true}}"#,
         )
         .unwrap();
-        let s = load(&path);
+        let (s, notice) = load(&path);
+        assert!(notice.is_none());
         assert_eq!(s.adapter_overrides.len(), 2);
         assert_eq!(s.adapter_overrides.get("Wi-Fi"), Some(&false));
         assert_eq!(s.adapter_overrides.get("Ethernet"), Some(&true));
@@ -224,7 +240,7 @@ mod tests {
     fn save_and_load_roundtrip() {
         let dir = std::env::temp_dir().join(format!("conflux-settings-{}", uuid::Uuid::new_v4()));
         let path = dir.join("settings.json");
-        assert_eq!(load(&path), Settings::default());
+        assert_eq!(load(&path), (Settings::default(), None));
         let mut overrides = std::collections::HashMap::new();
         overrides.insert("eth0".into(), false);
         overrides.insert("wlan0".into(), true);
@@ -235,9 +251,49 @@ mod tests {
             ..Settings::default()
         };
         save(&path, &s).unwrap();
-        assert_eq!(load(&path), s);
+        assert_eq!(load(&path), (s, None));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn corrupt_file_is_backed_up_and_defaults_used() {
+        let dir = std::env::temp_dir().join(format!("conflux-settings-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
         std::fs::write(&path, b"{garbage").unwrap();
-        assert_eq!(load(&path), Settings::default());
+        let (s, notice) = load(&path);
+        assert_eq!(s, Settings::default());
+        assert!(notice.unwrap().contains("settings.json.corrupt-"));
+        assert!(!path.exists(), "bad file moved away");
+        let backups: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|n| n.starts_with("settings.json.corrupt-"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read(dir.join(&backups[0])).unwrap(), b"{garbage");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn schema_version_defaults_and_round_trips() {
+        assert_eq!(Settings::default().schema_version, SCHEMA_VERSION);
+        assert_eq!(
+            serde_json::to_value(Settings::default()).unwrap()["schema_version"],
+            1
+        );
+        // A file from before the field existed deserializes as version 0 ...
+        let old: Settings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
+        assert_eq!(old.schema_version, 0);
+        // ... and is stamped current once normalized (the migration point).
+        assert_eq!(old.normalized().schema_version, SCHEMA_VERSION);
+
+        let dir = std::env::temp_dir().join(format!("conflux-settings-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("settings.json");
+        save(&path, &Settings::default()).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"schema_version\": 1"));
+        assert_eq!(load(&path).0.schema_version, 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
