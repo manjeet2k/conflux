@@ -56,13 +56,12 @@ pub fn run() {
                 };
             }
 
-            // Start background non-polling network adapter watcher
-            match conflux_core::NetworkWatcher::start(conflux_core::DEFAULT_DEBOUNCE) {
-                Ok(watcher) => {
-                    let app_handle = app.handle().clone();
-                    let mut rx = watcher.receiver();
-
-                    tauri::async_runtime::spawn(async move {
+            // Start background non-polling network adapter watcher inside Tokio runtime context
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match conflux_core::NetworkWatcher::start(conflux_core::DEFAULT_DEBOUNCE) {
+                    Ok(watcher) => {
+                        let mut rx = watcher.receiver();
                         // Keep watcher alive inside this task
                         let _watcher = watcher;
                         let state = app_handle.state::<AppState>();
@@ -108,12 +107,12 @@ pub fn run() {
                                     .await;
                             }
                         }
-                    });
+                    }
+                    Err(e) => {
+                        warn!("Could not start NetworkWatcher: {e:#}");
+                    }
                 }
-                Err(e) => {
-                    warn!("Could not start NetworkWatcher: {e:#}");
-                }
-            }
+            });
 
             Ok(())
         })

@@ -48,6 +48,9 @@ pub struct NetworkWatcher {
 impl NetworkWatcher {
     /// Starts watching network adapter changes with the specified debounce interval.
     pub fn start(debounce: Duration) -> Result<Self> {
+        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+            anyhow::anyhow!("NetworkWatcher must be started within a Tokio runtime context")
+        })?;
         let initial = discover_adapters().unwrap_or_default();
         let (watch_tx, watch_rx) = watch::channel(initial);
         let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel::<()>();
@@ -65,7 +68,7 @@ impl NetworkWatcher {
                 );
                 // Fallback timer trigger (every 5 seconds)
                 let fallback_tx = trigger_tx.clone();
-                tokio::spawn(async move {
+                handle.spawn(async move {
                     let mut interval = tokio::time::interval(Duration::from_secs(5));
                     loop {
                         interval.tick().await;
@@ -78,7 +81,7 @@ impl NetworkWatcher {
             }
         };
 
-        tokio::spawn(async move {
+        handle.spawn(async move {
             loop {
                 tokio::select! {
                     biased;
