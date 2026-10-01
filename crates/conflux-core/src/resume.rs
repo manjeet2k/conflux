@@ -5,7 +5,7 @@
 //! written, and the sidecar is replaced atomically (write temp file, sync, rename). So a
 //! chunk listed as completed is always really on disk, even after a crash or power loss.
 
-use crate::engine::DownloadProbe;
+use crate::engine::{DownloadProbe, RequestHeaders};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
@@ -21,6 +21,8 @@ pub struct ResumeState {
     pub chunk_size: u64,
     pub etag: Option<String>,
     pub last_modified: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<RequestHeaders>,
     /// Completed chunk ids as ascending ranges, e.g. `"0-5,7,9-12"` (empty = none).
     pub completed: String,
 }
@@ -161,6 +163,7 @@ mod tests {
             suggested_filename: "y".into(),
             etag: etag.map(str::to_string),
             last_modified: None,
+            headers: None,
         }
     }
 
@@ -171,6 +174,7 @@ mod tests {
             chunk_size: 10,
             etag: etag.map(str::to_string),
             last_modified: None,
+            headers: None,
             completed: String::new(),
         }
     }
@@ -245,5 +249,32 @@ mod tests {
         remove_resume_sidecar(&output).unwrap();
         assert!(!path.exists());
         remove_resume_sidecar(&output).unwrap();
+    }
+
+    #[test]
+    fn test_resume_state_headers_serde_backwards_compatible() {
+        // Old sidecar JSON without headers field must deserialize with headers = None
+        let legacy_json = r#"{
+            "version": 1,
+            "total_bytes": 1024,
+            "chunk_size": 256,
+            "etag": "\"123\"",
+            "last_modified": null,
+            "completed": "0-2"
+        }"#;
+        let decoded: ResumeState = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(decoded.headers, None);
+        assert_eq!(decoded.total_bytes, 1024);
+
+        // New sidecar with headers must round-trip cleanly
+        let mut state_with_headers = state(1024, Some("\"123\""));
+        state_with_headers.headers = Some(RequestHeaders {
+            cookie: Some("auth_token=xyz123".into()),
+            referer: Some("https://example.com/download".into()),
+            user_agent: Some("CustomAgent/1.0".into()),
+        });
+        let serialized = serde_json::to_string(&state_with_headers).unwrap();
+        let deserialized: ResumeState = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, state_with_headers);
     }
 }

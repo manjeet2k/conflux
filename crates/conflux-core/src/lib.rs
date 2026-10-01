@@ -14,7 +14,7 @@ pub use checksum::compute_sha256;
 pub use chunk::{plan_chunks, Chunk, ChunkStatus};
 pub use engine::{
     AdapterProgress, AdapterUpdate, DownloadCancelled, DownloadEngine, DownloadProbe,
-    ProgressUpdate,
+    ProgressUpdate, RequestHeaders,
 };
 pub use filename::{claim_unique_path, sanitize_filename};
 pub use resume::{remove_resume_sidecar, resume_sidecar_path};

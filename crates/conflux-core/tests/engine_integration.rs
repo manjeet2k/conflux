@@ -5,7 +5,7 @@ mod support;
 use anyhow::Result;
 use conflux_core::{
     resume_sidecar_path, AdapterUpdate, DownloadCancelled, DownloadEngine, DownloadProbe,
-    NetworkAdapter, ProgressUpdate,
+    NetworkAdapter, ProgressUpdate, RequestHeaders,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -1490,6 +1490,7 @@ async fn hostile_download_probe_is_refused_by_download() {
         suggested_filename: "huge.bin".into(),
         etag: None,
         last_modified: None,
+        headers: None,
     };
     let (_tx, cancel_rx) = watch::channel(false);
     let err = test_engine()
@@ -1548,4 +1549,54 @@ async fn chunk_416_is_a_failure_not_completion() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn chunk_redirect_without_location_is_a_failure() {
     assert_chunk_status_fails(302, 65).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn download_carries_request_headers_on_probe_and_chunks() {
+    let data = payload(PAYLOAD_LEN, 66);
+    let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let engine = test_engine();
+
+    let custom_headers = RequestHeaders {
+        cookie: Some("auth_session=secret_token_123".into()),
+        referer: Some("https://portal.example.com/downloads".into()),
+        user_agent: Some("ConfluxBrowserBridge/1.0".into()),
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let probe = engine
+        .probe_with_headers(
+            &server.url("/secure/file.bin"),
+            Some(custom_headers.clone()),
+        )
+        .await
+        .expect("probe must succeed");
+
+    assert_eq!(probe.headers, Some(custom_headers));
+    let path = dir.path().join(&probe.suggested_filename);
+    let (_tx, cancel_rx) = watch::channel(false);
+
+    let sha = engine
+        .download(&probe, &path, &[], None, cancel_rx)
+        .await
+        .expect("download must succeed");
+
+    assert_eq!(sha, sha256_hex(&data));
+
+    // Verify all requests received by the server carried the expected headers
+    let cookies = server.stats.cookies.lock().unwrap().clone();
+    let referers = server.stats.referers.lock().unwrap().clone();
+    let user_agents = server.stats.user_agents.lock().unwrap().clone();
+
+    // 1 probe + 17 chunk requests = 18 total requests
+    assert_eq!(cookies.len(), 18);
+    assert!(cookies.iter().all(|c| c == "auth_session=secret_token_123"));
+    assert_eq!(referers.len(), 18);
+    assert!(referers
+        .iter()
+        .all(|r| r == "https://portal.example.com/downloads"));
+    assert_eq!(user_agents.len(), 18);
+    assert!(user_agents
+        .iter()
+        .all(|ua| ua == "ConfluxBrowserBridge/1.0"));
 }

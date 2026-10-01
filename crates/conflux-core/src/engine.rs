@@ -61,7 +61,18 @@ impl fmt::Display for DownloadCancelled {
 
 impl std::error::Error for DownloadCancelled {}
 
-#[derive(Debug, Clone)]
+/// Optional HTTP headers attached to download requests (e.g. cookies or referer from a browser).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RequestHeaders {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cookie: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DownloadProbe {
     pub url: String,
     /// Total size in bytes; `0` means empty *or unknown* (single-stream will find out).
@@ -74,6 +85,9 @@ pub struct DownloadProbe {
     pub etag: Option<String>,
     /// `Last-Modified` validator, used to detect a changed resource before resuming.
     pub last_modified: Option<String>,
+    /// Optional HTTP request headers (Cookie, Referer, User-Agent) attached to probe and chunk requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<RequestHeaders>,
 }
 
 /// Live statistics of one bound adapter (or the unbound default route) in one download run.
@@ -434,6 +448,7 @@ struct ChunkedShared {
     /// The probe's validators; every 206 must carry exactly these.
     etag: Option<String>,
     last_modified: Option<String>,
+    headers: Option<RequestHeaders>,
     writer: SparseFileWriter,
     scheduler: Mutex<ChunkScheduler>,
     counters: Arc<Counters>,
@@ -535,18 +550,36 @@ impl DownloadEngine {
     ///
     /// The body is never read beyond what the server already sent with the headers.
     pub async fn probe(&self, url: &str) -> Result<DownloadProbe> {
+        self.probe_with_headers(url, None).await
+    }
+
+    /// Like [`probe`](Self::probe), but attaches optional HTTP request headers (Cookie, Referer,
+    /// User-Agent) to the probe request.
+    pub async fn probe_with_headers(
+        &self,
+        url: &str,
+        headers: Option<RequestHeaders>,
+    ) -> Result<DownloadProbe> {
         let parsed_url =
             reqwest::Url::parse(url).with_context(|| format!("Invalid URL: {}", url))?;
         let client = build_bound_http_client(None, None, self.stall_timeout)?;
 
-        let get = tokio::time::timeout(
-            PROBE_TIMEOUT,
-            client
-                .get(parsed_url.clone())
-                .header(header::RANGE, "bytes=0-0")
-                .send(),
-        )
-        .await;
+        let mut req = client
+            .get(parsed_url.clone())
+            .header(header::RANGE, "bytes=0-0");
+        if let Some(h) = &headers {
+            if let Some(cookie) = &h.cookie {
+                req = req.header(header::COOKIE, cookie);
+            }
+            if let Some(referer) = &h.referer {
+                req = req.header(header::REFERER, referer);
+            }
+            if let Some(user_agent) = &h.user_agent {
+                req = req.header(header::USER_AGENT, user_agent);
+            }
+        }
+
+        let get = tokio::time::timeout(PROBE_TIMEOUT, req.send()).await;
 
         let get_resp = match get {
             Ok(Ok(resp)) => {
@@ -576,31 +609,35 @@ impl DownloadEngine {
         };
 
         let Some(resp) = get_resp else {
-            return self.probe_head(&client, url, &parsed_url).await;
+            return self
+                .probe_head(&client, url, &parsed_url, headers.as_ref())
+                .await;
         };
 
         let status = resp.status();
-        let headers = resp.headers().clone();
+        let resp_headers = resp.headers().clone();
         let final_url = resp.url().clone();
         info!(
             "Probe GET {} -> {} (remote {:?}, Content-Range {:?}, Content-Length {:?})",
             url,
             status,
             resp.remote_addr(),
-            header_str(&headers, header::CONTENT_RANGE),
-            header_str(&headers, header::CONTENT_LENGTH)
+            header_str(&resp_headers, header::CONTENT_RANGE),
+            header_str(&resp_headers, header::CONTENT_LENGTH)
         );
         // Dropping the response without reading the body closes/reuses the connection;
         // for a 200 full-body answer this aborts the transfer.
         drop(resp);
 
-        let suggested_filename =
-            derive_filename(content_disposition_header(&headers).as_deref(), &final_url);
-        let etag = header_str(&headers, header::ETAG).map(str::to_string);
-        let last_modified = header_str(&headers, header::LAST_MODIFIED).map(str::to_string);
+        let suggested_filename = derive_filename(
+            content_disposition_header(&resp_headers).as_deref(),
+            &final_url,
+        );
+        let etag = header_str(&resp_headers, header::ETAG).map(str::to_string);
+        let last_modified = header_str(&resp_headers, header::LAST_MODIFIED).map(str::to_string);
 
         let (total_bytes, supports_ranges) = if status == StatusCode::PARTIAL_CONTENT {
-            match header_str(&headers, header::CONTENT_RANGE).and_then(parse_content_range) {
+            match header_str(&resp_headers, header::CONTENT_RANGE).and_then(parse_content_range) {
                 Some(ContentRange {
                     start: 0,
                     end: 0,
@@ -618,7 +655,7 @@ impl DownloadEngine {
             // `bytes=0-0` is unsatisfiable only for an empty resource.
             (0, false)
         } else if status.is_success() {
-            (content_length_header(&headers).unwrap_or(0), false)
+            (content_length_header(&resp_headers).unwrap_or(0), false)
         } else {
             bail!("Remote server returned non-success status: {}", status);
         };
@@ -634,6 +671,7 @@ impl DownloadEngine {
             suggested_filename,
             etag,
             last_modified,
+            headers,
         })
     }
 
@@ -669,8 +707,21 @@ impl DownloadEngine {
         client: &reqwest::Client,
         url: &str,
         parsed_url: &reqwest::Url,
+        custom_headers: Option<&RequestHeaders>,
     ) -> Result<DownloadProbe> {
-        let resp = tokio::time::timeout(PROBE_TIMEOUT, client.head(parsed_url.clone()).send())
+        let mut req = client.head(parsed_url.clone());
+        if let Some(h) = custom_headers {
+            if let Some(cookie) = &h.cookie {
+                req = req.header(header::COOKIE, cookie);
+            }
+            if let Some(referer) = &h.referer {
+                req = req.header(header::REFERER, referer);
+            }
+            if let Some(user_agent) = &h.user_agent {
+                req = req.header(header::USER_AGENT, user_agent);
+            }
+        }
+        let resp = tokio::time::timeout(PROBE_TIMEOUT, req.send())
             .await
             .map_err(|_| anyhow!("HEAD probe to {} timed out", url))?
             .with_context(|| format!("Failed to send HEAD request to {}", url))?;
@@ -691,6 +742,7 @@ impl DownloadEngine {
             ),
             etag: header_str(headers, header::ETAG).map(str::to_string),
             last_modified: header_str(headers, header::LAST_MODIFIED).map(str::to_string),
+            headers: custom_headers.cloned(),
         })
     }
 
@@ -875,7 +927,7 @@ impl DownloadEngine {
         &self,
         probe: &DownloadProbe,
         output_path: &Path,
-    ) -> Result<(Vec<Chunk>, u64, SparseFileWriter)> {
+    ) -> Result<(Vec<Chunk>, u64, SparseFileWriter, Option<RequestHeaders>)> {
         let state = read_sidecar(&resume_sidecar_path(output_path))?;
         validate(&state, probe)?;
         // A tampered sidecar must not make us allocate an absurd plan.
@@ -887,7 +939,7 @@ impl DownloadEngine {
             chunks[id].status = ChunkStatus::Completed;
             chunks[id].downloaded = chunks[id].size;
         }
-        Ok((chunks, state.chunk_size, writer))
+        Ok((chunks, state.chunk_size, writer, state.headers))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -927,7 +979,7 @@ impl DownloadEngine {
         } else {
             None
         };
-        let (chunks, chunk_size, writer) = match resumed {
+        let (chunks, chunk_size, writer, resumed_headers) = match resumed {
             Some(r) => r,
             None => {
                 // Remove any stale sidecar *before* truncating, so it can never describe
@@ -944,9 +996,10 @@ impl DownloadEngine {
                     );
                 }
                 let writer = SparseFileWriter::create(output_path, probe.total_bytes).await?;
-                (chunks, self.chunk_size, writer)
+                (chunks, self.chunk_size, writer, None)
             }
         };
+        let effective_headers = probe.headers.clone().or(resumed_headers);
         let total_chunks = chunks.len();
         let resumed_chunks: Vec<&Chunk> = chunks
             .iter()
@@ -973,6 +1026,7 @@ impl DownloadEngine {
             if_range: if_range_validator(probe),
             etag: probe.etag.clone(),
             last_modified: probe.last_modified.clone(),
+            headers: effective_headers.clone(),
             writer: writer.clone(),
             scheduler: Mutex::new(ChunkScheduler::new(
                 chunks,
@@ -994,6 +1048,7 @@ impl DownloadEngine {
                 chunk_size,
                 etag: probe.etag.clone(),
                 last_modified: probe.last_modified.clone(),
+                headers: effective_headers,
                 completed: String::new(),
             },
         });
@@ -1263,10 +1318,23 @@ impl DownloadEngine {
         let adapter = self.new_adapter_state(target)?;
         let label = adapter.label.clone();
 
+        let mut req = adapter.client.get(&probe.url);
+        if let Some(h) = &probe.headers {
+            if let Some(cookie) = &h.cookie {
+                req = req.header(header::COOKIE, cookie);
+            }
+            if let Some(referer) = &h.referer {
+                req = req.header(header::REFERER, referer);
+            }
+            if let Some(user_agent) = &h.user_agent {
+                req = req.header(header::USER_AGENT, user_agent);
+            }
+        }
+
         let resp = tokio::select! {
             biased;
             _ = wait_for_true(&mut cancel) => return Err(cancelled_error()),
-            r = adapter.client.get(&probe.url).send() => r.with_context(|| format!("Single-stream request to {} via {} failed", probe.url, label))?,
+            r = req.send() => r.with_context(|| format!("Single-stream request to {} via {} failed", probe.url, label))?,
         };
         let status = resp.status();
         info!(
@@ -1563,6 +1631,17 @@ async fn fetch_chunk(
         .header(header::RANGE, &range);
     if let Some(validator) = &shared.if_range {
         request = request.header(header::IF_RANGE, validator);
+    }
+    if let Some(h) = &shared.headers {
+        if let Some(cookie) = &h.cookie {
+            request = request.header(header::COOKIE, cookie);
+        }
+        if let Some(referer) = &h.referer {
+            request = request.header(header::REFERER, referer);
+        }
+        if let Some(user_agent) = &h.user_agent {
+            request = request.header(header::USER_AGENT, user_agent);
+        }
     }
     let request = request.send();
 
@@ -2022,6 +2101,7 @@ mod tests {
             suggested_filename: "y".into(),
             etag: etag.map(str::to_string),
             last_modified: last_modified.map(str::to_string),
+            headers: None,
         }
     }
 

@@ -149,6 +149,9 @@ pub struct Stats {
     pub requests_by_peer_127_0_0_2: AtomicUsize,
     /// `If-Range` value of every chunk request that carried one.
     pub if_range_values: Mutex<Vec<String>>,
+    pub cookies: Mutex<Vec<String>>,
+    pub referers: Mutex<Vec<String>>,
+    pub user_agents: Mutex<Vec<String>>,
 }
 
 pub struct TestServer {
@@ -210,6 +213,9 @@ struct Request {
     method: String,
     range: Option<String>,
     if_range: Option<String>,
+    cookie: Option<String>,
+    referer: Option<String>,
+    user_agent: Option<String>,
 }
 
 async fn read_request(sock: &mut TcpStream) -> std::io::Result<Option<Request>> {
@@ -234,12 +240,22 @@ async fn read_request(sock: &mut TcpStream) -> std::io::Result<Option<Request>> 
     let method = request_line.split(' ').next().unwrap_or("").to_string();
     let mut range = None;
     let mut if_range = None;
+    let mut cookie = None;
+    let mut referer = None;
+    let mut user_agent = None;
     for line in lines {
         if let Some((name, value)) = line.split_once(':') {
-            if name.trim().eq_ignore_ascii_case("range") {
+            let n = name.trim();
+            if n.eq_ignore_ascii_case("range") {
                 range = Some(value.trim().to_string());
-            } else if name.trim().eq_ignore_ascii_case("if-range") {
+            } else if n.eq_ignore_ascii_case("if-range") {
                 if_range = Some(value.trim().to_string());
+            } else if n.eq_ignore_ascii_case("cookie") {
+                cookie = Some(value.trim().to_string());
+            } else if n.eq_ignore_ascii_case("referer") {
+                referer = Some(value.trim().to_string());
+            } else if n.eq_ignore_ascii_case("user-agent") {
+                user_agent = Some(value.trim().to_string());
             }
         }
     }
@@ -247,6 +263,9 @@ async fn read_request(sock: &mut TcpStream) -> std::io::Result<Option<Request>> 
         method,
         range,
         if_range,
+        cookie,
+        referer,
+        user_agent,
     }))
 }
 
@@ -349,6 +368,15 @@ async fn handle(
     let Some(req) = read_request(&mut sock).await? else {
         return Ok(());
     };
+    if let Some(c) = &req.cookie {
+        stats.cookies.lock().unwrap().push(c.clone());
+    }
+    if let Some(r) = &req.referer {
+        stats.referers.lock().unwrap().push(r.clone());
+    }
+    if let Some(ua) = &req.user_agent {
+        stats.user_agents.lock().unwrap().push(ua.clone());
+    }
     stats.requests.fetch_add(1, Ordering::SeqCst);
     if peer.ip() == "127.0.0.2".parse::<IpAddr>().unwrap() {
         stats
