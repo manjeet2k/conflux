@@ -113,26 +113,17 @@ jobs:
         run: node scripts/extract-changelog.mjs "${{ steps.meta.outputs.version }}" > release-notes.md
 
       # Standard installer (downloads the WebView2 bootstrapper when needed) plus the updater
-      # artifacts (.sig). BETA POLICY: the release is ALWAYS a draft AND a prerelease, whatever
-      # the tag looks like. Do not change either flag without a maintainer decision.
-      - name: Build NSIS installer and create draft release
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+      # artifacts (.sig). The Tauri CLI is built directly instead of through tauri-action:
+      # that action runs `tauriScript` as `npm run <script...>`, which cannot express "the CLI
+      # lives in ui/, the app in crates/conflux-desktop". The draft release itself is created
+      # by the upload step below. BETA POLICY: always a draft AND a prerelease.
+      - name: Build NSIS installer
+        working-directory: crates/conflux-desktop
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          projectPath: crates/conflux-desktop
-          tauriScript: npm --prefix ../../ui run tauri --
-          # Everything after the second `--` goes to cargo: --locked refuses to touch Cargo.lock.
-          args: --bundles nsis -- --locked
-          tagName: ${{ steps.meta.outputs.tag }}
-          releaseName: Conflux ${{ steps.meta.outputs.version }}
-          releaseBody: See the changelog below.
-          releaseDraft: true
-          prerelease: true
-          # latest.json is generated below with the URLs of this exact release.
-          includeUpdaterJson: false
+        # Everything after the second `--` goes to cargo: --locked refuses to touch Cargo.lock.
+        run: npm --prefix ../../ui run tauri -- build --bundles nsis -- --locked
 
       - name: Stage the standard installer
         run: |
@@ -230,7 +221,7 @@ jobs:
             echo "Review detections before publishing the draft (see docs/RELEASING.md)."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload extra assets to the draft release
+      - name: Create the draft release and upload assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
@@ -242,6 +233,8 @@ jobs:
           make_latest: "false"
           fail_on_unmatched_files: false
           files: |
+            dist-installer/Conflux_*_x64-setup.exe
+            dist-installer/Conflux_*_x64-setup.exe.sig
             dist-installer/Conflux_*_x64-offline-setup.exe
             dist-installer/SHA256SUMS.txt
             dist-installer/latest.json
