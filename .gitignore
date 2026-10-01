@@ -41,3 +41,13 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# Crash dumps, signing material, installers
+conflux_panic*.txt
+*.pdb
+*.msi
+/dist-installer/
+*.pfx
+*.p12
+*.key
+updater*.key*
