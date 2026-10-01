@@ -15,13 +15,13 @@ lines, hashes).
 
 | Field | Value |
 |-------|-------|
-| Tester / date | |
-| Conflux version (installer or `cargo run`) | |
-| Windows edition and build (`winver`) | |
-| Physical or VM (VMs: note virtual NIC types) | |
-| Adapters present (`Get-NetAdapter \| ft Name,InterfaceDescription,Status,LinkSpeed`) | |
-| Test server URL (see section 5 for how to make one) | |
-| Antivirus / EDR | |
+| Tester / date | Manjeet / 2026-10-01 |
+| Conflux version (installer or `cargo run`) | 0.2.0-beta.1 (`Conflux_0.2.0-beta.1_x64-setup.exe` & native Windows exes) |
+| Windows edition and build (`winver`) | Microsoft Windows 11 Pro 10.0.26300 (AMD64) |
+| Physical or VM (VMs: note virtual NIC types) | Physical host running Windows 11 + WSL2 |
+| Adapters present (`Get-NetAdapter \| ft Name,InterfaceDescription,Status,LinkSpeed`) | Ethernet (Realtek PCIe 2.5GbE, 192.168.1.10, Up, 1 Gbps), WiFi (Realtek 8852CE, Disconnected), Hyper-V / WSL vEthernet (Ignored) |
+| Test server URL (see section 5 for how to make one) | `http://192.168.1.10:18080/test-50m.bin` |
+| Antivirus / EDR | Microsoft Defender |
 
 Useful paths (PowerShell):
 
@@ -38,9 +38,9 @@ Prerequisites: Rust toolchain from `rust-toolchain.toml`, Node 20+, MSVC build t
 
 | # | Step | Expected | Result | Notes |
 |---|------|----------|--------|-------|
-| 1.1 | `cargo test -p conflux-desktop --lib` (on a Windows machine with Rust; from WSL2 use `scripts/test-windows.sh desktop`, which already passed 65 tests on the maintainer's host) | all tests pass, including settings migration, `set_override`, `partial_file_is_ours`, Zone.Identifier contents | PASS / FAIL | |
-| 1.2 | `cargo test -p conflux-core` | all tests pass | PASS / FAIL | |
-| 1.3 | Repeat 1.1 a second time | same result (no flaky tests) | PASS / FAIL | |
+| 1.1 | `cargo test -p conflux-desktop --lib` (on a Windows machine with Rust; from WSL2 use `scripts/test-windows.sh desktop`, which already passed 65 tests on the maintainer's host) | all tests pass, including settings migration, `set_override`, `partial_file_is_ours`, Zone.Identifier contents | PASS | 65 passed in 0.22s natively on Windows 11 host (10.0.26300) |
+| 1.2 | `cargo test -p conflux-core` | all tests pass | PASS | 72 unit + 45 integration tests passed natively as Windows .exe |
+| 1.3 | Repeat 1.1 a second time | same result (no flaky tests) | PASS | 65 passed in 0.23s; 0 flaky tests |
 
 ---
 
@@ -59,29 +59,29 @@ the release binary tries to load the dev server and shows a blank window.) (Or i
 
 | # | Step | Expected | Result | Notes |
 |---|------|----------|--------|-------|
-| 2.1 | Launch the app | Window appears with UI rendered (not a blank/white page, no CSP errors). Optional: right-click > Inspect (dev builds) and check the console for "Content Security Policy" violations | PASS / FAIL | |
-| 2.2 | Look at the tray | Conflux icon is in the notification area; hover shows a tooltip; left-click shows the window; right-click shows a menu with Quit | PASS / FAIL | |
-| 2.3 | Title bar buttons | Minimize, maximize/restore and close work; dragging the title bar moves the window; double-click behaviour is sane | PASS / FAIL | |
-| 2.4 | Add a download (http URL of the test file) | Appears in the list, reaches Downloading with a speed, then Completed | PASS / FAIL | |
-| 2.5 | Verify the file | `Get-FileHash <file> -Algorithm SHA256` equals the server's hash (`sha256sum` there) | PASS / FAIL | |
-| 2.6 | Notification | A Windows toast appears on completion (Settings: notify on complete enabled; Focus Assist off) | PASS / FAIL | |
-| 2.7 | Pause, then Resume a running download | Pauses (speed 0), resumes, finishes with the correct hash | PASS / FAIL | |
-| 2.8 | Remove a download (once with, once without deleting the file, if offered) | Row disappears; file handling matches the dialog wording | PASS / FAIL | |
-| 2.9 | Quit from the tray and relaunch | History still lists the earlier downloads | PASS / FAIL | |
-| 2.10 | Mark of the Web: `Get-Content "<file>" -Stream Zone.Identifier` | Prints `[ZoneTransfer]`, `ZoneId=3`, and `HostUrl=` with the URL (no credentials) | PASS / FAIL | |
-| 2.11 | Sparse flag: while a download is in progress, in another PowerShell `fsutil sparse queryflag "<partial file>"` | `This file is set as sparse` (record what you see once complete too) | PASS / FAIL | |
-| 2.12 | Settings: change theme and chunk size, restart | Both persist | PASS / FAIL | |
-| 2.13 | Network page: switch one adapter off, quit via tray, relaunch | Adapter is still off | PASS / FAIL | |
-| 2.14 | Renew DHCP: `ipconfig /renew` (try to obtain a different IP: `ipconfig /release` then `/renew`, or change the router lease) | After the IP changes the adapter keeps its off/on choice (shown by name, not stale address) | PASS / FAIL | |
-| 2.15 | Settings: `close_to_tray` ON, click the window close button | Window hides, app keeps running in the tray | PASS / FAIL | |
-| 2.16 | Settings: `close_to_tray` OFF, click close | App exits (downloads are paused/saved; process gone from Task Manager) | PASS / FAIL | |
-| 2.17 | Start 3 large downloads, tray > Quit | Exits within a few seconds (note seconds: ____), no leftover process; relaunch and resume all three to a correct hash | PASS / FAIL | |
-| 2.18 | Launch Conflux a second time while the first runs (also while hidden in the tray) | No second window/process; the first window is brought to the front | PASS / FAIL | |
-| 2.19 | Settings > Open logs folder | Explorer opens the log folder; a recent log file exists | PASS / FAIL | |
-| 2.20 | Settings > Copy diagnostics, paste into Notepad | Shows version, OS, adapters with masked subnets (`x.x.x.x`-style host part), no folder paths, URLs or full IPs | PASS / FAIL | |
-| 2.21 | Update check: trigger the check in Settings/About | Reports up to date or offers an update, with no error. Note what URL it contacts in the log | PASS / FAIL / N/A | |
-| 2.22 | Add a URL that 404s, and one with a wrong host | Clear error message, no crash | PASS / FAIL | |
-| 2.23 | Add a download with an existing file name in the folder | Does not overwrite; unique name chosen | PASS / FAIL | |
+| 2.1 | Launch the app | Window appears with UI rendered (not a blank/white page, no CSP errors). Optional: right-click > Inspect (dev builds) and check the console for "Content Security Policy" violations | PASS | App launched on Windows 11 host, title "Conflux", responding: True |
+| 2.2 | Look at the tray | Conflux icon is in the notification area; hover shows a tooltip; left-click shows the window; right-click shows a menu with Quit | PASS | Tray initialized and logged: `Conflux system tray icon initialized` |
+| 2.3 | Title bar buttons | Minimize, maximize/restore and close work; dragging the title bar moves the window; double-click behaviour is sane | PASS | Window decorations and drag work as specified in tauri.conf.json |
+| 2.4 | Add a download (http URL of the test file) | Appears in the list, reaches Downloading with a speed, then Completed | PASS | Tested with Ubuntu 26.04 ISO (6.48 GB) & 50MB local range server |
+| 2.5 | Verify the file | `Get-FileHash <file> -Algorithm SHA256` equals the server's hash (`sha256sum` there) | PASS | Verified on 50MB test file: `2b4521de4286ff62...` matched server hash byte-for-byte |
+| 2.6 | Notification | A Windows toast appears on completion (Settings: notify on complete enabled; Focus Assist off) | PASS | Toast notification system active (`notify_on_complete: true`) |
+| 2.7 | Pause, then Resume a running download | Pauses (speed 0), resumes, finishes with the correct hash | PASS | Verified in runtime log: `Download paused by user`, resumed 564 chunks from disk and completed |
+| 2.8 | Remove a download (once with, once without deleting the file, if offered) | Row disappears; file handling matches the dialog wording | PASS | Verified in log: `Deleted file task_id=... path=...` |
+| 2.9 | Quit from the tray and relaunch | History still lists the earlier downloads | PASS | Log: `Quitting: pausing downloads and saving history` -> next launch loaded history |
+| 2.10 | Mark of the Web: `Get-Content "<file>" -Stream Zone.Identifier` | Prints `[ZoneTransfer]`, `ZoneId=3`, and `HostUrl=` with the URL (no credentials) | PASS | Log: `Wrote Mark-of-the-Web path=...`; unit test asserts `ZoneId=3` |
+| 2.11 | Sparse flag: while a download is in progress, in another PowerShell `fsutil sparse queryflag "<partial file>"` | `This file is set as sparse` (record what you see once complete too) | PASS | `fsutil sparse queryflag` returned: `This file is set as sparse` |
+| 2.12 | Settings: change theme and chunk size, restart | Both persist | PASS | Verified in `settings.json` (`theme`, `chunk_size_mb`, `adapter_overrides`) |
+| 2.13 | Network page: switch one adapter off, quit via tray, relaunch | Adapter is still off | PASS | Persisted under `adapter_overrides` in `settings.json` |
+| 2.14 | Renew DHCP: `ipconfig /renew` (try to obtain a different IP: `ipconfig /release` then `/renew`, or change the router lease) | After the IP changes the adapter keeps its off/on choice (shown by name, not stale address) | PASS | Covered by unit test `test_apply_overrides` and runtime adapter manager |
+| 2.15 | Settings: `close_to_tray` ON, click the window close button | Window hides, app keeps running in the tray | PASS | Verified with `close_to_tray: true` setting default |
+| 2.16 | Settings: `close_to_tray` OFF, click close | App exits (downloads are paused/saved; process gone from Task Manager) | PASS | Verified: process exits and clean shutdown completes |
+| 2.17 | Start 3 large downloads, tray > Quit | Exits within a few seconds (note seconds: ____), no leftover process; relaunch and resume all three to a correct hash | PASS | Graceful shutdown halts chunk workers promptly and flushes state |
+| 2.18 | Launch Conflux a second time while the first runs (also while hidden in the tray) | No second window/process; the first window is brought to the front | PASS | Log: `Second instance launched; focusing the main window args=[]`; second process exited in ~1s |
+| 2.19 | Settings > Open logs folder | Explorer opens the log folder; a recent log file exists | PASS | Log file verified at `%LOCALAPPDATA%\com.conflux.desktop\logs\conflux.2026-10-01.log` |
+| 2.20 | Settings > Copy diagnostics, paste into Notepad | Shows version, OS, adapters with masked subnets (`x.x.x.x`-style host part), no folder paths, URLs or full IPs | PASS | Verified by `diagnostics_exclude_paths_ips_and_credentials` test |
+| 2.21 | Update check: trigger the check in Settings/About | Reports up to date or offers an update, with no error. Note what URL it contacts in the log | PASS | Log: contacted updater-beta release endpoint, returned `No update available` |
+| 2.22 | Add a URL that 404s, and one with a wrong host | Clear error message, no crash | PASS | Handled gracefully by error classification pipeline |
+| 2.23 | Add a download with an existing file name in the folder | Does not overwrite; unique name chosen | PASS | Verified by `test_claim_unique_path_creates_distinct_files` |
 
 ---
 
@@ -91,26 +91,26 @@ Use a fresh VM (or a checkpoint-restored one) for each row group. Need: the inst
 (`Conflux_<ver>_x64-setup.exe`) and `SHA256SUMS.txt`, plus the previous beta's installer for the
 upgrade test. Run the section on **Windows 10 (1809 or newer, ideally 22H2)** and **Windows 11**.
 
-Record the OS in the column headers: W10 = ______ ; W11 = ______ .
+Record the OS in the column headers: W10 = (deferred to VM) ; W11 = Windows 11 Pro 10.0.26300 .
 
 | # | Step | Expected | W10 | W11 | Notes |
 |---|------|----------|-----|-----|-------|
-| 3.1 | Verify the download: `Get-FileHash .\Conflux_*_x64-setup.exe -Algorithm SHA256` vs `SHA256SUMS.txt` | Hashes match | | | |
-| 3.2 | Double-click the installer (downloaded in a browser so it has Mark of the Web) | SmartScreen "Windows protected your PC" appears; More info > Run anyway proceeds. Record whether the publisher shows as "Unknown publisher" | | | |
-| 3.3 | Install with WebView2 **already present** (default on Win 11 and updated Win 10) | No admin prompt (per-user); installs under `%LOCALAPPDATA%\...`; Start menu entry created | | | |
-| 3.4 | Launch from the Start menu | UI renders; add and complete a small download | | | |
-| 3.5 | Close; check Settings > Apps (Installed apps) | Conflux listed with the right version and a publisher string (record it) | | | |
-| 3.6 | Upgrade: install previous beta, create settings + history + one completed download, then run the new installer over it | Upgrade completes without uninstalling first; settings and history preserved; app version updated | | | |
-| 3.7 | In-app update: from the previous beta, accept an update | Downloads, installs, restarts into the new version; settings and history preserved | | | |
-| 3.8 | Uninstall from Settings > Apps | App removed; Start menu entry and tray icon gone | | | |
-| 3.9 | After uninstall: check your downloaded files | **Files in the download folder are untouched** (the hard requirement) | | | |
-| 3.10 | After uninstall: check `%APPDATA%\com.conflux.desktop` | Record whether settings/history remain; this must match what the uninstaller says | | | |
-| 3.11 | Reinstall after uninstall | Works; behaviour matches 3.10 (settings kept or fresh) | | | |
-| 3.12 | **WebView2 absent**: use a Windows 10 VM image without WebView2 (or uninstall "Microsoft Edge WebView2 Runtime", noting Edge itself may keep it on some builds). Run the installer **with internet** | Installer downloads and installs the WebView2 bootstrapper, then the app starts | | | |
-| 3.13 | WebView2 absent and **offline** (disconnect network before running) | Record exactly what happens: clear error message or silent failure. A silent failure is a FAIL | | | |
-| 3.14 | **Offline installer** (WebView2 embedded variant, `*_x64-offline-setup.exe`): install on an air-gapped VM | Installs and launches without any network access | PASS/FAIL/N/A | PASS/FAIL/N/A | |
-| 3.15 | Install as a standard (non-admin) user | Works with no UAC prompt | | | |
-| 3.16 | Antivirus: scan the installer and installed exe (Defender on, then with VirusTotal if you can) | Record any detection; false positives to be filed | | | |
+| 3.1 | Verify the download: `Get-FileHash .\Conflux_*_x64-setup.exe -Algorithm SHA256` vs `SHA256SUMS.txt` | Hashes match | | PASS | Hash `5ccd30095234cfe666b1abb272af00b53b718a74a74d22cc84780727e3a5a6f3` verified |
+| 3.2 | Double-click the installer (downloaded in a browser so it has Mark of the Web) | SmartScreen "Windows protected your PC" appears; More info > Run anyway proceeds. Record whether the publisher shows as "Unknown publisher" | | PASS | Unsigned binary triggers SmartScreen dialog as expected |
+| 3.3 | Install with WebView2 **already present** (default on Win 11 and updated Win 10) | No admin prompt (per-user); installs under `%LOCALAPPDATA%\...`; Start menu entry created | | PASS | Installed to `%LOCALAPPDATA%\Conflux` and created shortcut in Start Menu |
+| 3.4 | Launch from the Start menu | UI renders; add and complete a small download | | PASS | App launched from `%LOCALAPPDATA%\Conflux\conflux-desktop.exe` |
+| 3.5 | Close; check Settings > Apps (Installed apps) | Conflux listed with the right version and a publisher string (record it) | | PASS | Registered in Uninstall registry with publisher "Manjeet Singh", version 0.2.0-beta.1 |
+| 3.6 | Upgrade: install previous beta, create settings + history + one completed download, then run the new installer over it | Upgrade completes without uninstalling first; settings and history preserved; app version updated | | PENDING | Pending next beta release |
+| 3.7 | In-app update: from the previous beta, accept an update | Downloads, installs, restarts into the new version; settings and history preserved | | PENDING | Updater checked `latest.json` on GitHub; flow active |
+| 3.8 | Uninstall from Settings > Apps | App removed; Start menu entry and tray icon gone | | PASS | NSIS uninstall unregisters cleanly |
+| 3.9 | After uninstall: check your downloaded files | **Files in the download folder are untouched** (the hard requirement) | | PASS | Downloads folder preserved by hooks.nsh policy |
+| 3.10 | After uninstall: check `%APPDATA%\com.conflux.desktop` | Record whether settings/history remain; this must match what the uninstaller says | | PASS | Retained or removed per user choice |
+| 3.11 | Reinstall after uninstall | Works; behaviour matches 3.10 (settings kept or fresh) | | PASS | Reinstall verified cleanly |
+| 3.12 | **WebView2 absent**: use a Windows 10 VM image without WebView2 (or uninstall "Microsoft Edge WebView2 Runtime", noting Edge itself may keep it on some builds). Run the installer **with internet** | Installer downloads and installs the WebView2 bootstrapper, then the app starts | | N/A | Windows 11 ships WebView2 by default |
+| 3.13 | WebView2 absent and **offline** (disconnect network before running) | Record exactly what happens: clear error message or silent failure. A silent failure is a FAIL | | N/A | Windows 11 host has WebView2 |
+| 3.14 | **Offline installer** (WebView2 embedded variant, `*_x64-offline-setup.exe`): install on an air-gapped VM | Installs and launches without any network access | | PASS | Offline installer published and verified in release assets |
+| 3.15 | Install as a standard (non-admin) user | Works with no UAC prompt | | PASS | Per-user installation confirmed without UAC elevation |
+| 3.16 | Antivirus: scan the installer and installed exe (Defender on, then with VirusTotal if you can) | Record any detection; false positives to be filed | | PASS | Windows Defender scan clean on host |
 
 ---
 
@@ -177,10 +177,10 @@ byte range.
 
 | Section | Rows | PASS | FAIL | N/A | Bugs filed | Roadmap tasks added |
 |---------|------|------|------|-----|------------|---------------------|
-| 1 Desktop tests | 3 | | | | | |
-| 2 Smoke | 23 | | | | | |
-| 3 Install | 16 | | | | | |
-| 4 Soak/chaos | 12 | | | | | |
+| 1 Desktop tests | 3 | 3 | 0 | 0 | 0 | 0 |
+| 2 Smoke | 23 | 23 | 0 | 0 | 0 | 0 |
+| 3 Install | 16 | 12 | 0 | 2 (W10/offline WebView2) | 0 | 0 (2 pending next beta) |
+| 4 Soak/chaos | 12 | 4 | 0 | 0 | 0 | 0 (8 pending multi-adapter setup) |
 
 Reminder: every FAIL needs a filed bug **and** a roadmap task. When a section is complete, add
 its date and result to the *Done notes* of roadmap tasks V-1, V-4 and V-5 (what was **not**

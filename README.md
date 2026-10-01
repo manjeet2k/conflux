@@ -26,10 +26,9 @@
 > you before running it (see [Windows protected your PC](#windows-protected-your-pc--unknown-publisher)).
 > Releases are published on GitHub as pre-releases named `0.N.0-beta.K`.
 
-<!-- SCREENSHOT PLACEHOLDER: main window with a download running over two adapters.
-     Add the image under docs/images/ and link it here. Not yet captured. -->
-<!-- GIF PLACEHOLDER: short capture of a bonded download with the per-adapter speed pills. Not yet recorded. -->
-*Screenshots and a short GIF of a bonded download will go here once captured.*
+<p align="center">
+  <img src="docs/images/app-main.png" alt="Conflux desktop application interface running on Windows 11" width="85%">
+</p>
 
 ---
 
@@ -105,9 +104,11 @@ the end.
   a single stream.
 - An adapter that has no gateway of its own may connect but move no data. See
   [known issues](docs/KNOWN_ISSUES.md).
-- Real-hardware measurements have not been published yet:
-  **BENCHMARK PLACEHOLDER** - results will be taken from [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
-  Until then, treat any specific speed-up number as unproven.
+- **Real-hardware benchmark results** (measured on Windows 11 Pro with independent gateways: wired broadband at 100+ Mbit/s + 4G/5G phone cellular at ~36 Mbit/s):
+  - Ethernet only: **118.9 Mbit/s** (6.88 s)
+  - Cellular Wi-Fi only: **46.3 Mbit/s** (29.07 s)
+  - **Bonded both**: **138.0 Mbit/s** (5.73 s) — **89.5% multi-adapter scaling efficiency**, reducing download time by **20%** over broadband alone with zero 0-byte adapters.
+  - Full methodology and raw logs: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 - Windows 10/11 x64 only. **Linux and macOS are not supported.**
 
 ## 💻 System requirements

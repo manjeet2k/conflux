@@ -15,6 +15,8 @@ command -v x86_64-w64-mingw32-windres >/dev/null ||
 cmd.exe /c ver >/dev/null 2>&1 ||
   { echo "WSL interop is unavailable: cannot launch Windows executables from here"; exit 1; }
 
+export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER="${CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER:-$(pwd)/scripts/windows-test/wsl-runner.sh}"
+
 if [[ $which == core || $which == all ]]; then
   echo "== conflux-core (Windows exe)"
   cargo test -p conflux-core --target $target

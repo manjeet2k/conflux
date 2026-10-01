@@ -57,3 +57,6 @@ updater*.key*
 
 # GitHub Pages build output (scripts/build-site.mjs)
 _site/
+
+# Local design reference files
+LOGO_VARIANTS.md

@@ -46,6 +46,10 @@ enum Commands {
         /// Number of concurrent connection workers per network adapter (1-64)
         #[arg(short, long, default_value_t = 4, value_parser = clap::value_parser!(u16).range(1..=64))]
         connections: u16,
+
+        /// Only use adapters matching this name or IP substring (e.g. "WiFi" or "Ethernet")
+        #[arg(short = 'a', long)]
+        adapter: Option<String>,
     },
 }
 
@@ -113,6 +117,7 @@ async fn main() -> Result<()> {
             output,
             chunk_size_mb,
             connections,
+            adapter,
         } => {
             validate_url(&url)?;
             let chunk_size = chunk_size_mb
@@ -122,7 +127,16 @@ async fn main() -> Result<()> {
             let probe = engine.probe(&url).await?;
 
             // Fallible setup first: resolve_output_path leaves an empty placeholder file.
-            let adapters = discover_adapters()?;
+            let mut adapters = discover_adapters()?;
+            if let Some(ref filter) = adapter {
+                let needle = filter.to_lowercase();
+                adapters.retain(|a| {
+                    a.id.to_lowercase().contains(&needle) || a.ip.to_string().contains(filter)
+                });
+                if adapters.is_empty() {
+                    bail!("No network adapters matched filter {:?}", filter);
+                }
+            }
             let final_path = resolve_output_path(output.as_deref(), &probe.suggested_filename)?;
 
             println!("⚡ Conflux Download Starting");
@@ -336,6 +350,9 @@ mod tests {
         assert!(
             Cli::try_parse_from(["conflux", "download", "http://x/y", "-c", "2", "-s", "1"])
                 .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from(["conflux", "download", "http://x/y", "--adapter", "WiFi"]).is_ok()
         );
     }
 }
