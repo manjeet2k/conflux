@@ -486,7 +486,7 @@ task entry is later reorganised.
 cargo fmt --check && cargo test -p conflux-core
 
 # Windows compile-check from Linux/WSL2
-PATH=/home/manjeet/.local/usr/bin:$PATH cargo clippy -p conflux-desktop --target x86_64-pc-windows-gnu --tests -- -D warnings
+PATH=<dir-with-x86_64-w64-mingw32-windres>:$PATH cargo clippy -p conflux-desktop --target x86_64-pc-windows-gnu --tests -- -D warnings
 
 # Debug logging for an engine run
 RUST_LOG=conflux_core=debug cargo run -p conflux-cli -- download <url>
