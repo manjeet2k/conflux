@@ -105,7 +105,7 @@ npm --prefix ui run dev                      # UI in a browser, using ui/src/dev
 
 ## CI cost
 
-Runner minutes cost money on private repos (Windows counts double, and CI is Windows-only). CI skips docs-only changes
+The repository is public, so standard GitHub runners are free; CI is still Windows-only and slow, so it skips docs-only changes
 and can be started by hand (`gh workflow run ci.yml`); the Security workflow runs weekly or when
 dependency files change; there are no Dependabot update PRs — a monthly "Dependency report" issue
 lists outdated dependencies instead. Add `[skip ci]` to a commit message to skip all workflows.

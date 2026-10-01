@@ -34,7 +34,6 @@
 5. If the Microsoft WebView2 runtime is missing (rare on current Windows 10/11), the installer
    downloads it, which needs an internet connection.
 
-> The repository is private until the beta opens; the Releases link works once it is public.
 
 ### Windows protected your PC / unknown publisher
 

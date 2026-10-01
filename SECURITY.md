@@ -11,8 +11,8 @@ Please update before reporting, in case the problem is already fixed.
 Please **do not open a public issue** for security problems.
 
 - Email **Manjeet Singh <manjeetsgh11@gmail.com>** with the subject "Conflux security".
-- Or, once the repository is public, use GitHub's private vulnerability reporting
-  (Security tab > "Report a vulnerability") if it is enabled.
+- Or use GitHub's private vulnerability reporting (Security tab > "Report a vulnerability")
+  on https://github.com/manjeet2k/conflux.
 
 Include what you found, the version (Settings > About, or the installer file name), Windows
 version, steps to reproduce, and the impact you expect. Do not include real credentials or

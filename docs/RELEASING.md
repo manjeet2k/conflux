@@ -36,16 +36,15 @@ There are two **unrelated** kinds of signing:
 
 ## One-time setup (before the first beta)
 
-1. **Make the repository public.** The app downloads updates from `github.com/.../releases`
-   anonymously. While the repo is private, `latest.json` and the installers return 404 to everyone
-   but you, so **no installed copy can update**. Settings -> General -> Danger Zone -> Change
-   visibility. Do this *before* announcing or publishing the first beta.
+1. **The repository must stay public.** The app downloads updates from `github.com/.../releases`
+   anonymously; if the repo were private, `latest.json` and the installers would return 404 to
+   everyone but you and **no installed copy could update**. (Made public on 2026-10-01.)
 2. Create the updater key and set the GitHub secrets: [Updater key](#updater-key-setup-backup-rotation).
 3. Optional: add the `VIRUSTOTAL_API_KEY` secret ([Antivirus](#antivirus-and-smartscreen)).
 4. **Protect the signing key** ([Hardening](#hardening-the-release-pipeline-manual-github-settings)):
-   already applied on 2026-10-01 (environment `release` limited to `main` and `v*.*.*`, signing
-   secrets live only there, tag ruleset active). **Add required reviewers when the repo goes
-   public** (not available on private repos on this plan).
+   already applied on 2026-10-01 (environment `release` limited to `main` and `v*.*.*`, with
+   required reviewers; signing secrets live only there; tag ruleset active). Every release build
+   now **waits for your approval** in the Actions tab before it can read the key.
 5. Check Actions are enabled for the repo and the workflow permission is "Read and write"
    *or* leave the default; `release.yml` asks for `contents: write` itself.
 
@@ -188,16 +187,24 @@ with `gh` on 2026-10-01):
    other branches, other tags, and jobs without `environment: release` (including
    `publish-updater`, which needs no key) cannot read the key. The build job declares
    `environment: release`.
-   - **Not applied: required reviewers.** GitHub rejected them ("billing plan does not support
-     the required reviewers protection rule"): they are unavailable on private repos on the
-     current plan. Today a push of a `v*.*.*` tag by a maintainer therefore starts the build
-     without an approval step (it still only produces a *draft* prerelease). When the repo
-     becomes public, add them: Settings -> Environments -> release -> Required reviewers.
+   - **Required reviewers: applied** (the maintainer; self-review allowed because there is one
+     maintainer) once the repo became public — GitHub had refused them on the private repo. A
+     release run pauses at "Review pending deployments" until approved. When a second maintainer
+     joins, turn on "Prevent self-review".
 2. **Tag ruleset `protect-release-tags`** (active): only repository admins (bypass) can create,
    update or delete tags matching `v*.*.*`. Anyone else with write access cannot start a release
    build by pushing a tag.
-3. Optionally require a pull request and status checks on `main`; the workflow already refuses
-   tags whose commit is not on `main`.
+3. **Ruleset `protect-main`** (active, no bypass): `main` cannot be deleted or force-pushed.
+   Requiring pull requests/status checks is *not* enabled (single maintainer pushing directly);
+   turn it on when more people contribute. The workflow already refuses tags whose commit is
+   not on `main`.
+4. **Other repository security settings (applied 2026-10-01):** secret scanning and push
+   protection on; Dependabot alerts on (no update PRs, see DEVELOPMENT.md); private vulnerability
+   reporting on; Actions limited to GitHub-owned actions plus the seven third-party actions the
+   workflows use (add a new action to Settings -> Actions -> General when you add one); workflow
+   runs from forks by outside contributors need approval; default `GITHUB_TOKEN` is read-only and
+   cannot approve PRs. Re-check these after any change of plan or ownership: e.g.
+   `gh api repos/manjeet2k/conflux/rulesets`, `.../actions/permissions`, `.../environments/release`.
 
 Built into the workflow: third-party actions are pinned to full commit SHAs (update them
 deliberately, resolving a tag with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` and, for

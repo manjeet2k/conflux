@@ -41,9 +41,11 @@ Never run a bare `cargo test` on Linux/WSL2; always pass `-p conflux-core`.
 
 ## CI cost note
 
-The repository is private until the beta and GitHub runner minutes cost money (Windows runners
-count double). CI skips docs-only changes and is started by hand when needed; please do not push
-many small commits to a PR branch, batch your work and run the gates locally first. Add
+CI runs on Windows only and skips docs-only changes. Standard GitHub runners are free for public
+repositories, but they are still shared and slow, so please do not push many small commits to a
+PR branch: batch your work and run the gates locally first (`scripts/test-windows.sh` runs the
+tests as real Windows executables from WSL2). A maintainer must approve the first CI run of a
+PR from a first-time contributor. Add
 `[skip ci]` to a commit message for changes that need no CI. Do not build release installers
 unless a maintainer asks; releases come from the release workflow.
 

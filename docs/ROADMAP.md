@@ -106,11 +106,11 @@ recommended default. If the user hasn't answered, **ask** (don't assume).
 ## Before the first beta
 
 Code and docs for the beta are in place; what is left needs you or a Windows machine:
-1. ~~Back up `~/.config/conflux-secrets/`~~ (done by the maintainer). ~~Hardening~~ applied: `release` environment limited to `main` + `v*.*.*` holds the signing secrets, tag ruleset `protect-release-tags` is active. **Still to do when the repo goes public:** add required reviewers to the `release` environment (unavailable on private repos on this plan). Optional: `VIRUSTOTAL_API_KEY`.
+1. ~~Back up `~/.config/conflux-secrets/`~~ (done by the maintainer). ~~Hardening~~ applied: `release` environment limited to `main` + `v*.*.*` holds the signing secrets, tag ruleset `protect-release-tags` is active. Repo is now **public** (2026-10-01) with the full baseline applied: required reviewers on `release`, `protect-main` ruleset, secret scanning + push protection, private vulnerability reporting, Dependabot alerts, Actions restricted to the 9 used actions, fork-PR approval for all outside contributors. Optional: `VIRUSTOTAL_API_KEY`.
 2. Run V-1, V-2, V-4, V-5 on Windows (kits in `docs/WINDOWS_TEST_PLAN.md`, `scripts/bench/`) and fix what they find.
 3. Add screenshots/GIF and benchmark numbers (D-1).
 4. ~~Run `ci.yml` once by hand~~ — done: the Windows job passed (the Linux job was removed).
-5. Make the repo public (updates cannot download from a private repo), then follow `docs/RELEASING.md` for B-1.
+5. ~~Make the repo public~~ — done. Then follow `docs/RELEASING.md` for B-1.
 
 ## Phase map
 
