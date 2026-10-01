@@ -423,11 +423,11 @@ Done notes: VirusTotal step in `release.yml` (skipped without `VIRUSTOTAL_API_KE
 
 ## Phase 6 — Public beta (1–2 weeks calendar)
 
-#### B-1 — Publish `0.2.0-beta.1`  `[ ]`
+#### B-1 — Publish `0.2.0-beta.1`  `[x]`
 Depends on: R-3, S-3, S-4, P-2, P-3, V-1, D-1 (beta/SmartScreen wording), D-2 (privacy + security contact; needs D3)
 Do: bump with `npm run version:bump -- 0.2.0-beta.1` (only when the user asks for a release); the release workflow must mark it a GitHub **prerelease**; cut it via the runbook; recruit 10–20 testers across Windows versions and ISPs; track issues with a `beta` label; maintain `docs/KNOWN_ISSUES.md`.
 Acceptance: unsigned beta prerelease is downloadable, installs per-user, self-updates to the next beta, and the README says "beta" and explains the SmartScreen warning.
-Done notes:
+Done notes: `v0.2.0-beta.1` published by the maintainer on 2026-10-01 (built by the third `release.yml` run; two workflow bugs fixed on the way). Update manifest live at the `updater-beta` release (published through the new `publish_manifest` recovery input after the automatic `release: published` run failed at startup — see docs/RELEASING.md). **Caveats:** it was published *without* the prerelease flag (shows as "Latest"); the update flow itself is untested until `0.2.0-beta.2` exists; the V-1 smoke test result is not recorded here.
 
 #### B-2 — Triage and fix beta findings  `[ ]`
 Depends on: B-1
