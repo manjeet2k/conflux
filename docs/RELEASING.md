@@ -105,6 +105,13 @@ The workflow aborts immediately if the tag does not equal the version in the fil
 commit is not an ancestor of `origin/main`, or if the changelog has no section for the version.
 Installers are built with `cargo ... --locked` (the committed `Cargo.lock` must be current).
 
+**If the update manifest was not published** (the `release: published` run failed to start or
+failed; check Actions -> Release for that run): the build job refuses a published tag, so run only
+the manifest job by hand: `gh workflow run release.yml --ref main -f tag=v0.2.0-beta.1 -f publish_manifest=true`.
+It runs the same checks as the automatic run (signature, version order, urls). Cause seen once:
+a `release: published` run uses the workflow file *at the tagged commit*, so an action removed
+from the repository's allowed-actions list (Settings -> Actions) makes the run fail at startup.
+
 **Rebuild rule.** A published release is immutable. The build job refuses to run for a tag whose
 release is already published (it may only run when no release exists or the release is still a
 *Draft*). To rebuild: **delete the draft** (`gh release delete vX --yes`, keep the tag, or move it

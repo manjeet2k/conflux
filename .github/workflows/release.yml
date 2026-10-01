@@ -13,6 +13,11 @@ on:
         description: "Existing tag to build, e.g. v0.2.0-beta.1"
         required: true
         type: string
+      publish_manifest:
+        description: "Recovery: do NOT build; only publish latest.json of the already PUBLISHED release for this tag (use when the release:published run failed)"
+        required: false
+        default: false
+        type: boolean
   release:
     types: [published]
 
@@ -25,8 +30,9 @@ env:
 
 jobs:
   build:
-    # The `release: published` trigger belongs to the publish-updater job only.
-    if: github.event_name != 'release'
+    # The `release: published` trigger (and the publish_manifest recovery input) belong to the
+    # publish-updater job only.
+    if: github.event_name != 'release' && !inputs.publish_manifest
     runs-on: windows-latest
     timeout-minutes: 60
     permissions:
@@ -259,7 +265,9 @@ jobs:
   # about the version: latest.json on the fixed `updater-beta` release is what the app polls
   # (`releases/latest/download/` ignores prereleases and private repos, so it cannot be used).
   publish-updater:
-    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')
+    if: >-
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_manifest)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -271,12 +279,15 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
-      TAG: ${{ github.event.release.tag_name }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
+      - name: Tag must look like a release tag
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::'$TAG' is not a release tag like v0.2.0-beta.1"; exit 1; }
       # Scripts and the updater public key come from the tagged commit.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: refs/tags/${{ github.event.release.tag_name }}
+          ref: refs/tags/${{ github.event.release.tag_name || inputs.tag }}
           fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
