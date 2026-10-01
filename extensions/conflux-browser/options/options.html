@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Conflux - Extension Settings</title>
+  <style>
+    :root {
+      --bg: #f8f9fa;
+      --card-bg: #ffffff;
+      --text: #1b1b1b;
+      --text-sub: #5c5c5c;
+      --border: #e2e2e2;
+      --accent: #0078d4;
+      --accent-hover: #106ebe;
+      --status-ok: #107c10;
+      --status-err: #d13438;
+      --danger: #d13438;
+      --danger-hover: #a80000;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #202020;
+        --card-bg: #2b2b2b;
+        --text: #f0f0f0;
+        --text-sub: #9e9e9e;
+        --border: #383838;
+        --accent: #60cdff;
+        --accent-hover: #7cd5ff;
+        --status-ok: #54b054;
+        --status-err: #ff6b6b;
+        --danger: #ff6b6b;
+        --danger-hover: #ff8585;
+      }
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      max-width: 680px;
+      margin: 40px auto;
+      font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      color: var(--text);
+      background-color: var(--bg);
+      padding: 0 20px 40px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+
+    .header img {
+      width: 44px;
+      height: 44px;
+    }
+
+    .header-text h1 {
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+    }
+
+    .header-text p {
+      color: var(--text-sub);
+      font-size: 13px;
+      margin-top: 2px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+
+    .card-desc {
+      color: var(--text-sub);
+      font-size: 13px;
+      margin-bottom: 16px;
+      line-height: 1.4;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-group:last-child {
+      margin-bottom: 0;
+    }
+
+    label {
+      display: block;
+      font-weight: 500;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    input[type="text"], textarea {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input[type="text"]:focus, textarea:focus {
+      border-color: var(--accent);
+    }
+
+    textarea {
+      min-height: 80px;
+      resize: vertical;
+    }
+
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+
+    .switch input { opacity: 0; width: 0; height: 0; }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: var(--border);
+      transition: .2s;
+      border-radius: 24px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .2s;
+      border-radius: 50%;
+    }
+
+    input:checked + .slider {
+      background-color: var(--accent);
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(20px);
+    }
+
+    .btn-row {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .btn {
+      padding: 9px 18px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background-color: var(--card-bg);
+      color: var(--text);
+      transition: all 0.15s;
+    }
+
+    .btn:hover {
+      background-color: var(--border);
+    }
+
+    .btn-primary {
+      background-color: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+
+    .btn-primary:hover {
+      background-color: var(--accent-hover);
+    }
+
+    .btn-secondary {
+      color: var(--text-sub);
+    }
+
+    .status-msg {
+      margin-top: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      display: none;
+    }
+
+    .status-msg.success {
+      color: var(--status-ok);
+      display: block;
+    }
+
+    .status-msg.error {
+      color: var(--status-err);
+      display: block;
+    }
+
+    .hint {
+      font-size: 12px;
+      color: var(--text-sub);
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img src="../icons/icon-128.png" alt="Conflux">
+    <div class="header-text">
+      <h1>Conflux Browser Settings</h1>
+      <p>Configure automatic capture, file extensions, and native host integration</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="switch-row">
+      <div>
+        <div class="card-title" style="margin-bottom: 4px;">Automatic Download Interception</div>
+        <div class="card-desc" style="margin-bottom: 0;">Automatically send matching browser downloads to Conflux Desktop</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="interceptDownloads">
+        <span class="slider"></span>
+      </label>
+    </div>
+    <p class="hint" style="margin-top: 12px;">Tip: You can always right-click any link and choose <strong>Download with Conflux</strong>, regardless of this setting.</p>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Interception Filters</div>
+    <div class="card-desc">Only downloads matching these criteria will be automatically handed off.</div>
+
+    <div class="form-group">
+      <label for="fileExtensions">File Extensions (comma-separated)</label>
+      <input type="text" id="fileExtensions" placeholder=".zip, .iso, .exe, .tar.gz, .mp4">
+      <p class="hint">Downloads ending with any of these extensions will be intercepted.</p>
+    </div>
+
+    <div class="form-group">
+      <label for="excludedDomains">Excluded Domains (one per line)</label>
+      <textarea id="excludedDomains" placeholder="localhost&#10;127.0.0.1&#10;internal.corp"></textarea>
+      <p class="hint">Downloads initiated from these domains will be ignored by auto-interception.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Connection Status</div>
+    <div class="card-desc">Check the connection to the Conflux Desktop native messaging host.</div>
+    <button id="testConnectionBtn" class="btn">Test Desktop Connection</button>
+    <div id="testStatus" class="status-msg"></div>
+  </div>
+
+  <div class="btn-row">
+    <button id="resetBtn" class="btn btn-secondary">Restore Defaults</button>
+    <button id="saveBtn" class="btn btn-primary">Save Settings</button>
+  </div>
+  <div id="saveStatus" class="status-msg" style="text-align: right; margin-top: 8px;"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>
