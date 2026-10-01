@@ -96,15 +96,31 @@ recommended default. If the user hasn't answered, **ask** (don't assume).
 
 | ID | Question | Options | Recommendation | Answer |
 |----|----------|---------|----------------|--------|
-| D1 | Platforms for the beta | Windows only · +Linux · +macOS | Windows only (README says cross-platform; macOS interface binding is untested) | **Windows only** (answered) |
+| D1 | Platforms for the beta | Windows only · +Linux · +macOS | Windows only | **Windows 10/11 x64 only** (answered; Linux code kept only as a test/dev host) |
 | D2 | Code signing route | Azure Trusted Signing · OV cert · EV cert · unsigned beta | Azure Trusted Signing if identity can be verified | **Unsigned for the beta** (answered). Signing route to be chosen after the beta — S-1/S-2 deferred. The beta must warn users about SmartScreen (see D-1) |
-| D3 | Publisher identity | Publisher name, security contact email, final repo URL | — (user must supply) | **Repo URL answered:** `github.com/manjeet2k/conflux` (private for now). Publisher name and security contact email still _unanswered_ |
+| D3 | Publisher identity | Publisher name, security contact email, final repo URL | — (user must supply) | **Answered:** publisher "Manjeet Singh", security contact manjeetsgh11@gmail.com, repo `github.com/manjeet2k/conflux` (private now; must be public before the beta so updates can download) |
 | D4 | Updates | In-app auto-update · manual download only | In-app auto-update (`tauri-plugin-updater`) | **In-app auto-update** (answered) |
 | D5 | Beta scope | Include browser-capture extension / proxy / speed limit / scheduling? | Not in the beta | **Resolved by the "beta, not 1.0" decision**: no extras are required for the beta. Browser-capture extension and speed limit/scheduler (ticked earlier) are post-beta candidates — P-7 stays deferred until the user picks them |
-| D6 | Telemetry | None · opt-in crash reports | None (app makes no telemetry calls today) | _unanswered_ |
+| D6 | Telemetry | None · opt-in crash reports | None (app makes no telemetry calls today) | **None** (answered) |
 | D7 | Strict 206 validation | Keep: any ETag/Last-Modified mismatch (or absence) on a 206 fails the download · Loosen: fail only on mismatch, let `If-Range` cover a missing header | Decide after V-2 finds real-world CDN behaviour | _unanswered_ |
 
 ---
+
+## In flight (cloud agents)
+
+Started on the user's request while their PC was off; each works on its own branch and pushed
+**no PRs** (PRs would trigger paid CI). Merge branches into `main` by hand after review, run the
+quality gates, then update the task statuses here. Handoff reports live on each branch as
+`docs/handoff/*.md`.
+
+| Branch | Tasks |
+|--------|-------|
+| `roadmap/release-pipeline` | R-3, R-4, S-3, S-4, D-5, P-5, D-3 |
+| `roadmap/adapter-diagnostics` | V-3, P-6 (remainder) |
+| `roadmap/docs-and-windows-kit` | H-2, D-1, D-2, V-1, V-2, V-4, V-5 (documents/scripts only; the runs need Windows) |
+
+After merging: generate the updater key locally (`node scripts/setup-updater-key.mjs`), set the
+GitHub secrets it lists, and make the repo public before cutting the first beta (B-1).
 
 ## Phase map
 
@@ -118,7 +134,7 @@ P1, P2 and P3 can run in parallel after P0. For the beta, P4 means **S-3 (auto-u
 
 ## Phase 0 — Repo hygiene (≈½ day)
 
-#### H-1 — Remove committed stray files and harden `.gitignore`  `[~]`
+#### H-1 — Remove committed stray files and harden `.gitignore`  `[x]`
 Why: `conflux_panic.txt` is tracked in git; `Conflux.exe`, `Conflux-Setup.exe`, `WebView2Loader.dll` sit in the repo root (gitignored, but they confuse contributors and could be published by mistake).
 Depends on: none
 Files: `conflux_panic.txt`, `.gitignore`, repo root
@@ -127,9 +143,9 @@ Do:
 2. Add `conflux_panic*.txt`, `*.pdb`, `*.msi`, `/dist-installer/`, `*.pfx`, `*.p12`, `*.key`, `updater*.key*` to `.gitignore`.
 Acceptance: `git ls-files | grep -iE "panic|\.exe|\.dll|\.pfx|\.key"` prints nothing; `git status` clean after.
 Verify: command above.
-Done notes: `conflux_panic.txt` removed from git (staged) and `.gitignore` extended. **Remaining:** `Conflux.exe`, `Conflux-Setup.exe`, `WebView2Loader.dll` are still in the repo root (gitignored) — delete only after the user confirms they aren't needed.
+Done notes: `conflux_panic.txt` untracked, `.gitignore` extended, and the stray `Conflux.exe`, `Conflux-Setup.exe`, `WebView2Loader.dll` deleted from the repo root (user approved).
 
-#### H-2 — Fix repo metadata  `[ ]`   Gate: D3
+#### H-2 — Fix repo metadata  `[ ]`
 Why: `Cargo.toml` `repository`, `authors`, and `ui/package.json` carry placeholder-ish identity data.
 Depends on: none
 Files: `Cargo.toml`, `ui/package.json`, `crates/*/Cargo.toml`, `README.md`
@@ -308,7 +324,7 @@ Acceptance: workflow green on `main`; a known-bad test advisory fails it (try on
 Verify: workflow run link.
 Done notes: `security.yml` (cargo-deny, rustsec/audit-check, npm audit; PR/push/weekly), `deny.toml`. `cargo deny check` passes locally. **Not run:** `cargo audit`, `npm audit`. Added `CDLA-Permissive-2.0` to the allow-list (needed by webpki-roots) and ignored RUSTSEC-2024-0370 (proc-macro-error, unmaintained, Tauri build-time) — **pending user OK**. **Update (cost control):** Dependabot version-update PRs are disabled (they triggered CI/Security per PR); Dependabot alerts stay on, security-fix PRs off. `dependency-report.yml` keeps one "Dependency report" issue up to date monthly; the weekly `cargo-audit` run opens issues for advisories. CI skips docs-only changes; Security runs weekly or when dependency files change.
 
-#### R-3 — Release workflow  `[ ]`   Gate: D3 (publisher), partially D2
+#### R-3 — Release workflow  `[ ]`
 Why: installers must come from CI, not a developer laptop.
 Depends on: R-1, H-3
 Files: new `.github/workflows/release.yml`
@@ -356,7 +372,7 @@ Acceptance: `Get-AuthenticodeSignature` shows `Valid` and the right publisher on
 Verify: command above on a downloaded artifact.
 Done notes:
 
-#### S-3 — Auto-update  `[ ]`   Gate: D4
+#### S-3 — Auto-update  `[ ]`
 Why: shipping fixes quickly is mandatory for a networking tool, especially in a beta. Note: the updater signature (its own key) is separate from code signing and **is** required even while the installer is unsigned.
 Depends on: R-3, D4 (answered: in-app auto-update)
 Files: `crates/conflux-desktop/Cargo.toml`, `src/lib.rs`, `tauri.conf.json` (`plugins.updater`), `capabilities/default.json`, UI (`SettingsPage.tsx`, `StatusBar.tsx`), `release.yml`
@@ -387,7 +403,7 @@ Do: **a clear "Beta" banner and a "Windows protected your PC / unknown publisher
 Acceptance: a new user can install and complete a first bonded download from the README alone.
 Done notes:
 
-#### D-2 — Policy and community files  `[ ]`   Gate: D3, D6
+#### D-2 — Policy and community files  `[ ]`
 Files: `SECURITY.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `PRIVACY.md`, `.github/ISSUE_TEMPLATE/*`, `.github/pull_request_template.md`
 Do: security contact + disclosure window; privacy statement matching D6 (today: no telemetry; app talks only to URLs the user adds, plus the update endpoint if S-3); issue templates asking for "Copy diagnostics" output; PR template with the quality-gate checklist.
 Acceptance: files exist; PRIVACY.md is accurate to the code (grep for network calls: only engine probes/downloads and the updater).
