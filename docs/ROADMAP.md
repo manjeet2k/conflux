@@ -110,7 +110,7 @@ Code and docs for the beta are in place; what is left needs you or a Windows mac
 2. Run V-1, V-2, V-4, V-5 on Windows (kits in `docs/WINDOWS_TEST_PLAN.md`, `scripts/bench/`) and fix what they find.
 3. Add screenshots/GIF and benchmark numbers (D-1).
 4. ~~Run `ci.yml` once by hand~~ — done: the Windows job passed (the Linux job was removed).
-5. ~~Make the repo public~~ — done. Then follow `docs/RELEASING.md` for B-1.
+5. ~~Make the repo public~~ — done. **B-1 in progress:** draft prerelease `v0.2.0-beta.1` is built and verified. Next: install it on Windows and run the smoke test (V-1, `docs/WINDOWS_TEST_PLAN.md`); if it passes, publish the draft (`gh release edit v0.2.0-beta.1 --draft=false`), which also triggers `publish-updater`.
 
 ## Phase map
 
@@ -321,7 +321,7 @@ Files: new `.github/workflows/release.yml`
 Do: trigger on tag `v*.*.*`. Steps: checkout → `node scripts/check-version.mjs` (tag must equal version) → setup Rust (MSVC, `x86_64-pc-windows-msvc`) and Node → `tauri-apps/tauri-action` builds the NSIS bundle → compute SHA-256 → create a **draft** GitHub Release with the installer, `SHA256SUMS.txt`, and release notes extracted from `CHANGELOG.md` → upload SBOM (`cargo cyclonedx`). Prerelease flag for tags containing `-`.
 Acceptance: pushing `v0.1.6-test` on a fork produces a draft release with installer + checksums; version mismatch aborts.
 Verify: workflow run on a test tag. (This task *defines* the build; it is the one sanctioned place an installer is produced — by CI, not locally.)
-Done notes: `.github/workflows/release.yml` (tag `v*.*.*` / manual; Windows build; always a draft prerelease; SHA256SUMS; changelog notes; SBOM; `publish-updater` job copies `latest.json` to `updater-beta` only when the draft is published). **Never run; tauri-action inputs for this layout, the NSIS filename for a prerelease version, and the SBOM install are unverified.**
+Done notes: `.github/workflows/release.yml` (tag `v*.*.*` / manual; Windows build; always a draft prerelease; SHA256SUMS; changelog notes; SBOM; `publish-updater` job copies `latest.json` to `updater-beta` only when the draft is published). **Ran for real on 2026-10-01 (third attempt) and produced the draft `v0.2.0-beta.1`: standard + offline installers, `.sig`, `SHA256SUMS.txt`, `latest.json`, SBOM; manifest signature verified against the real pubkey. Two bugs found and fixed on the way: `tauri-action` mangled the script setting (replaced by calling the CLI directly), and the CLI must run from `crates/conflux-desktop`, not `ui/`. Not yet exercised: the `publish-updater` job (runs when a draft is published) and the VirusTotal step.**
 
 #### R-4 — Offline-WebView2 installer variant  `[x]`
 Why: locked-down/offline machines can't use the downloading bootstrapper.
