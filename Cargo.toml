@@ -11,7 +11,7 @@ version = "0.1.5"
 edition = "2021"
 authors = ["Manjeet Singh <manjeetsgh11@gmail.com>"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/manjeet/conflux"
+repository = "https://github.com/manjeet2k/conflux"
 
 [workspace.dependencies]
 tokio = { version = "1.43", features = ["full"] }

@@ -106,7 +106,7 @@ recommended default. If the user hasn't answered, **ask** (don't assume).
 |----|----------|---------|----------------|--------|
 | D1 | Platforms for the beta | Windows only · +Linux · +macOS | Windows only (README says cross-platform; macOS interface binding is untested) | **Windows only** (answered) |
 | D2 | Code signing route | Azure Trusted Signing · OV cert · EV cert · unsigned beta | Azure Trusted Signing if identity can be verified | **Unsigned for the beta** (answered). Signing route to be chosen after the beta — S-1/S-2 deferred. The beta must warn users about SmartScreen (see D-1) |
-| D3 | Publisher identity | Publisher name, security contact email, final repo URL (`Cargo.toml` says `github.com/manjeet/conflux`) | — (user must supply) | _unanswered_ |
+| D3 | Publisher identity | Publisher name, security contact email, final repo URL | — (user must supply) | **Repo URL answered:** `github.com/manjeet2k/conflux` (private for now). Publisher name and security contact email still _unanswered_ |
 | D4 | Updates | In-app auto-update · manual download only | In-app auto-update (`tauri-plugin-updater`) | **In-app auto-update** (answered) |
 | D5 | Beta scope | Include browser-capture extension / proxy / speed limit / scheduling? | Not in the beta | **Resolved by the "beta, not 1.0" decision**: no extras are required for the beta. Browser-capture extension and speed limit/scheduler (ticked earlier) are post-beta candidates — P-7 stays deferred until the user picks them |
 | D6 | Telemetry | None · opt-in crash reports | None (app makes no telemetry calls today) | _unanswered_ |
