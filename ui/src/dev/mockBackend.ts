@@ -25,6 +25,7 @@ let settings: Settings = {
   notify_on_complete: true,
   close_to_tray: true,
   auto_aggregate_adapters: true,
+  adapter_overrides: {},
 };
 
 const now = Date.now();
@@ -112,6 +113,13 @@ export function installMockBackend() {
       switch (cmd) {
         case 'discover_adapters':
           return adapters;
+        case 'set_adapter_enabled': {
+          const id = String(args.id);
+          const enabled = Boolean(args.enabled);
+          const target = adapters.find((a) => a.id === id);
+          if (target) target.enabled = enabled;
+          return [...adapters];
+        }
         case 'list_tasks':
           return tasks;
         case 'get_settings':

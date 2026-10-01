@@ -265,6 +265,17 @@ export const App: React.FC = () => {
     notify('success', `Downloading ${task.filename}`);
   };
 
+  const handleToggleAdapter = useCallback(
+    (id: string, enabled: boolean) => {
+      setAdapters((prev) => prev.map((a) => (a.id === id ? { ...a, enabled } : a)));
+      api.setAdapterEnabled(id, enabled).catch((e) => {
+        onError(`Failed to update adapter: ${errorText(e)}`);
+        refreshAdapters();
+      });
+    },
+    [onError, refreshAdapters]
+  );
+
   const chunkColors = useMemo(
     () =>
       dark
@@ -367,7 +378,14 @@ export const App: React.FC = () => {
               </>
             )}
             {view === 'network' && (
-              <NetworkPage adapters={adapters} tasks={tasks} history={history} dark={dark} onRefresh={refreshAdapters} />
+              <NetworkPage
+                adapters={adapters}
+                tasks={tasks}
+                history={history}
+                dark={dark}
+                onRefresh={refreshAdapters}
+                onToggleAdapter={handleToggleAdapter}
+              />
             )}
             {view === 'settings' && <SettingsPage settings={settings} onChange={updateSettings} />}
           </main>
@@ -377,9 +395,7 @@ export const App: React.FC = () => {
       <AddDownloadDialog
         open={addOpen}
         initialUrl={addUrl}
-        adapters={adapters}
         defaultSaveDir={settings.default_save_dir}
-        onRefreshAdapters={refreshAdapters}
         onStart={handleStart}
         onClose={() => {
           setAddOpen(false);

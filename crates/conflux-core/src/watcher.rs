@@ -403,6 +403,26 @@ mod tests {
         assert!(removed.is_empty());
     }
 
+    #[test]
+    fn test_diff_adapters_detects_toggle_state() {
+        let mut a1 = make_adapter("eth0", (192, 168, 1, 10), true);
+        let mut a2 = make_adapter("wlan0", (192, 168, 1, 20), false);
+
+        let initial = vec![a1.clone(), a2.clone()];
+
+        // Toggling a1 from true to false -> removed
+        // Toggling a2 from false to true -> added
+        a1.enabled = false;
+        a2.enabled = true;
+        let updated = vec![a1.clone(), a2.clone()];
+
+        let (added, removed) = diff_adapters(&initial, &updated);
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].id, a2.id);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].id, a1.id);
+    }
+
     #[tokio::test]
     async fn test_network_watcher_lifecycle() {
         let watcher = NetworkWatcher::start(Duration::from_millis(50));

@@ -49,7 +49,7 @@ export interface DownloadTask {
   filename: string;
   save_dir: string;
   save_path: string;
-  adapter_ids: string[];
+  adapter_ids?: string[];
   total_bytes: number;
   supports_ranges: boolean;
   downloaded_bytes: number;
@@ -80,6 +80,7 @@ export interface Settings {
   notify_on_complete: boolean;
   close_to_tray: boolean;
   auto_aggregate_adapters: boolean;
+  adapter_overrides?: Record<string, boolean>;
 }
 
 // Matches Rust WindowBackdrop (returned by apply_window_theme)

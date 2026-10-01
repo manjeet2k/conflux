@@ -819,3 +819,64 @@ async fn closed_adapter_updates_do_not_block_completion() {
 
     assert_eq!(result, sha256_hex(&data));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn all_adapters_removed_falls_back_to_default_route_and_completes() {
+    let data = payload(PAYLOAD_LEN, 29);
+    let mut config = ServerConfig::new(Arc::clone(&data));
+    config.throttle = Some(Duration::from_millis(10));
+    let server = TestServer::start(config).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let probe = engine.probe(&server.url("/fallback.bin")).await.unwrap();
+    let path = dir.path().join(&probe.suggested_filename);
+
+    let (progress_tx, mut progress_rx) = mpsc::channel(1024);
+    let collector = tokio::spawn(async move {
+        let mut all = Vec::new();
+        while let Some(p) = progress_rx.recv().await {
+            all.push(p);
+        }
+        all
+    });
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    let (adapter_tx, adapter_rx) = mpsc::channel(16);
+
+    let loopback_adapter = NetworkAdapter {
+        id: "eth0:127.0.0.1".into(),
+        ip: "127.0.0.1".parse().unwrap(),
+        is_ipv4: true,
+        is_loopback: false,
+        enabled: true,
+    };
+    let initial_adapters = vec![loopback_adapter];
+
+    let adapter_tx_clone = adapter_tx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Drop the only active adapter mid-download
+        let _ = adapter_tx_clone
+            .send(AdapterUpdate::Remove("127.0.0.1".parse().unwrap()))
+            .await;
+    });
+
+    let result = engine
+        .download_with_updates(
+            &probe,
+            &path,
+            &initial_adapters,
+            Some(adapter_rx),
+            Some(progress_tx),
+            cancel_rx,
+        )
+        .await;
+
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+    assert!(std::fs::read(&path).unwrap() == *data);
+
+    let progress = collector.await.unwrap();
+    assert!(!progress.is_empty());
+    let last = progress.last().unwrap();
+    // Default-route fallback was spun up and completed remaining chunks
+    assert!(last.adapters.iter().any(|a| a.label == "default-route"));
+}

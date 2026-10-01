@@ -801,6 +801,18 @@ impl DownloadEngine {
                     match maybe_update {
                         Some(AdapterUpdate::Add(adapter)) => {
                             if adapter.enabled && adapter.is_ipv4 && !adapter.is_loopback && adapter.ip.is_ipv4() {
+                                // If default-route fallback was active, retire it now that an explicit adapter joined
+                                {
+                                    let states = adapter_states.read().unwrap();
+                                    for target in states.iter().filter(|s| s.ip.is_none() && !s.dropped.load(Ordering::SeqCst)) {
+                                        info!(
+                                            "Retiring default-route fallback workers now that adapter {} ({}) joined",
+                                            adapter.id, adapter.ip
+                                        );
+                                        target.dropped.store(true, Ordering::SeqCst);
+                                        target.retire_tx.send_replace(true);
+                                    }
+                                }
                                 let already_exists = {
                                     let states = adapter_states.read().unwrap();
                                     states.iter().any(|s| {
@@ -839,6 +851,29 @@ impl DownloadEngine {
                             for target in states.iter().filter(|s| s.ip == Some(ip)) {
                                 target.dropped.store(true, Ordering::SeqCst);
                                 target.retire_tx.send_replace(true);
+                            }
+                            let has_active = states.iter().any(|s| !s.dropped.load(Ordering::SeqCst));
+                            let has_fallback = states.iter().any(|s| s.ip.is_none() && !s.dropped.load(Ordering::SeqCst));
+                            if !has_active && !has_fallback {
+                                info!("All specific network adapters were removed/disabled; falling back to default OS routing");
+                                match build_bound_http_client(None, self.stall_timeout) {
+                                    Ok(client) => {
+                                        let fallback_state = Arc::new(AdapterWorkerState::new(None, client));
+                                        drop(states);
+                                        adapter_states.write().unwrap().push(Arc::clone(&fallback_state));
+                                        for worker_idx in 0..self.connections_per_adapter {
+                                            worker_set.spawn(run_chunk_worker(
+                                                Arc::clone(&shared),
+                                                Arc::clone(&fallback_state),
+                                                worker_idx,
+                                                stop_rx.clone(),
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to build default-route client fallback: {:#}", e);
+                                    }
+                                }
                             }
                         }
                         None => {

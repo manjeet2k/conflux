@@ -1,13 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Accordion,
-  AccordionHeader,
-  AccordionItem,
-  AccordionPanel,
   Badge,
   Button,
-  Caption1,
-  Checkbox,
   Dialog,
   DialogActions,
   DialogBody,
@@ -23,14 +17,13 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { ArrowClockwise16Regular, Folder20Regular, Link20Regular } from '@fluentui/react-icons';
+import { Folder20Regular, Link20Regular } from '@fluentui/react-icons';
 import { open } from '@tauri-apps/plugin-dialog';
 import { downloadDir } from '@tauri-apps/api/path';
 import { api, errorText } from '../api';
-import type { AdapterInfo, ProbeResult } from '../types';
+import type { ProbeResult } from '../types';
 import { formatBytes } from '../utils/formatters';
 import { FileIcon } from './FileIcon';
-import { kindIcon, usableAdapters } from '../utils/adapters';
 
 const useStyles = makeStyles({
   surface: { width: '560px', maxWidth: 'calc(100vw - 48px)' },
@@ -49,10 +42,6 @@ const useStyles = makeStyles({
   probeMeta: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
   folderRow: { display: 'flex', gap: '8px' },
   folderInput: { flex: 1 },
-  adapterList: { display: 'flex', flexDirection: 'column', gap: '2px' },
-  adapterLabel: { display: 'inline-flex', alignItems: 'center', gap: '8px' },
-  muted: { color: tokens.colorNeutralForeground3 },
-  accordionHeader: { display: 'flex', justifyContent: 'space-between', width: '100%' },
 });
 
 const isHttpUrl = (s: string) => {
@@ -67,10 +56,8 @@ const isHttpUrl = (s: string) => {
 interface AddDownloadDialogProps {
   open: boolean;
   initialUrl: string;
-  adapters: AdapterInfo[];
   defaultSaveDir: string | null;
-  onRefreshAdapters: () => void;
-  onStart: (args: { url: string; saveDir: string; filename: string | null; adapterIds: string[] }) => Promise<void>;
+  onStart: (args: { url: string; saveDir: string; filename: string | null }) => Promise<void>;
   onClose: () => void;
 }
 
@@ -83,9 +70,7 @@ export const AddDownloadDialog: React.FC<AddDownloadDialogProps> = (props) => (
 
 const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
   initialUrl,
-  adapters,
   defaultSaveDir,
-  onRefreshAdapters,
   onStart,
   onClose,
 }) => {
@@ -96,7 +81,6 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
   // null = not edited by the user -> follow the probe's suggestion.
   const [filename, setFilename] = useState<string | null>(null);
   const [saveDir, setSaveDir] = useState(defaultSaveDir ?? '');
-  const [userSelection, setUserSelection] = useState<string[] | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -131,17 +115,6 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
   const probeError = current?.error ?? null;
   const probing = targetValid && !current;
 
-  const usable = usableAdapters(adapters);
-  const usableIds = new Set(usable.map((a) => a.id));
-  const selected =
-    userSelection === null
-      ? usable.filter((a) => a.enabled).map((a) => a.id)
-      : userSelection.filter((id) => usableIds.has(id));
-  const adapterIds = userSelection === null ? [] : selected;
-
-  const toggle = (id: string, checked: boolean) =>
-    setUserSelection(checked ? [...selected, id] : selected.filter((s) => s !== id));
-
   const browse = async () => {
     try {
       const dir = await open({ directory: true, multiple: false, defaultPath: saveDir || undefined });
@@ -152,8 +125,7 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
   };
 
   const effectiveName = (filename ?? probe?.filename ?? '').trim();
-  const noAdapter = usable.length > 0 && selected.length === 0;
-  const canSubmit = isHttpUrl(url) && saveDir.trim() !== '' && !noAdapter && !submitting;
+  const canSubmit = isHttpUrl(url) && saveDir.trim() !== '' && !submitting;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -165,7 +137,6 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
         url: url.trim(),
         saveDir: saveDir.trim(),
         filename: filename !== null && effectiveName ? effectiveName : null,
-        adapterIds,
       });
       onClose();
     } catch (err) {
@@ -240,55 +211,6 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
                 </Button>
               </div>
             </Field>
-
-            <Accordion collapsible defaultOpenItems={noAdapter ? ['adapters'] : []}>
-              <AccordionItem value="adapters">
-                <AccordionHeader expandIconPosition="end" size="small">
-                  Network adapters
-                  <Caption1 className={styles.muted} style={{ marginLeft: 8 }}>
-                    {usable.length === 0 || userSelection === null
-                      ? 'default route'
-                      : `${selected.length} of ${usable.length} selected`}
-                  </Caption1>
-                </AccordionHeader>
-                <AccordionPanel>
-                  <div className={styles.adapterList}>
-                    {usable.length === 0 && (
-                      <Caption1 className={styles.muted}>
-                        No bindable IPv4 adapters were found; the system's default route will be used.
-                      </Caption1>
-                    )}
-                    {usable.map((a) => {
-                      const Icon = kindIcon[a.kind];
-                      return (
-                        <Checkbox
-                          key={a.id}
-                          checked={selected.includes(a.id)}
-                          onChange={(_, d) => toggle(a.id, !!d.checked)}
-                          label={
-                            <span className={styles.adapterLabel}>
-                              <Icon />
-                              {a.name}
-                              <Caption1 className={styles.muted}>{a.ip}</Caption1>
-                            </span>
-                          }
-                        />
-                      );
-                    })}
-                    {noAdapter && (
-                      <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>
-                        Select at least one adapter.
-                      </Caption1>
-                    )}
-                    <div>
-                      <Button size="small" appearance="subtle" icon={<ArrowClockwise16Regular />} onClick={onRefreshAdapters}>
-                        Refresh adapters
-                      </Button>
-                    </div>
-                  </div>
-                </AccordionPanel>
-              </AccordionItem>
-            </Accordion>
 
             {submitError && (
               <MessageBar intent="error" layout="multiline">

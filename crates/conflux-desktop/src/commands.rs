@@ -85,8 +85,13 @@ fn emit(app: &AppHandle, task: &DownloadTaskState) {
 
 // ─── 1. Adapter Discovery ───────────────────────────────────
 #[tauri::command]
-pub fn discover_adapters() -> Result<Vec<AdapterInfo>, String> {
-    let adapters = core_discover().map_err(|e| e.to_string())?;
+pub async fn discover_adapters(state: State<'_, AppState>) -> Result<Vec<AdapterInfo>, String> {
+    let mut adapters = core_discover().map_err(|e| e.to_string())?;
+    let overrides = state.settings.read().await.adapter_overrides.clone();
+    for a in adapters.iter_mut() {
+        crate::adapters::apply_overrides(a, &overrides);
+    }
+    *state.last_adapters.write().await = adapters.clone();
     Ok(adapters.into_iter().map(to_info).collect())
 }
 
@@ -125,15 +130,15 @@ pub async fn start_download(
     url: String,
     save_dir: String,
     filename: Option<String>,
-    adapter_ids: Vec<String>,
 ) -> Result<DownloadTaskState, String> {
     let url = url.trim().to_string();
     if url.is_empty() {
         return Err("Download URL is empty".to_string());
     }
     let dir = validate_save_dir(&save_dir)?;
-    let adapters = select_adapters(&adapter_ids)?;
-    let engine = engine_from_settings(&*state.settings.read().await)?;
+    let settings = state.settings.read().await.clone();
+    let adapters = select_adapters(&settings)?;
+    let engine = engine_from_settings(&settings)?;
 
     // Probe exactly once; the same probe is handed to the engine.
     let probe = engine
@@ -169,7 +174,7 @@ pub async fn start_download(
         filename,
         save_dir: dir.to_string_lossy().to_string(),
         save_path,
-        adapter_ids,
+        adapter_ids: vec![],
         total_bytes: probe.total_bytes,
         supports_ranges: probe.supports_ranges,
         downloaded_bytes: 0,
@@ -238,8 +243,9 @@ pub async fn resume_task_internal(
     }
 
     let dir = validate_save_dir(&task.save_dir)?;
-    let adapters = select_adapters(&task.adapter_ids)?;
-    let engine = engine_from_settings(&*state.settings.read().await)?;
+    let settings = state.settings.read().await.clone();
+    let adapters = select_adapters(&settings)?;
+    let engine = engine_from_settings(&settings)?;
     let probe = engine
         .probe(&task.url)
         .await
@@ -798,7 +804,6 @@ pub async fn handle_network_change(
                 }
                 Some((
                     task_id.clone(),
-                    task.adapter_ids.is_empty(),
                     handle.adapter_tx.clone(),
                     handle.names.clone(),
                 ))
@@ -806,41 +811,79 @@ pub async fn handle_network_change(
             .collect::<Vec<_>>()
     };
 
-    for (task_id, uses_all, tx, names) in targets {
+    for (task_id, tx, names) in targets {
         let Some(tx) = tx else { continue };
-        if uses_all {
-            for new_adapter in added {
-                {
-                    let mut names = names.write().await;
-                    names.insert(
-                        new_adapter.ip,
-                        (
-                            new_adapter.id.clone(),
-                            crate::adapters::adapter_name(new_adapter),
-                        ),
-                    );
-                }
-                info!(
-                    task_id = %task_id,
-                    adapter = %new_adapter.id,
-                    "Auto-aggregating newly connected adapter into download"
+        for new_adapter in added {
+            {
+                let mut names = names.write().await;
+                names.insert(
+                    new_adapter.ip,
+                    (
+                        new_adapter.id.clone(),
+                        crate::adapters::adapter_name(new_adapter),
+                    ),
                 );
-                if let Err(e) = tx.try_send(AdapterUpdate::Add(new_adapter.clone())) {
-                    warn!(task_id = %task_id, "Could not queue adapter addition: {e}");
-                }
+            }
+            info!(
+                task_id = %task_id,
+                adapter = %new_adapter.id,
+                "Auto-aggregating active adapter into download"
+            );
+            if let Err(e) = tx.try_send(AdapterUpdate::Add(new_adapter.clone())) {
+                warn!(task_id = %task_id, "Could not queue adapter addition: {e}");
             }
         }
         for drop_adapter in removed {
             info!(
                 task_id = %task_id,
                 adapter = %drop_adapter.id,
-                "Retiring disconnected adapter from download"
+                "Retiring disabled/disconnected adapter from download"
             );
             if let Err(e) = tx.try_send(AdapterUpdate::Remove(drop_adapter.ip)) {
                 warn!(task_id = %task_id, "Could not queue adapter removal: {e}");
             }
         }
     }
+}
+
+/// Marks a network adapter active or disabled globally for downloads.
+#[tauri::command]
+pub async fn set_adapter_enabled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<Vec<AdapterInfo>, String> {
+    let mut current_settings = state.settings.read().await.clone();
+    current_settings
+        .adapter_overrides
+        .insert(id.clone(), enabled);
+    if let Some(path) = &state.settings_path {
+        if let Err(e) = settings::save(path, &current_settings) {
+            warn!("Failed to save settings with updated adapter override: {e:#}");
+        }
+    }
+    *state.settings.write().await = current_settings.clone();
+
+    let mut adapters = core_discover().map_err(|e| e.to_string())?;
+    for a in adapters.iter_mut() {
+        crate::adapters::apply_overrides(a, &current_settings.adapter_overrides);
+    }
+
+    let (added, removed) = {
+        let mut last = state.last_adapters.write().await;
+        let diff = conflux_core::diff_adapters(&last, &adapters);
+        *last = adapters.clone();
+        diff
+    };
+
+    if !added.is_empty() || !removed.is_empty() {
+        handle_network_change(&state, &added, &removed).await;
+    }
+
+    let infos: Vec<AdapterInfo> = adapters.into_iter().map(to_info).collect();
+    let _ = app.emit("network-adapters-changed", &infos);
+    Ok(infos)
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -852,20 +895,11 @@ fn engine_from_settings(settings: &Settings) -> Result<DownloadEngine, String> {
     .map_err(|e| format!("Invalid engine settings: {e:#}"))
 }
 
-/// Discovers adapters and enables exactly `adapter_ids` (discovery defaults when empty).
-fn select_adapters(adapter_ids: &[String]) -> Result<Vec<NetworkAdapter>, String> {
+/// Discovers adapters and applies app-level user overrides from settings.
+fn select_adapters(settings: &Settings) -> Result<Vec<NetworkAdapter>, String> {
     let mut adapters = core_discover().map_err(|e| format!("Adapter discovery failed: {e:#}"))?;
-    if !adapter_ids.is_empty() {
-        for adapter in adapters.iter_mut() {
-            adapter.enabled = adapter_ids.contains(&adapter.id);
-        }
-        if !adapters.iter().any(|a| a.enabled) {
-            return Err(
-                "None of the selected network adapters are currently available. \
-                 Refresh the adapter list and choose again."
-                    .to_string(),
-            );
-        }
+    for adapter in adapters.iter_mut() {
+        crate::adapters::apply_overrides(adapter, &settings.adapter_overrides);
     }
     Ok(adapters)
 }

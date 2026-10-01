@@ -4,8 +4,10 @@ import type { AdapterInfo, DownloadTask, ProbeResult, Settings, WindowBackdrop }
 /** Typed wrappers around the Tauri commands in crates/conflux-desktop/src/commands.rs. */
 export const api = {
   discoverAdapters: () => invoke<AdapterInfo[]>('discover_adapters'),
+  setAdapterEnabled: (id: string, enabled: boolean) =>
+    invoke<AdapterInfo[]>('set_adapter_enabled', { id, enabled }),
   probeUrl: (url: string) => invoke<ProbeResult>('probe_url', { url }),
-  startDownload: (args: { url: string; saveDir: string; filename: string | null; adapterIds: string[] }) =>
+  startDownload: (args: { url: string; saveDir: string; filename: string | null }) =>
     invoke<DownloadTask>('start_download', args),
   pauseDownload: (taskId: string) => invoke<DownloadTask>('pause_download', { taskId }),
   resumeDownload: (taskId: string) => invoke<DownloadTask>('resume_download', { taskId }),

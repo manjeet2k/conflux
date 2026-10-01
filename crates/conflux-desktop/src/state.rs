@@ -38,6 +38,7 @@ pub struct DownloadTaskState {
     pub save_dir: String,
     pub save_path: String,
     /// Adapter ids the user selected (empty = discovery defaults). Reused on resume.
+    #[serde(default)]
     pub adapter_ids: Vec<String>,
     pub total_bytes: u64,
     pub supports_ranges: bool,
@@ -95,6 +96,9 @@ pub struct AppState {
     /// `None` when the config dir could not be resolved (settings are then not saved).
     pub settings_path: Option<PathBuf>,
     pub history: Arc<crate::history::HistoryStore>,
+    /// Last known snapshot of network adapters with user overrides applied,
+    /// shared between background NetworkWatcher and UI toggle commands.
+    pub last_adapters: Arc<RwLock<Vec<conflux_core::NetworkAdapter>>>,
 }
 
 impl AppState {
@@ -113,6 +117,7 @@ impl AppState {
             settings: Arc::new(RwLock::new(settings)),
             settings_path,
             history: Arc::new(history),
+            last_adapters: Arc::new(RwLock::new(Vec::new())),
         }
     }
 }

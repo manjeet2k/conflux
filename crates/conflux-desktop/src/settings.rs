@@ -29,6 +29,7 @@ pub struct Settings {
     pub notify_on_complete: bool,
     pub close_to_tray: bool,
     pub auto_aggregate_adapters: bool,
+    pub adapter_overrides: std::collections::HashMap<String, bool>,
 }
 
 impl Default for Settings {
@@ -41,6 +42,7 @@ impl Default for Settings {
             notify_on_complete: true,
             close_to_tray: true,
             auto_aggregate_adapters: true,
+            adapter_overrides: std::collections::HashMap::new(),
         }
     }
 }
@@ -150,6 +152,12 @@ mod tests {
         let partial: Settings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
         assert_eq!(partial.theme, ThemePreference::Dark);
         assert_eq!(partial.connections_per_adapter, 4);
+        assert!(partial.adapter_overrides.is_empty());
+
+        let with_overrides: Settings =
+            serde_json::from_str(r#"{"adapter_overrides":{"eth0":false,"wlan0":true}}"#).unwrap();
+        assert_eq!(with_overrides.adapter_overrides.get("eth0"), Some(&false));
+        assert_eq!(with_overrides.adapter_overrides.get("wlan0"), Some(&true));
     }
 
     #[test]
@@ -167,9 +175,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("conflux-settings-{}", uuid::Uuid::new_v4()));
         let path = dir.join("settings.json");
         assert_eq!(load(&path), Settings::default());
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("eth0:192.168.1.50".into(), false);
+        overrides.insert("wlan0".into(), true);
         let s = Settings {
             theme: ThemePreference::Light,
             chunk_size_mb: 8,
+            adapter_overrides: overrides,
             ..Settings::default()
         };
         save(&path, &s).unwrap();

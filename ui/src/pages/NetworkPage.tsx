@@ -3,6 +3,7 @@ import {
   Badge,
   Button,
   Caption1,
+  Switch,
   Text,
   makeStyles,
   tokens,
@@ -28,10 +29,11 @@ const useStyles = makeStyles({
   legend: { display: 'flex', flexWrap: 'wrap', gap: '4px 16px', justifyContent: 'flex-end' },
   legendItem: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: tokens.fontSizeBase200 },
   dot: { width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0 },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '8px' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '8px' },
   adapterHead: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' },
   adapterIcon: { fontSize: '24px', display: 'flex' },
   adapterTitle: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' },
+  adapterActions: { display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 },
   statusBadge: {
     display: 'inline-flex',
     alignItems: 'center',
@@ -78,16 +80,28 @@ interface NetworkPageProps {
   history: SpeedSample[];
   dark: boolean;
   onRefresh: () => void;
+  onToggleAdapter: (id: string, enabled: boolean) => void;
 }
 
-export const NetworkPage: React.FC<NetworkPageProps> = ({ adapters, tasks, history, dark, onRefresh }) => {
+export const NetworkPage: React.FC<NetworkPageProps> = ({
+  adapters,
+  tasks,
+  history,
+  dark,
+  onRefresh,
+  onToggleAdapter,
+}) => {
   const styles = useStyles();
-  const usable = usableAdapters(adapters).filter((a) => a.enabled);
+  // Display only real, ready physical adapters (hide virtual/loopback/link-local)
+  const usable = usableAdapters(adapters).filter((a) => a.kind !== 'virtual' && a.kind !== 'loopback');
   const stats = liveStats(tasks);
   const totalNow = history.length > 0 ? history[history.length - 1].total : 0;
   const accent = dark ? '#60CDFF' : '#005FB8';
 
-  const seriesKeys = [...usable.map((a) => a.id), ...(stats.has('default') ? ['default'] : [])];
+  const seriesKeys = [
+    ...usable.filter((a) => a.enabled).map((a) => a.id),
+    ...(stats.has('default') ? ['default'] : []),
+  ];
   const lines = seriesKeys.map((key) => ({
     key,
     color: adapterColor(key === 'default' ? null : key, adapters, dark),
@@ -113,7 +127,7 @@ export const NetworkPage: React.FC<NetworkPageProps> = ({ adapters, tasks, histo
           <div className={styles.legend}>
             <span className={styles.legendItem}>
               <span className={styles.dot} style={{ background: accent }} />
-              All adapters
+              All active adapters
             </span>
             {showLines.map((l) => (
               <span key={l.key} className={styles.legendItem}>
@@ -157,19 +171,23 @@ export const NetworkPage: React.FC<NetworkPageProps> = ({ adapters, tasks, histo
                     {kindLabel[a.kind]} · {a.ip}
                   </Caption1>
                 </div>
-                {s?.dropped ? (
-                  <Badge className={styles.statusBadge} appearance="tint" color="danger">
-                    Dropped
-                  </Badge>
-                ) : inUse ? (
-                  <Badge className={styles.statusBadge} appearance="filled" color="brand">
-                    In use
-                  </Badge>
-                ) : a.enabled ? (
-                  <Badge className={styles.statusBadge} appearance="tint" color="success">
-                    Ready
-                  </Badge>
-                ) : null}
+                <div className={styles.adapterActions}>
+                  {s?.dropped ? (
+                    <Badge className={styles.statusBadge} appearance="tint" color="danger">
+                      Dropped
+                    </Badge>
+                  ) : inUse ? (
+                    <Badge className={styles.statusBadge} appearance="filled" color="brand">
+                      In use
+                    </Badge>
+                  ) : null}
+                  <Switch
+                    checked={a.enabled}
+                    onChange={(_, d) => onToggleAdapter(a.id, d.checked)}
+                    label={a.enabled ? 'Active' : 'Disabled'}
+                    labelPosition="before"
+                  />
+                </div>
               </div>
               <div className={styles.stats}>
                 <div className={styles.stat}>
@@ -189,7 +207,6 @@ export const NetworkPage: React.FC<NetworkPageProps> = ({ adapters, tasks, histo
           );
         })}
       </div>
-
     </Page>
   );
 };

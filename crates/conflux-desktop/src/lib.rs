@@ -61,16 +61,32 @@ pub fn run() {
                 Ok(watcher) => {
                     let app_handle = app.handle().clone();
                     let mut rx = watcher.receiver();
-                    let mut last_adapters = rx.borrow().clone();
 
                     tauri::async_runtime::spawn(async move {
                         // Keep watcher alive inside this task
                         let _watcher = watcher;
+                        let state = app_handle.state::<AppState>();
+                        {
+                            let mut initial_adapters = rx.borrow().clone();
+                            let overrides = state.settings.read().await.adapter_overrides.clone();
+                            for a in initial_adapters.iter_mut() {
+                                adapters::apply_overrides(a, &overrides);
+                            }
+                            *state.last_adapters.write().await = initial_adapters;
+                        }
+
                         while rx.changed().await.is_ok() {
-                            let current_adapters = rx.borrow().clone();
-                            let (added, removed) =
-                                conflux_core::diff_adapters(&last_adapters, &current_adapters);
-                            last_adapters = current_adapters.clone();
+                            let mut current_adapters = rx.borrow().clone();
+                            let settings = state.settings.read().await.clone();
+                            for a in current_adapters.iter_mut() {
+                                adapters::apply_overrides(a, &settings.adapter_overrides);
+                            }
+                            let (added, removed) = {
+                                let mut last = state.last_adapters.write().await;
+                                let diff = conflux_core::diff_adapters(&last, &current_adapters);
+                                *last = current_adapters.clone();
+                                diff
+                            };
 
                             // 1. Emit updated adapter list to UI
                             let infos: Vec<adapters::AdapterInfo> = current_adapters
@@ -81,12 +97,15 @@ pub fn run() {
                                 warn!("Failed to emit network-adapters-changed: {e}");
                             }
 
-                            // 2. Hot-plug into active downloads if enabled in settings
-                            let state = app_handle.state::<AppState>();
-                            let auto_aggregate =
-                                state.settings.read().await.auto_aggregate_adapters;
-                            if auto_aggregate && (!added.is_empty() || !removed.is_empty()) {
-                                commands::handle_network_change(&state, &added, &removed).await;
+                            // 2. Hot-plug into active downloads
+                            let added_to_apply = if settings.auto_aggregate_adapters {
+                                added
+                            } else {
+                                Vec::new()
+                            };
+                            if !added_to_apply.is_empty() || !removed.is_empty() {
+                                commands::handle_network_change(&state, &added_to_apply, &removed)
+                                    .await;
                             }
                         }
                     });
@@ -115,6 +134,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::discover_adapters,
+            commands::set_adapter_enabled,
             commands::probe_url,
             commands::start_download,
             commands::pause_download,

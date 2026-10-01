@@ -74,6 +74,17 @@ pub fn classify_kind(name: &str, is_loopback: bool) -> AdapterKind {
     AdapterKind::Other
 }
 
+pub fn apply_overrides(adapter: &mut NetworkAdapter, overrides: &HashMap<String, bool>) {
+    if !is_usable(adapter) {
+        adapter.enabled = false;
+        return;
+    }
+    let name = adapter_name(adapter);
+    if let Some(&enabled) = overrides.get(&adapter.id).or_else(|| overrides.get(&name)) {
+        adapter.enabled = enabled;
+    }
+}
+
 pub fn to_info(adapter: NetworkAdapter) -> AdapterInfo {
     let name = adapter_name(&adapter);
     AdapterInfo {
@@ -216,5 +227,60 @@ mod tests {
         ] {
             assert!(json.get(key).is_some(), "missing {key}");
         }
+    }
+
+    #[test]
+    fn test_apply_overrides() {
+        let ip: IpAddr = "192.168.1.5".parse().unwrap();
+        let mut wifi = NetworkAdapter {
+            id: format!("Wi-Fi:{ip}"),
+            ip,
+            is_ipv4: true,
+            is_loopback: false,
+            enabled: true,
+        };
+
+        let mut overrides = HashMap::new();
+        // Override by name: disable Wi-Fi
+        overrides.insert("Wi-Fi".to_string(), false);
+        apply_overrides(&mut wifi, &overrides);
+        assert!(!wifi.enabled);
+
+        // Override by full id: re-enable Wi-Fi
+        overrides.insert(format!("Wi-Fi:{ip}"), true);
+        apply_overrides(&mut wifi, &overrides);
+        assert!(wifi.enabled);
+
+        // Non-usable (loopback) cannot be enabled
+        let mut loopback = NetworkAdapter {
+            id: "lo:127.0.0.1".into(),
+            ip: "127.0.0.1".parse().unwrap(),
+            is_ipv4: true,
+            is_loopback: true,
+            enabled: false,
+        };
+        overrides.insert("lo".to_string(), true);
+        apply_overrides(&mut loopback, &overrides);
+        assert!(!loopback.enabled);
+    }
+
+    #[test]
+    fn test_apply_overrides_to_info_integration() {
+        let ip: IpAddr = "192.168.1.10".parse().unwrap();
+        let mut adapter = NetworkAdapter {
+            id: format!("Ethernet:{ip}"),
+            ip,
+            is_ipv4: true,
+            is_loopback: false,
+            enabled: true,
+        };
+        let mut overrides = HashMap::new();
+        overrides.insert("Ethernet".to_string(), false);
+        apply_overrides(&mut adapter, &overrides);
+
+        let info = to_info(adapter);
+        assert_eq!(info.name, "Ethernet");
+        assert!(!info.enabled);
+        assert!(info.usable);
     }
 }
