@@ -109,7 +109,7 @@ recommended default. If the user hasn't answered, **ask** (don't assume).
 ## Before the first beta
 
 Code and docs for the beta are in place; what is left needs you or a Windows machine:
-1. Set the GitHub secrets (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, optional `VIRUSTOTAL_API_KEY`) and **back up `~/.config/conflux-secrets/`**.
+1. **Back up `~/.config/conflux-secrets/`** (the two signing secrets are already set at repo level). Then apply the "Hardening" steps in `docs/RELEASING.md`: create the `release` environment with required reviewers and move the two `TAURI_SIGNING_*` secrets into it, and add a tag ruleset for `v*.*.*`. Optional: `VIRUSTOTAL_API_KEY`.
 2. Run V-1, V-2, V-4, V-5 on Windows (kits in `docs/WINDOWS_TEST_PLAN.md`, `scripts/bench/`) and fix what they find.
 3. Add screenshots/GIF and benchmark numbers (D-1).
 4. Run `ci.yml` once by hand to shake out workflow problems (roughly 55 billed minutes).
@@ -470,6 +470,7 @@ the item. Task entries above keep their full detail.
 Newest first. Add a line whenever you finish a task, so the history survives even if the
 task entry is later reorganised.
 
+- Independent fresh-context review (three reviewers) → fixes: finished-download truncation after pause/quit, hostile-size OOM guard, sidecar-name collision, credential redaction in errors, reliable adapter events, resume-after-update retry, release workflow guards (published-tag rebuild, manifest verification, SHA-pinned actions, locked builds), doc corrections. Open design question: disabling the last enabled adapter mid-download (see `commands.rs` comments).
 - Target changed from 1.0 to a public **beta**: signing, 1.0 checklist, winget and optional features deferred (Post-beta backlog).
 - H-3, H-4, P-1, P-2, P-3, P-4, R-1, R-2, R-5 done; H-1, P-6 partly done (see Done notes). Full gates pass on the combined tree; Windows-runtime behaviour and the CI workflows themselves are unverified.
 
