@@ -12,6 +12,10 @@ edition = "2021"
 authors = ["Manjeet Singh <manjeetsgh11@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/manjeet2k/conflux"
+homepage = "https://github.com/manjeet2k/conflux"
+keywords = ["download-manager", "multi-interface", "bandwidth-aggregation", "http-range", "tauri"]
+categories = ["network-programming", "command-line-utilities"]
+publish = false
 
 [workspace.dependencies]
 tokio = { version = "1.43", features = ["full"] }

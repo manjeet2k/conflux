@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+description = "Download engine that bonds multiple network adapters using HTTP Range requests"
 
 [dependencies]
 tokio = { workspace = true }
