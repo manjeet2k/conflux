@@ -21,7 +21,7 @@ import { Folder20Regular, Link20Regular } from '@fluentui/react-icons';
 import { open } from '@tauri-apps/plugin-dialog';
 import { downloadDir } from '@tauri-apps/api/path';
 import { api, errorText } from '../api';
-import type { ProbeResult } from '../types';
+import type { ProbeResult, RequestHeaders } from '../types';
 import { formatBytes } from '../utils/formatters';
 import { FileIcon } from './FileIcon';
 
@@ -53,33 +53,54 @@ const isHttpUrl = (s: string) => {
   }
 };
 
+const sameOrigin = (a: string, b: string) => {
+  try {
+    return new URL(a.trim()).origin.toLowerCase() === new URL(b.trim()).origin.toLowerCase();
+  } catch {
+    return false;
+  }
+};
+
 interface AddDownloadDialogProps {
   open: boolean;
   initialUrl: string;
+  initialFilename?: string | null;
+  initialHeaders?: RequestHeaders | null;
   defaultSaveDir: string | null;
-  onStart: (args: { url: string; saveDir: string; filename: string | null }) => Promise<void>;
+  queueCount?: number;
+  onStart: (args: {
+    url: string;
+    saveDir: string;
+    filename: string | null;
+    headers?: RequestHeaders | null;
+  }) => Promise<void>;
   onClose: () => void;
+  onCancelAll?: () => void;
 }
 
 /** Keyed on open state so every open starts from a fresh form. */
 export const AddDownloadDialog: React.FC<AddDownloadDialogProps> = (props) => (
-  <Dialog open={props.open} onOpenChange={(_, d) => !d.open && props.onClose()}>
-    <AddDownloadForm key={`${props.open}:${props.initialUrl}`} {...props} />
+  <Dialog open={props.open} onOpenChange={(_, d) => !d.open && (props.onCancelAll ? props.onCancelAll() : props.onClose())}>
+    <AddDownloadForm key={`${props.open}:${props.initialUrl}:${props.initialFilename ?? ''}`} {...props} />
   </Dialog>
 );
 
 const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
   initialUrl,
+  initialFilename,
+  initialHeaders,
   defaultSaveDir,
+  queueCount = 0,
   onStart,
   onClose,
+  onCancelAll,
 }) => {
   const styles = useStyles();
   const [url, setUrl] = useState(initialUrl);
   // Outcome of the last finished probe, tagged with the URL it was for.
   const [probeState, setProbeState] = useState<{ url: string; result?: ProbeResult; error?: string } | null>(null);
   // null = not edited by the user -> follow the probe's suggestion.
-  const [filename, setFilename] = useState<string | null>(null);
+  const [filename, setFilename] = useState<string | null>(initialFilename ?? null);
   const [saveDir, setSaveDir] = useState(defaultSaveDir ?? '');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -95,12 +116,17 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
   // URL other than the current one are ignored, so stale responses never show.
   const target = url.trim();
   const targetValid = isHttpUrl(target);
+  // Only forward browser session cookies/headers if the target URL shares the same origin
+  // as the initial URL from the browser. This prevents accidental cookie leakage if the user
+  // edits the URL to point to a different host/domain.
+  const effectiveHeaders = initialHeaders && sameOrigin(initialUrl, target) ? initialHeaders : null;
+
   useEffect(() => {
     if (!targetValid) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
       api
-        .probeUrl(target)
+        .probeUrl(target, effectiveHeaders)
         .then((result) => !cancelled && setProbeState({ url: target, result }))
         .catch((e) => !cancelled && setProbeState({ url: target, error: errorText(e) }));
     }, 450);
@@ -108,7 +134,7 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [target, targetValid]);
+  }, [target, targetValid, effectiveHeaders]);
 
   const current = probeState?.url === target ? probeState : null;
   const probe = current?.result ?? null;
@@ -137,6 +163,7 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
         url: url.trim(),
         saveDir: saveDir.trim(),
         filename: filename !== null && effectiveName ? effectiveName : null,
+        headers: effectiveHeaders,
       });
       onClose();
     } catch (err) {
@@ -149,7 +176,17 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
     <DialogSurface className={styles.surface}>
       <form onSubmit={submit}>
         <DialogBody>
-          <DialogTitle>Add download</DialogTitle>
+          <DialogTitle
+            action={
+              queueCount > 0 ? (
+                <Badge appearance="tint" color="informative">
+                  {queueCount + 1} queued
+                </Badge>
+              ) : undefined
+            }
+          >
+            Add download
+          </DialogTitle>
           <DialogContent className={styles.content}>
             <Field
               label="Address"
@@ -223,10 +260,15 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
             )}
           </DialogContent>
           <DialogActions>
+            {queueCount > 0 && (
+              <Button onClick={onCancelAll ?? onClose} appearance="subtle">
+                Cancel All
+              </Button>
+            )}
+            <Button onClick={onClose}>{queueCount > 0 ? 'Skip' : 'Cancel'}</Button>
             <Button appearance="primary" type="submit" disabled={!canSubmit}>
               {submitting ? <Spinner size="tiny" /> : 'Download'}
             </Button>
-            <Button onClick={onClose}>Cancel</Button>
           </DialogActions>
         </DialogBody>
       </form>

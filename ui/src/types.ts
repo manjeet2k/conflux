@@ -105,7 +105,7 @@ export interface UpdateInfo {
 }
 
 /** Targets `open_about_link` accepts; the backend maps them to fixed paths/URLs. */
-export type AboutLink = 'licenses' | 'repo' | 'releases';
+export type AboutLink = 'licenses' | 'repo' | 'releases' | 'extension';
 
 // Matches Rust Diagnostics (get_diagnostics): no paths, user names, URLs or full IPs.
 export interface Diagnostics {
@@ -144,5 +144,22 @@ export interface WindowBackdrop {
 export const PROGRESS_EVENT = 'download-progress';
 export const UPDATE_AVAILABLE_EVENT = 'update-available';
 export const NETWORK_ADAPTERS_CHANGED_EVENT = 'network-adapters-changed';
+export const EXTERNAL_DOWNLOAD_EVENT = 'external-download';
+
+export interface RequestHeaders {
+  cookie?: string | null;
+  referer?: string | null;
+  user_agent?: string | null;
+}
+
+export interface ExternalDownloadPayload {
+  url: string;
+  filename?: string | null;
+  headers?: RequestHeaders | null;
+}
+
+export interface BrowserIntegrationStatus {
+  registered: boolean;
+}
 
 export type ViewId = 'all' | 'active' | 'paused' | 'completed' | 'failed' | 'network' | 'settings';

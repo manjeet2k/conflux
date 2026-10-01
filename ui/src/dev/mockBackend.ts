@@ -282,6 +282,10 @@ export function installMockBackend() {
         case 'open_file':
         case 'reveal_file':
           return null;
+        case 'get_browser_integration_status':
+          return { registered: true };
+        case 'register_browser_extension':
+          return null;
         case 'plugin:path|resolve_directory':
           return 'C:\\Users\\pc\\Downloads';
         case 'plugin:app|version':

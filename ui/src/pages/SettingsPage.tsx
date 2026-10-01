@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Dropdown, Option, SpinButton, Spinner, Switch, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Badge, Button, Dropdown, Option, SpinButton, Spinner, Switch, Text, makeStyles, tokens } from '@fluentui/react-components';
 import {
   Alert20Regular,
   DarkTheme20Regular,
@@ -11,6 +11,7 @@ import {
   Warning20Regular,
   Bug20Regular,
   ArrowSync20Regular,
+  Globe20Regular,
 } from '@fluentui/react-icons';
 import { open } from '@tauri-apps/plugin-dialog';
 import { downloadDir } from '@tauri-apps/api/path';
@@ -73,10 +74,16 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
   // Result of the last check: `update` when a newer version exists, `upToDate` when it does not.
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [upToDate, setUpToDate] = useState(false);
+  const [browserHostRegistered, setBrowserHostRegistered] = useState<boolean | null>(null);
+  const [registeringHost, setRegisteringHost] = useState(false);
 
   useEffect(() => {
     downloadDir().then(setOsDownloads).catch(() => {});
     getVersion().then(setVersion).catch(() => {});
+    api
+      .getBrowserIntegrationStatus()
+      .then((s) => setBrowserHostRegistered(s.registered))
+      .catch(() => setBrowserHostRegistered(false));
   }, []);
 
   // Warn when the chosen default folder is gone (e.g. an unplugged drive).
@@ -145,6 +152,18 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
       if (typeof dir === 'string') onChange({ default_save_dir: dir });
     } catch (e) {
       onError(`Folder picker failed: ${errorText(e)}`);
+    }
+  };
+
+  const handleRegisterHost = async () => {
+    setRegisteringHost(true);
+    try {
+      await api.registerBrowserExtension();
+      setBrowserHostRegistered(true);
+    } catch (e) {
+      onError(`Failed to register browser host: ${errorText(e)}`);
+    } finally {
+      setRegisteringHost(false);
     }
   };
 
@@ -297,6 +316,41 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
           labelPosition="before"
         />
       </SettingsCard>
+
+      <SectionHeader id="settings-browser">Browser Integration</SectionHeader>
+      <div className={styles.stack}>
+        <SettingsCard
+          icon={<Globe20Regular />}
+          title="Browser extension"
+          description={
+            browserHostRegistered
+              ? 'Conflux native messaging host is registered. Install or load the browser extension in Chrome, Edge, or Firefox to capture downloads.'
+              : 'Conflux native messaging host is not registered. Register the host to enable browser extension communication.'
+          }
+        >
+          <div className={styles.buttons}>
+            {browserHostRegistered !== null && (
+              <Badge
+                appearance="tint"
+                color={browserHostRegistered ? 'success' : 'warning'}
+                style={{ alignSelf: 'center', marginRight: '4px' }}
+              >
+                {browserHostRegistered ? 'Host Registered' : 'Not Registered'}
+              </Badge>
+            )}
+            <Button appearance="primary" onClick={() => api.openAboutLink('extension')}>
+              Setup guide
+            </Button>
+            <Button onClick={handleRegisterHost} disabled={registeringHost}>
+              {registeringHost
+                ? 'Registering...'
+                : browserHostRegistered
+                  ? 'Re-register host'
+                  : 'Register host'}
+            </Button>
+          </div>
+        </SettingsCard>
+      </div>
 
       <SectionHeader>Support</SectionHeader>
       <SettingsCard

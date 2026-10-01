@@ -21,8 +21,8 @@ import {
 } from '@fluentui/react-icons';
 import { listen } from '@tauri-apps/api/event';
 import { api, errorText } from './api';
-import type { AdapterInfo, DownloadTask, TaskStatus, UpdateInfo, ViewId } from './types';
-import { NETWORK_ADAPTERS_CHANGED_EVENT, UPDATE_AVAILABLE_EVENT } from './types';
+import type { AdapterInfo, DownloadTask, ExternalDownloadPayload, RequestHeaders, TaskStatus, UpdateInfo, ViewId } from './types';
+import { EXTERNAL_DOWNLOAD_EVENT, NETWORK_ADAPTERS_CHANGED_EVENT, UPDATE_AVAILABLE_EVENT } from './types';
 import { darkTheme, lightTheme, surfaceVars } from './theme';
 import { useDownloads } from './hooks/useDownloads';
 import { useSettings } from './hooks/useSettings';
@@ -131,11 +131,42 @@ export const App: React.FC = () => {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [addOpen, setAddOpen] = useState(false);
   const [addUrl, setAddUrl] = useState('');
+  const [addFilename, setAddFilename] = useState<string | null>(null);
+  const [addHeaders, setAddHeaders] = useState<RequestHeaders | null>(null);
+  const [downloadQueue, setDownloadQueue] = useState<ExternalDownloadPayload[]>([]);
   const [removeIds, setRemoveIds] = useState<string[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => localStorage.setItem('cfx.compactNav', compactNav ? '1' : '0'), [compactNav]);
   useEffect(() => localStorage.setItem('cfx.details', detailsOpen ? '1' : '0'), [detailsOpen]);
+
+  // One-time announcement for browser integration in 0.2.0
+  useEffect(() => {
+    const key = 'cfx.announced.browser-0.2.0';
+    if (!localStorage.getItem(key)) {
+      localStorage.setItem(key, '1');
+      const timer = window.setTimeout(() => {
+        dispatchToast(
+          <Toast>
+            <ToastTitle
+              action={
+                <Button appearance="transparent" size="small" onClick={() => setView('settings')}>
+                  View
+                </Button>
+              }
+            >
+              Browser integration available
+            </ToastTitle>
+            <ToastBody subtitle="Open Settings → Browser Integration to get the extension.">
+              Capture downloads directly from Chrome, Edge, and Firefox.
+            </ToastBody>
+          </Toast>,
+          { intent: 'info', timeout: 12000 }
+        );
+      }, 1500);
+      return () => window.clearTimeout(timer);
+    }
+  }, [dispatchToast]);
 
   const refreshAdapters = useCallback(() => {
     api
@@ -163,14 +194,80 @@ export const App: React.FC = () => {
   }, [addOpen, removeIds]);
 
   const openAdd = useCallback(
-    (url = '') => {
+    (url = '', filename: string | null = null, headers: RequestHeaders | null = null) => {
       if (dialogOpenRef.current) return;
       refreshAdapters();
       setAddUrl(url);
+      setAddFilename(filename);
+      setAddHeaders(headers);
       setAddOpen(true);
     },
     [refreshAdapters]
   );
+
+  const handleExternalDownload = useCallback(
+    (payload: ExternalDownloadPayload) => {
+      refreshAdapters();
+      if (dialogOpenRef.current) {
+        setDownloadQueue((prev) => [...prev, payload]);
+        notify('info', `Queued link: ${payload.filename || payload.url}`);
+      } else {
+        setAddUrl(payload.url);
+        setAddFilename(payload.filename ?? null);
+        setAddHeaders(payload.headers ?? null);
+        setAddOpen(true);
+      }
+    },
+    [refreshAdapters, notify]
+  );
+
+  const handleAdvanceOrClose = useCallback(() => {
+    setDownloadQueue((prev) => {
+      if (prev.length > 0) {
+        const [next, ...rest] = prev;
+        setAddUrl(next.url);
+        setAddFilename(next.filename ?? null);
+        setAddHeaders(next.headers ?? null);
+        setAddOpen(true);
+        return rest;
+      } else {
+        setAddOpen(false);
+        setAddUrl('');
+        setAddFilename(null);
+        setAddHeaders(null);
+        document.getElementById(GRID_ID)?.focus();
+        return [];
+      }
+    });
+  }, []);
+
+  const handleCancelAll = useCallback(() => {
+    setDownloadQueue([]);
+    setAddOpen(false);
+    setAddUrl('');
+    setAddFilename(null);
+    setAddHeaders(null);
+    document.getElementById(GRID_ID)?.focus();
+  }, []);
+
+  useEffect(() => {
+    api
+      .takePendingDownload()
+      .then((pending) => {
+        if (pending) {
+          handleExternalDownload(pending);
+        }
+      })
+      .catch((e) => console.error('Failed to take pending download:', e));
+
+    const unlisten = listen<ExternalDownloadPayload>(EXTERNAL_DOWNLOAD_EVENT, (event) => {
+      handleExternalDownload(event.payload);
+    });
+    unlisten.catch((e) => console.error('Failed to listen for external downloads:', e));
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => undefined);
+    };
+  }, [handleExternalDownload]);
 
   const openAbout = useCallback(() => {
     setView('settings');
@@ -455,12 +552,13 @@ export const App: React.FC = () => {
       <AddDownloadDialog
         open={addOpen}
         initialUrl={addUrl}
+        initialFilename={addFilename}
+        initialHeaders={addHeaders}
         defaultSaveDir={settings.default_save_dir}
+        queueCount={downloadQueue.length}
         onStart={handleStart}
-        onClose={() => {
-          setAddOpen(false);
-          document.getElementById(GRID_ID)?.focus();
-        }}
+        onClose={handleAdvanceOrClose}
+        onCancelAll={handleCancelAll}
       />
       <RemoveDialog
         tasks={tasks.filter((t) => removeIds.includes(t.id))}
