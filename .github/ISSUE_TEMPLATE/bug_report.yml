@@ -1,0 +1,51 @@
+name: Bug report
+description: Something does not work in the Conflux beta
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing the beta. Please do not report security problems here (see SECURITY.md).
+        Review the diagnostics text before posting: adapter names appear as Windows reports them.
+  - type: input
+    id: version
+    attributes:
+      label: Conflux version
+      description: For example 0.2.0-beta.1 (installer file name or Settings)
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and build
+      description: Run `winver`, or `[System.Environment]::OSVersion.Version` in PowerShell
+      placeholder: Windows 11 23H2 (build 22631)
+    validations:
+      required: true
+  - type: textarea
+    id: network
+    attributes:
+      label: Network setup
+      description: Which adapters are active (Ethernet, Wi-Fi, USB tether), do they share a router or ISP?
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: Include the steps to reproduce. Use a public URL if the problem is file-specific.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Settings > Copy diagnostics, then paste the output here.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Extra logs (optional)
+      description: Settings > Open logs folder. Attach only relevant lines; URL paths may contain tokens, so redact them first.

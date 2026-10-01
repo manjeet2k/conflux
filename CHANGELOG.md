@@ -10,6 +10,12 @@ All notable changes to Conflux are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- In-app updates (Settings -> About & Updates, optional quiet check on start): running downloads
+  are paused before installing and resume automatically after the restart. Release workflow
+  (`release.yml`) builds a draft prerelease with standard and offline-WebView2 installers,
+  checksums and the updater manifest; release runbook in `docs/RELEASING.md`.
+- Installer polish: publisher, license page, description, and an uninstall prompt that never
+  touches downloaded files. `THIRD_PARTY_LICENSES.md` is generated and bundled.
 - Platform policy made explicit: Windows 10/11 (64-bit) only. README, AGENTS.md, architecture,
   development guide and roadmap say so; Linux code paths remain only as a test/dev host.
 - Documentation reorganised: docs index (`docs/README.md`), development guide
