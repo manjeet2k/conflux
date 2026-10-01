@@ -43,8 +43,9 @@ There are two **unrelated** kinds of signing:
 2. Create the updater key and set the GitHub secrets: [Updater key](#updater-key-setup-backup-rotation).
 3. Optional: add the `VIRUSTOTAL_API_KEY` secret ([Antivirus](#antivirus-and-smartscreen)).
 4. **Protect the signing key** ([Hardening](#hardening-the-release-pipeline-manual-github-settings)):
-   create the `release` environment with required reviewers, move the two `TAURI_SIGNING_*`
-   secrets into it, and add a tag ruleset for `v*.*.*`.
+   already applied on 2026-10-01 (environment `release` limited to `main` and `v*.*.*`, signing
+   secrets live only there, tag ruleset active). **Add required reviewers when the repo goes
+   public** (not available on private repos on this plan).
 5. Check Actions are enabled for the repo and the workflow permission is "Read and write"
    *or* leave the default; `release.yml` asks for `contents: write` itself.
 
@@ -178,19 +179,23 @@ attach "Copy diagnostics" output to bug reports.
 
 ## Hardening the release pipeline (manual GitHub settings)
 
-The workflow file cannot configure these; the maintainer applies them once in the repository
-settings (this is not done by CI):
+The workflow file cannot configure these; they are repository settings. Current state (applied
+with `gh` on 2026-10-01):
 
-1. **Environment `release`** (Settings -> Environments -> New environment). Add *Required
-   reviewers* (yourself or a second person) and set *Deployment branches and tags* to `main` plus
-   the tag pattern `v*.*.*`. Then move `TAURI_SIGNING_PRIVATE_KEY` and
-   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` from repository secrets into this environment's secrets
-   (and delete the repository-level copies). The build job declares `environment: release`, so
-   every release run waits for approval, and workflows from other branches or jobs (including
-   `publish-updater`, which needs no key) cannot read the key.
-2. **Tag ruleset** (Settings -> Rules -> Rulesets -> New tag ruleset): target tag pattern
-   `v*.*.*`, restrict creations (and updates/deletions) to the maintainers. Otherwise anyone with
-   write access can start a release build by pushing a tag.
+1. **Environment `release`** exists, restricted to the branch `main` and the tag pattern
+   `v*.*.*`. `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` are stored as
+   **environment secrets only** (the repository-level copies were deleted), so workflows from
+   other branches, other tags, and jobs without `environment: release` (including
+   `publish-updater`, which needs no key) cannot read the key. The build job declares
+   `environment: release`.
+   - **Not applied: required reviewers.** GitHub rejected them ("billing plan does not support
+     the required reviewers protection rule"): they are unavailable on private repos on the
+     current plan. Today a push of a `v*.*.*` tag by a maintainer therefore starts the build
+     without an approval step (it still only produces a *draft* prerelease). When the repo
+     becomes public, add them: Settings -> Environments -> release -> Required reviewers.
+2. **Tag ruleset `protect-release-tags`** (active): only repository admins (bypass) can create,
+   update or delete tags matching `v*.*.*`. Anyone else with write access cannot start a release
+   build by pushing a tag.
 3. Optionally require a pull request and status checks on `main`; the workflow already refuses
    tags whose commit is not on `main`.
 
