@@ -161,7 +161,7 @@ shipped. The installer is a per-user NSIS package (it needs the Microsoft WebVie
 which is present on current Windows). There are no Linux or macOS builds and none are planned.
 
 The engine crate also compiles on Linux. That is a development convenience, not a supported
-target: it lets the core test suite run on WSL2 and in cheap Linux CI. See
+target: it lets the core test suite run on the WSL2 dev host. CI runs on Windows only. See
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#platform-policy).
 
 ---

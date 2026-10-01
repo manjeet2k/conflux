@@ -1,7 +1,9 @@
 name: CI
 
-# Runner minutes cost money on private repos (Windows counts double), so skip runs that
-# cannot change build or test results.
+# Windows only: Windows is the only supported platform. Runner minutes cost money on private
+# repos (Windows counts double), so skip runs that cannot change build or test results.
+# The Linux/WSL2 dev loop is documented in docs/DEVELOPMENT.md (scripts/test-windows.sh runs
+# the tests as real Windows executables locally).
 on:
   pull_request:
     paths-ignore: &docs_only
@@ -26,9 +28,9 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  linux:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
@@ -43,42 +45,6 @@ jobs:
         run: node scripts/check-version.mjs
       - name: Format
         run: cargo fmt --check
-      - name: Clippy (core, Linux)
-        run: cargo clippy -p conflux-core --tests -- -D warnings
-      - name: Clippy (core, Windows target)
-        run: cargo clippy -p conflux-core --target x86_64-pc-windows-gnu --tests -- -D warnings
-      - name: Clippy (cli)
-        run: cargo clippy -p conflux-cli --tests -- -D warnings
-      # Engine/watcher integration tests are timing-sensitive: run core 3x to catch flakes.
-      - name: Test (core, 3 runs)
-        run: |
-          for i in 1 2 3; do
-            echo "::group::conflux-core run $i"
-            cargo test -p conflux-core
-            echo "::endgroup::"
-          done
-      - name: Test (cli)
-        run: cargo test -p conflux-cli
-      - name: UI install
-        run: npm --prefix ui ci
-      - name: UI lint
-        run: npm --prefix ui run lint
-      - name: UI build
-        run: npm --prefix ui run build
-
-  windows:
-    runs-on: windows-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Install pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
       # conflux-desktop embeds ui/dist at compile time, so build the UI first.
       - name: UI install
         run: npm --prefix ui ci

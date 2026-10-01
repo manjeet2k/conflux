@@ -14,7 +14,7 @@ public beta. Please read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) first.
   good places to help if you have a Windows machine with more than one network adapter.
 
 Platform policy: Windows only. Do not add Linux or macOS features or packaging; the Linux code
-paths exist only so the core tests run on WSL2 and in Linux CI.
+paths exist only so the core tests run on the WSL2 dev host. CI runs on Windows only.
 
 ## Workflow
 

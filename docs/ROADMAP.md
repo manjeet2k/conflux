@@ -303,7 +303,7 @@ Files: new `.github/workflows/ci.yml`, new `rust-toolchain.toml`
 Do: jobs — (a) **linux**: fmt, clippy core/cli with `--tests`, `cargo test -p conflux-core`, `cargo test -p conflux-cli`, UI lint+build; (b) **windows**: `cargo clippy` for core/cli/desktop with `--tests -D warnings`, `cargo test -p conflux-core -p conflux-cli -p conflux-desktop` (desktop tests *can* run here), UI build. Cache with `Swatinem/rust-cache` and `actions/setup-node` npm cache. Pin the Rust toolchain in `rust-toolchain.toml`. Run integration tests 3× on Linux to catch timing flakiness (or use `cargo nextest --retries 0 --repeat`).
 Acceptance: a PR with a deliberate fmt error fails; a clean PR passes on both OSes in < ~15 min.
 Verify: open a draft PR; screenshot or link the run in Done notes.
-Done notes: `.github/workflows/ci.yml` (linux + windows jobs, desktop tests run on Windows) and `rust-toolchain.toml` pinned to 1.98.1. **Not verified:** the workflows have never run; Linux commands were run locally and pass. Expect tuning on first run.
+Done notes: `.github/workflows/ci.yml` (Windows-only job: format, version check, UI, clippy and tests for core/cli/desktop; the Linux job was removed on the maintainer's request) and `rust-toolchain.toml` pinned to 1.98.1. **Not verified:** the workflows have never run; Linux commands were run locally and pass. Expect tuning on first run.
 
 #### R-2 — Supply-chain checks  `[x]`
 Why: a download manager is a high-trust app; dependency risk matters.

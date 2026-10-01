@@ -51,7 +51,7 @@ if let Some(name) = interface.filter(|n| !n.is_empty()) {
 ```
 
 Windows is the only supported platform; the Linux code paths below exist only so the core
-tests run on the WSL2 dev host and in Linux CI.
+tests run on the WSL2 dev host.
 
 Binding the source IP alone does not pin the egress interface on weak-host-model stacks
 (Linux by default): the kernel may still route out of another NIC carrying this NIC's

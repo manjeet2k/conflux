@@ -8,12 +8,12 @@ this page is the practical "how".
 
 **Windows 10/11 (64-bit) is the only supported and shipped platform.** The Linux-specific code in
 `conflux-core` (netlink watcher, `getifaddrs` discovery, `SO_BINDTODEVICE`, unix positional
-writes) is kept **only** so the core test suite runs on the WSL2 dev host and in Linux CI, which
-is faster and cheaper than Windows runners. Therefore:
+writes) is kept **only** so the core test suite also runs natively in the WSL2 dev loop (fast, no
+Windows round-trip). CI runs on Windows only. Therefore:
 
 - Don't add Linux or macOS features, bundles or CI release jobs, and don't claim support in docs.
-- Don't remove the Linux paths without a replacement plan for running the core tests (the
-  Windows CI job costs double minutes and the local dev loop would lose its test run).
+- The Linux paths can be removed later if the fast WSL2 loop is no longer wanted: the Windows
+  loop (`scripts/test-windows.sh`) already runs the same tests as real Windows executables.
 - Behaviour that matters to users must be correct and verified **on Windows**; passing on Linux
   is necessary but not sufficient (see roadmap task V-1).
 
@@ -61,7 +61,9 @@ tests only — it does not start the app or the webview, so it does not replace 
 ## Quality gates
 
 Run from the repo root before calling a change done. `AGENTS.md` lists the minimum; this is the
-full set CI runs ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)).
+full set. CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) is Windows-only and runs
+the Windows equivalents: format, version check, UI lint and build, clippy and tests for core, cli
+and desktop on `windows-latest`.
 
 ```bash
 cargo fmt --check
@@ -103,7 +105,7 @@ npm --prefix ui run dev                      # UI in a browser, using ui/src/dev
 
 ## CI cost
 
-Runner minutes cost money on private repos (Windows counts double). CI skips docs-only changes
+Runner minutes cost money on private repos (Windows counts double, and CI is Windows-only). CI skips docs-only changes
 and can be started by hand (`gh workflow run ci.yml`); the Security workflow runs weekly or when
 dependency files change; there are no Dependabot update PRs — a monthly "Dependency report" issue
 lists outdated dependencies instead. Add `[skip ci]` to a commit message to skip all workflows.

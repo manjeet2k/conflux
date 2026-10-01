@@ -71,7 +71,7 @@ Before any commit:
 - `cargo test -p conflux-core` (all unit & integration tests pass on Linux host)
 - `npm --prefix ui run lint && npm --prefix ui run build` (clean frontend types and bundle)
 
-*(Platform policy: Windows is the only supported and shipped platform. The Linux code paths exist solely so `conflux-core` tests run on the WSL2 dev host and in Linux CI; do not add Linux/macOS features or packaging. See `docs/DEVELOPMENT.md`.)*
+*(Platform policy: Windows is the only supported and shipped platform. The Linux code paths exist solely so `conflux-core` tests run on the WSL2 dev host (CI runs on Windows only); do not add Linux/macOS features or packaging. See `docs/DEVELOPMENT.md`.)*
 
 *(Note: Do not run bare `cargo test` without `-p conflux-core` on Linux/WSL2, as `conflux-desktop` targets Windows and requires cross-compilation).*
 
