@@ -17,7 +17,7 @@
 [![Rust](https://img.shields.io/badge/Rust-2021_Edition-orange.svg)](https://www.rust-lang.org/)
 [![UI](https://img.shields.io/badge/UI-Fluent_Design_System-blue.svg)](https://learn.microsoft.com/en-us/windows/apps/design/)
 [![Platform](https://img.shields.io/badge/Platform-Windows_10%2F11_x64-0078D4.svg)](#-platform-support)
-[![License](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-green.svg)](#license)
+[![License](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-green.svg)](#-license)
 
 
 > [!WARNING]

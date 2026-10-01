@@ -9,6 +9,7 @@ on:
     paths:
       - "site/**"
       - "scripts/build-site.mjs"
+      - "scripts/check-site-links.mjs"
       - ".github/workflows/pages.yml"
   # Re-bake the download links after a release run (build or publish) finishes. workflow_run
   # always uses this file from the default branch, so it keeps working for older tags.
@@ -39,6 +40,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/build-site.mjs
+      # Fails the deploy on any broken internal link, anchor or external URL.
+      - name: Check every link
+        run: node scripts/check-site-links.mjs
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: _site

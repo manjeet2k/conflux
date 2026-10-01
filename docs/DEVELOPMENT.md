@@ -113,6 +113,12 @@ touch it, after every Release run, and by hand (`gh workflow run pages.yml`).
   published release (betas included) so the download button works without JavaScript; it fails if
   any placeholder is left. `--offline` builds without network (links fall back to the Releases page).
   Preview: `npx --yes serve _site` or `python3 -m http.server -d _site`.
+- `node scripts/check-site-links.mjs` checks every link in `_site/` (internal files, `#anchors`,
+  og/twitter image URLs, and every external URL with a real request); the Pages workflow runs it
+  and refuses to deploy on any broken link. `--no-external` skips the network.
+- `site/demo.js` drives the interactive parts (hero packet stream, lane race, "pull the plug"
+  chunk simulation, speed calculator). They are simulations with example numbers, pause when
+  off-screen or in a hidden tab, and respect reduced motion.
 - `site/app.js` refreshes the links from GitHub's public API in the browser (CORS allowed), so the
   page is right even before the next deploy. The page's CSP only allows that one API origin.
 - Social previews: `site/og.png` (1200x630) is rendered from `site/og.svg`. To re-render after

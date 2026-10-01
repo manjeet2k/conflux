@@ -8,10 +8,10 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src https://api.github.com; base-uri 'none'; form-action 'none'">
   <meta name="referrer" content="strict-origin-when-cross-origin">
 
-  <title>Conflux: one download, every connection | Windows download manager</title>
-  <meta name="description" content="Conflux is a free, open-source Windows download manager that bonds Wi-Fi, Ethernet and phone tethering into one faster download. Resumes after drops, no telemetry. Public beta.">
+  <title>Conflux: your internet has more lanes than you use | Windows download manager</title>
+  <meta name="description" content="Conflux is a free, open-source Windows download manager that bonds Wi-Fi, Ethernet and phone tethering into one faster download. Survives drops, resumes, no telemetry. Public beta.">
   <link rel="canonical" href="{{SITE_URL}}">
-  <meta name="theme-color" content="#0a0e1a">
+  <meta name="theme-color" content="#070a14">
   <meta name="color-scheme" content="dark">
   <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
   <link rel="apple-touch-icon" href="icon-256.png">
@@ -39,6 +39,7 @@
 
   <link rel="stylesheet" href="styles.css">
   <script src="app.js" defer></script>
+  <script src="demo.js" defer></script>
 
   <script type="application/ld+json">
   {
@@ -52,7 +53,7 @@
     "downloadUrl": "{{DOWNLOAD_URL}}",
     "url": "{{SITE_URL}}",
     "image": "{{SITE_URL}}og.png",
-    "license": "https://github.com/manjeet2k/conflux#license",
+    "license": "{{REPO_URL}}/blob/main/LICENSE-MIT",
     "author": { "@type": "Person", "name": "Manjeet Singh" },
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
   }
@@ -60,106 +61,187 @@
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
+  <div class="aurora" aria-hidden="true"></div>
 
   <header class="nav">
     <a class="brand" href="./" aria-label="Conflux home">
-      <img src="icon-256.png" alt="" width="28" height="28">
+      <img src="icon-256.png" alt="" width="30" height="30">
       <span>Conflux</span>
-      <span class="pill">Beta</span>
     </a>
     <nav aria-label="Main">
-      <a href="#features">Features</a>
-      <a href="#how">How it works</a>
+      <a href="#race">Why</a>
+      <a href="#plug">Try it</a>
+      <a href="#calc">Speed</a>
       <a href="#faq">FAQ</a>
-      <a href="{{REPO_URL}}">GitHub</a>
+      <a class="gh" href="{{REPO_URL}}">GitHub</a>
     </nav>
   </header>
 
   <main id="main">
+    <!-- HERO -->
     <section class="hero">
       <div class="hero-copy">
-        <p class="eyebrow">Free &amp; open source · Windows 10/11</p>
-        <h1>One download.<br><span class="grad">Every connection.</span></h1>
-        <p class="lede">Conflux bonds your <strong>Wi-Fi, Ethernet and phone tethering</strong> into a single
-          download, so big files use all the bandwidth you already have. If a connection drops, the
-          rest carry on and nothing gets corrupted.</p>
+        <a class="chip" data-dl="notes" href="{{RELEASE_URL}}">
+          <span class="dot" aria-hidden="true"></span>
+          <span data-dl="version">Beta {{VERSION}}</span> is out · free &amp; open source <span aria-hidden="true">→</span>
+        </a>
+        <h1>Your internet has <span class="grad">more lanes</span> than you use.</h1>
+        <p class="lede">Windows sends a download down <em>one</em> connection. <strong>Conflux</strong> drives
+          your Ethernet, Wi-Fi and phone tethering <em>at the same time</em>, so a big file uses all the
+          bandwidth you already pay for.</p>
 
         <div class="cta">
           <a class="btn primary" data-dl="setup" href="{{DOWNLOAD_URL}}">
             <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3 5.5 10.5 4.5v7H3zM11.5 4.4 21 3v8.5h-9.5zM3 12.5h7.5v7L3 18.5zM11.5 12.5H21V21l-9.5-1.4z"/></svg>
             <span>Download for Windows</span>
           </a>
-          <a class="btn ghost" href="{{REPO_URL}}">View on GitHub</a>
+          <a class="btn ghost" href="#plug">See it work <span aria-hidden="true">↓</span></a>
         </div>
         <p class="meta">
-          <span data-dl="version">Beta {{VERSION}}</span> ·
-          <span data-dl="size">{{DOWNLOAD_SIZE}}</span> ·
+          <span data-dl="size">{{DOWNLOAD_SIZE}}</span> · Windows 10/11 x64 ·
           <a data-dl="offline" href="{{OFFLINE_URL}}">Offline installer</a> ·
-          <a data-dl="sums" href="{{SUMS_URL}}">SHA-256</a> ·
-          <a data-dl="notes" href="{{RELEASE_URL}}">Release notes</a>
+          <a data-dl="sums" href="{{SUMS_URL}}">SHA-256</a>
         </p>
-        <p class="note">The beta installer isn't code-signed yet, so Windows shows "Windows protected your
-          PC". Click <strong>More info → Run anyway</strong>. <a href="#faq-smartscreen">Why?</a></p>
       </div>
 
-      <!-- Illustration: three links filling one bonded download. Pure CSS, no data. -->
-      <div class="bond" role="img" aria-label="Illustration: Ethernet, Wi-Fi and 5G tether each carry part of the download and add up to one faster total.">
-        <div class="link eth"><span>Ethernet</span><i></i><b>94 MB/s</b></div>
-        <div class="link wifi"><span>Wi-Fi 6</span><i></i><b>61 MB/s</b></div>
-        <div class="link cell"><span>5G tether</span><i></i><b>38 MB/s</b></div>
-        <div class="merge" aria-hidden="true"></div>
-        <div class="link total"><span>Conflux</span><i></i><b>193 MB/s</b></div>
-        <p class="illus">Illustrative numbers. Real gains depend on your links.</p>
+      <figure class="stream-wrap">
+        <canvas id="stream" width="560" height="440" role="img" aria-label="Animation: three connections, Ethernet, Wi-Fi and 5G, stream packets into one file that fills up."></canvas>
+        <figcaption>Three connections, one file. Each packet is a byte range landing in place.</figcaption>
+      </figure>
+    </section>
+
+    <!-- RACE -->
+    <section id="race" class="race" aria-labelledby="race-h">
+      <p class="kicker">The problem</p>
+      <h2 id="race-h">Same file. Same PC. <span class="grad">Different lane count.</span></h2>
+      <div class="lanes" id="lanes">
+        <div class="lane">
+          <div class="lane-head"><span>Windows default</span><small>one connection (Ethernet)</small></div>
+          <div class="track"><div class="car solo"></div></div>
+          <output class="lane-time" data-race="solo">—</output>
+        </div>
+        <div class="lane">
+          <div class="lane-head"><span>Conflux</span><small>Ethernet + Wi-Fi + 5G together</small></div>
+          <div class="track tri"><div class="car eth"></div><div class="car wifi"></div><div class="car cell"></div></div>
+          <output class="lane-time" data-race="bond">—</output>
+        </div>
+      </div>
+      <button class="btn small" id="race-replay" type="button">Race again</button>
+      <p class="fineprint">Illustration with example speeds (300 + 200 + 100 Mbps). Bonding helps when your connections are
+        independent, such as home broadband plus a phone's 5G.</p>
+    </section>
+
+    <!-- PULL THE PLUG -->
+    <section id="plug" class="plug" aria-labelledby="plug-h">
+      <p class="kicker">Try it</p>
+      <h2 id="plug-h">Pull the plug. <span class="grad">Watch it keep going.</span></h2>
+      <p class="sub">Switch connections off mid-download. Their chunks move to the links that are still up, and the
+        file is never corrupted. This is a simulation of what the app does.</p>
+      <div class="plug-ui">
+        <div class="switches" role="group" aria-label="Connections in the simulation">
+          <button type="button" class="sw eth" data-link="eth" aria-pressed="true"><i aria-hidden="true"></i>Ethernet<b data-speed="eth">0 MB/s</b></button>
+          <button type="button" class="sw wifi" data-link="wifi" aria-pressed="true"><i aria-hidden="true"></i>Wi-Fi<b data-speed="wifi">0 MB/s</b></button>
+          <button type="button" class="sw cell" data-link="cell" aria-pressed="true"><i aria-hidden="true"></i>5G tether<b data-speed="cell">0 MB/s</b></button>
+        </div>
+        <div class="grid-wrap">
+          <div class="chunks" id="chunks" aria-hidden="true"></div>
+          <div class="grid-status">
+            <span id="plug-progress">0%</span>
+            <span id="plug-state" role="status" aria-live="polite">Downloading…</span>
+            <button type="button" class="btn small ghost" id="plug-restart">Restart</button>
+          </div>
+        </div>
+      </div>
+      <noscript><p class="sub">Turn on JavaScript to try the simulation.</p></noscript>
+    </section>
+
+    <!-- CALCULATOR -->
+    <section id="calc" class="calc" aria-labelledby="calc-h">
+      <p class="kicker">Your numbers</p>
+      <h2 id="calc-h">How long would <span class="grad">your</span> download take?</h2>
+      <div class="calc-ui">
+        <form class="calc-in" id="calc-form" aria-describedby="calc-note">
+          <label>File
+            <select id="calc-size">
+              <option value="5">Linux ISO · 5 GB</option>
+              <option value="25">4K movie · 25 GB</option>
+              <option value="80" selected>Big game · 80 GB</option>
+              <option value="150">Game + updates · 150 GB</option>
+            </select>
+          </label>
+          <label><span class="lbl eth">Ethernet</span> <output id="out-eth">300 Mbps</output>
+            <input type="range" id="in-eth" min="0" max="1000" step="10" value="300"></label>
+          <label><span class="lbl wifi">Wi-Fi</span> <output id="out-wifi">200 Mbps</output>
+            <input type="range" id="in-wifi" min="0" max="1000" step="10" value="200"></label>
+          <label><span class="lbl cell">Phone tether</span> <output id="out-cell">100 Mbps</output>
+            <input type="range" id="in-cell" min="0" max="500" step="10" value="100"></label>
+        </form>
+        <div class="calc-out" aria-live="polite">
+          <div class="res"><small>Fastest single connection</small><strong id="t-solo">—</strong></div>
+          <div class="res big"><small>With Conflux</small><strong id="t-bond">—</strong></div>
+          <div class="saved" id="t-saved">—</div>
+        </div>
+      </div>
+      <p class="fineprint" id="calc-note">Estimate: combined speed × 0.9 for overhead. Needs a server that allows ranged
+        downloads (most do) and connections that don't share one bottleneck.</p>
+    </section>
+
+    <!-- FEATURES -->
+    <section class="features" aria-labelledby="features-h">
+      <p class="kicker">What's inside</p>
+      <h2 id="features-h">Small app. <span class="grad">Serious engine.</span></h2>
+      <div class="cards">
+        <article><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 7h10M3 12h14M3 17h18" /></svg><h3>Channel bonding</h3><p>Every adapter fetches its own byte ranges. Faster links automatically take more of the file.</p></article>
+        <article><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 12a7 7 0 0 1 12-5l2-2v6h-6l2-2a4 4 0 1 0 1 5" /></svg><h3>Hot-swap connections</h3><p>Plug in a phone mid-download and it joins. Unplug it and its work moves elsewhere.</p></article>
+        <article><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 4v16M18 4v16M6 12h12" /></svg><h3>Pause, quit, resume</h3><p>Progress is saved as you go, so a crash or reboot doesn't mean starting over.</p></article>
+        <article><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" /></svg><h3>Checks every byte</h3><p>Strict range validation and change detection. A file that changed on the server is caught.</p></article>
+        <article><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z" /></svg><h3>Private by design</h3><p>No telemetry, no accounts. It talks only to the servers you download from and GitHub for updates.</p></article>
+        <article><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 4v10m-4-4 4 4 4-4M5 19h14" /></svg><h3>Signed updates</h3><p>Updates are signature-checked. Running downloads pause before installing and resume after.</p></article>
       </div>
     </section>
 
-    <section id="features" class="features" aria-labelledby="features-h">
-      <h2 id="features-h">Built for the downloads that take forever</h2>
-      <div class="grid">
-        <article><h3>Channel bonding</h3><p>Each connection fetches its own byte ranges at the same time. Faster links take more of the file automatically.</p></article>
-        <article><h3>Survives drops</h3><p>Unplug the phone or lose Wi-Fi mid-download: its chunks move to the links that are still up, and the file stays intact.</p></article>
-        <article><h3>Pause, quit, resume</h3><p>Progress is saved as you go. Resume later, or after a crash, without starting over.</p></article>
-        <article><h3>Checks every byte</h3><p>Strict range validation and change detection; a file that changed on the server is caught, not silently stitched together.</p></article>
-        <article><h3>Private by design</h3><p>No telemetry, no accounts. It only talks to the servers you download from and GitHub for updates.</p></article>
-        <article><h3>Updates itself</h3><p>Signed in-app updates. Running downloads pause before installing and resume after the restart.</p></article>
-      </div>
-    </section>
-
-    <section id="how" class="how" aria-labelledby="how-h">
-      <h2 id="how-h">How it works</h2>
+    <!-- HOW -->
+    <section class="how" aria-labelledby="how-h">
+      <p class="kicker">Under the hood</p>
+      <h2 id="how-h">Three steps, <span class="grad">zero merging.</span></h2>
       <ol>
-        <li><strong>Finds your connections.</strong> Conflux lists every network adapter that can carry traffic: Ethernet, Wi-Fi, USB or phone tethering.</li>
-        <li><strong>Splits the file.</strong> The download is cut into byte ranges, and each connection opens its own requests bound to its own address.</li>
-        <li><strong>Writes in place.</strong> Ranges land straight at their position in a pre-allocated file, so there is no merging step at the end.</li>
+        <li><b>Find</b><span>Lists every adapter that can carry traffic: Ethernet, Wi-Fi, USB or phone tethering.</span></li>
+        <li><b>Split</b><span>Cuts the file into byte ranges. Each connection requests its own, bound to its own address.</span></li>
+        <li><b>Place</b><span>Ranges land at their exact position in a pre-allocated file. No stitching at the end.</span></li>
       </ol>
-      <p class="fineprint">Bonding helps when the connections are independent (for example home broadband plus a phone's 5G).
-        Two adapters on the same router share that router's speed.</p>
     </section>
 
+    <!-- FAQ -->
     <section id="faq" class="faq" aria-labelledby="faq-h">
+      <p class="kicker">Good questions</p>
       <h2 id="faq-h">FAQ</h2>
       <details id="faq-smartscreen"><summary>Why does Windows say "unknown publisher"?</summary>
-        <p>Code-signing certificates cost money and need identity checks, so the beta isn't signed yet.
-          SmartScreen warns about every unsigned installer. Download only from this page or GitHub Releases,
-          and compare the file's SHA-256 with <code>SHA256SUMS.txt</code> from the same release:
-          <code>Get-FileHash .\Conflux_*_x64-setup.exe</code>.</p></details>
+        <p>Code-signing certificates cost money and need identity checks, so the beta isn't signed yet, and SmartScreen
+          warns about every unsigned installer. Click <strong>More info → Run anyway</strong>. Download only from this page
+          or GitHub Releases, and compare <code>Get-FileHash .\Conflux_*_x64-setup.exe</code> with the
+          <a data-dl="sums" href="{{SUMS_URL}}">SHA256SUMS.txt</a> from the same release.</p></details>
       <details><summary>Is it really free? What data does it collect?</summary>
-        <p>Yes, it's free and open source (MIT or Apache-2.0). It collects nothing. See the
+        <p>Free and open source (MIT or Apache-2.0). It collects nothing. Read the
           <a href="{{REPO_URL}}/blob/main/PRIVACY.md">privacy statement</a>.</p></details>
       <details><summary>Which systems does it run on?</summary>
-        <p>Windows 10 and 11, 64-bit. It needs the Microsoft WebView2 runtime, which current Windows already
-          has; the standard installer fetches it if missing, or use the offline installer.</p></details>
+        <p>Windows 10 and 11, 64-bit. It needs Microsoft WebView2, which current Windows already has. The standard installer
+          fetches it if it's missing, or use the <a data-dl="offline" href="{{OFFLINE_URL}}">offline installer</a>.</p></details>
       <details><summary>How much faster will my downloads be?</summary>
-        <p>Up to the sum of your connections, minus some overhead, when the server allows ranged downloads and
-          your links are independent. A single fast link gains little.</p></details>
+        <p>Up to the sum of your connections minus some overhead, when the server allows ranged downloads and your links are
+          independent. Two adapters on the same router share that router's speed. <a href="#calc">Try the calculator.</a></p></details>
       <details><summary>I found a bug or a security issue.</summary>
-        <p>Bugs: <a href="{{REPO_URL}}/issues/new/choose">open an issue</a> and paste Settings → Copy diagnostics.
-          Security problems: please follow the <a href="{{REPO_URL}}/blob/main/SECURITY.md">security policy</a> instead of a public issue.</p></details>
+        <p>Bugs: <a href="{{REPO_URL}}/issues/new/choose">open an issue</a> and paste Settings → Copy diagnostics. Security
+          problems: please follow the <a href="{{REPO_URL}}/blob/main/SECURITY.md">security policy</a> instead.</p></details>
     </section>
 
+    <!-- FINAL -->
     <section class="final">
-      <h2>Ready to use every connection?</h2>
-      <a class="btn primary" data-dl="setup" href="{{DOWNLOAD_URL}}">Download Conflux <span data-dl="version-short">{{VERSION}}</span></a>
+      <div class="final-card">
+        <h2>Light up every connection.</h2>
+        <p>Free, open source, and about <span data-dl="size">{{DOWNLOAD_SIZE}}</span>.</p>
+        <a class="btn primary big" data-dl="setup" href="{{DOWNLOAD_URL}}">Download Conflux <span data-dl="version-short">{{VERSION}}</span></a>
+        <p class="tiny">Beta · <a href="#faq-smartscreen">About the SmartScreen warning</a> · <a data-dl="notes" href="{{RELEASE_URL}}">Release notes</a></p>
+      </div>
     </section>
   </main>
 
@@ -170,9 +252,10 @@
       <a href="{{REPO_URL}}/blob/main/docs/README.md">Docs</a>
       <a href="{{REPO_URL}}/blob/main/PRIVACY.md">Privacy</a>
       <a href="{{REPO_URL}}/blob/main/SECURITY.md">Security</a>
-      <a href="{{REPO_URL}}#license">License</a>
+      <a href="{{REPO_URL}}/blob/main/LICENSE-MIT">MIT</a>
+      <a href="{{REPO_URL}}/blob/main/LICENSE-APACHE">Apache-2.0</a>
     </nav>
-    <p>© Manjeet Singh · Conflux is a beta. Use at your own risk.</p>
+    <p>© Manjeet Singh · Conflux is beta software. Use at your own risk.</p>
   </footer>
 </body>
 </html>
