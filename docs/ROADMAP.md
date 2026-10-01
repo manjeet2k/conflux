@@ -106,21 +106,20 @@ recommended default. If the user hasn't answered, **ask** (don't assume).
 
 ---
 
-## In flight (cloud agents)
+## Parked work (agents stopped early)
 
-Started on the user's request while their PC was off; each works on its own branch and pushed
-**no PRs** (PRs would trigger paid CI). Merge branches into `main` by hand after review, run the
-quality gates, then update the task statuses here. Handoff reports live on each branch as
-`docs/handoff/*.md`.
+Three agents were started for the tasks below, then stopped when the maintainer powered off their
+PC (they ran locally, not in the cloud). Nothing here is finished; start fresh, using the branches
+only as a head start. Do not open PRs for them (PRs trigger paid CI); merge by hand after review.
 
-| Branch | Tasks |
-|--------|-------|
-| `roadmap/release-pipeline` | R-3, R-4, S-3, S-4, D-5, P-5, D-3 |
-| `roadmap/adapter-diagnostics` | V-3, P-6 (remainder) |
-| `roadmap/docs-and-windows-kit` | H-2, D-1, D-2, V-1, V-2, V-4, V-5 (documents/scripts only; the runs need Windows) |
+| Branch | Tasks | State |
+|--------|-------|-------|
+| _(none pushed)_ | R-3, R-4, S-3, S-4, D-5, P-5, D-3 | Nothing was written. Re-run from the task entries. |
+| `roadmap/adapter-diagnostics` | V-3, P-6 (remainder) | One failing test written first in `crates/conflux-core/tests/engine_integration.rs`; no implementation. |
+| `roadmap/docs-and-windows-kit` | H-2, D-1, D-2, V-1, V-2, V-4, V-5 | H-2 repo metadata commit done; `scripts/bench/` started. Rest not done. |
 
-After merging: generate the updater key locally (`node scripts/setup-updater-key.mjs`), set the
-GitHub secrets it lists, and make the repo public before cutting the first beta (B-1).
+Plan when picking these up: generate the updater key locally (S-3 task entry), set the GitHub
+secrets it lists, and make the repo public before cutting the first beta (B-1).
 
 ## Phase map
 
