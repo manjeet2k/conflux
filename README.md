@@ -1,8 +1,18 @@
 # Conflux ⚡
 
+<p align="center">
+  <a href="https://manjeet2k.github.io/conflux/"><img src="site/og.png" alt="Conflux: one download, every connection. Bond Wi-Fi, Ethernet and phone tethering into one faster download on Windows." width="100%"></a>
+</p>
+
+<p align="center">
+  <a href="https://manjeet2k.github.io/conflux/"><img alt="Download for Windows" src="https://img.shields.io/badge/Download_for_Windows-10%2F11_x64-0078D4?style=for-the-badge"></a>
+  <a href="https://github.com/manjeet2k/conflux/releases"><img alt="Latest beta" src="https://img.shields.io/github/v/release/manjeet2k/conflux?include_prereleases&label=latest&style=for-the-badge&color=8b5cf6"></a>
+  <a href="https://github.com/manjeet2k/conflux/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/manjeet2k/conflux/total?style=for-the-badge&color=34d399"></a>
+</p>
+
 > **Next-Generation Multi-Source & Multi-Interface Download Accelerator**  
 > *Channel bonding across Wi-Fi, Ethernet, and 4G/5G mobile tethering built in Rust & Microsoft Fluent Design.*  
-> **Windows 10/11 (64-bit) only · public beta in preparation**
+> **Windows 10/11 (64-bit) only · public beta** · [Website](https://manjeet2k.github.io/conflux/)
 
 [![Rust](https://img.shields.io/badge/Rust-2021_Edition-orange.svg)](https://www.rust-lang.org/)
 [![UI](https://img.shields.io/badge/UI-Fluent_Design_System-blue.svg)](https://learn.microsoft.com/en-us/windows/apps/design/)

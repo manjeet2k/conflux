@@ -3,6 +3,7 @@
 | Doc | Read it when you want to… |
 |-----|---------------------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | understand how channel bonding, chunk scheduling, resume, the watcher and the desktop app work (kept in step with the code) |
+| [../site/](../site/) | edit the GitHub Pages landing page (https://manjeet2k.github.io/conflux/); see DEVELOPMENT.md, "Website" |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | set up, run the quality gates, test, version, and understand CI cost |
 | [RELEASING.md](RELEASING.md) | cut a beta release: changelog, version, tag, CI draft, update smoke test, rollback, updater key |
 | [ROADMAP.md](ROADMAP.md) | see what is left before the public beta and pick up a task (run `node scripts/roadmap-status.mjs` for a status summary) |

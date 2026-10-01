@@ -103,6 +103,25 @@ npm --prefix ui run dev                      # UI in a browser, using ui/src/dev
   Linux anyway, see the [Windows cross-compilation guide](guides/windows-cross-compilation.md).
 - Add a line under *Unreleased* in [`CHANGELOG.md`](../CHANGELOG.md) for every user-visible change.
 
+## Website (GitHub Pages)
+
+The landing page lives in `site/` (plain HTML, CSS and one small script, no build tooling) and is
+deployed to https://manjeet2k.github.io/conflux/ by `.github/workflows/pages.yml` on pushes that
+touch it, after every Release run, and by hand (`gh workflow run pages.yml`).
+
+- `node scripts/build-site.mjs` writes `_site/`, filling `{{PLACEHOLDERS}}` with the newest
+  published release (betas included) so the download button works without JavaScript; it fails if
+  any placeholder is left. `--offline` builds without network (links fall back to the Releases page).
+  Preview: `npx --yes serve _site` or `python3 -m http.server -d _site`.
+- `site/app.js` refreshes the links from GitHub's public API in the browser (CORS allowed), so the
+  page is right even before the next deploy. The page's CSP only allows that one API origin.
+- Social previews: `site/og.png` (1200x630) is rendered from `site/og.svg`. To re-render after
+  editing the SVG, in a scratch folder: `npm i @resvg/resvg-js@2` and run a few lines of
+  `new Resvg(svg, { fitTo: { mode: "width", value: 1200 }, font: { loadSystemFonts: true } }).render().asPng()`.
+  Check previews with a social card validator after deploying.
+- A README cannot embed the page (GitHub strips iframes and scripts); the README links to it with
+  the banner image and badges instead.
+
 ## CI cost
 
 The repository is public, so standard GitHub runners are free; CI is still Windows-only and slow, so it skips docs-only changes

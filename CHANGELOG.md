@@ -9,6 +9,9 @@ All notable changes to Conflux are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Project website at https://manjeet2k.github.io/conflux/ with direct download links, social preview cards and an FAQ.
+
 ## [0.2.0-beta.1] - 2026-10-01
 
 First public beta. **Windows 10/11 (64-bit) only. The installer is not code-signed yet**, so

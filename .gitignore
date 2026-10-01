@@ -54,3 +54,6 @@ updater*.key*
 
 # Claude Code agent worktrees (local scratch checkouts)
 .claude/worktrees/
+
+# GitHub Pages build output (scripts/build-site.mjs)
+_site/
