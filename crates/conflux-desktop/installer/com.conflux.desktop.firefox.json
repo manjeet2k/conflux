@@ -1,0 +1,9 @@
+{
+  "name": "com.conflux.desktop",
+  "description": "Conflux Download Accelerator Native Messaging Host",
+  "path": "conflux-desktop.exe",
+  "type": "stdio",
+  "allowed_extensions": [
+    "conflux@conflux.app"
+  ]
+}

@@ -1,5 +1,6 @@
 mod adapter_updates;
 mod adapters;
+pub mod browser_bridge;
 mod commands;
 mod diagnostics;
 mod fileutil;
@@ -10,6 +11,23 @@ mod settings;
 mod state;
 mod tray;
 mod updater;
+
+/// Entry point when invoked by Chrome, Edge, or Firefox as a Native Messaging Host.
+pub fn run_native_host() {
+    browser_bridge::run_native_host();
+}
+
+pub fn register_browser_integration() -> std::io::Result<()> {
+    browser_bridge::register_browser_integration()
+}
+
+pub fn unregister_browser_integration() -> std::io::Result<()> {
+    browser_bridge::unregister_browser_integration()
+}
+
+pub fn is_browser_integration_registered() -> bool {
+    browser_bridge::is_browser_integration_registered()
+}
 
 use history::HistoryStore;
 use state::AppState;
@@ -52,6 +70,9 @@ pub fn run() {
                 "Second instance launched; focusing the main window"
             );
             tray::show_main_window(app);
+            if let Some(payload) = browser_bridge::parse_cli_download_args(&args) {
+                let _ = app.emit("external-download", payload);
+            }
             let _ = app.emit("second-instance", args);
         }))
         .plugin(tauri_plugin_opener::init())
@@ -94,6 +115,12 @@ pub fn run() {
             app.manage(updater::PendingUpdate::default());
             for notice in [settings_notice, history_notice].into_iter().flatten() {
                 app.state::<AppState>().push_notice(notice);
+            }
+
+            let cli_args: Vec<String> = std::env::args().collect();
+            if let Some(payload) = browser_bridge::parse_cli_download_args(&cli_args) {
+                info!(url = %payload.url, "Cold start with external download request");
+                app.state::<AppState>().set_pending_download(payload);
             }
 
             if let Err(e) = tray::setup_tray(app.handle()) {
@@ -205,6 +232,9 @@ pub fn run() {
             commands::folder_exists,
             commands::get_diagnostics,
             commands::open_logs_folder,
+            commands::take_pending_download,
+            commands::get_browser_integration_status,
+            commands::register_browser_extension,
             updater::check_for_update,
             updater::install_update,
             updater::open_about_link,

@@ -1,4 +1,5 @@
 use crate::adapters::{adapter_names, adapter_stat, AdapterInfo};
+use crate::browser_bridge::ExternalDownloadPayload;
 use crate::history::HistoryStore;
 use crate::redact::redact_error;
 use crate::settings::{self, Settings};
@@ -6,7 +7,7 @@ use crate::state::{AppState, DownloadTaskState, TaskHandle, TaskStatus};
 use conflux_core::{
     discover_adapters as core_discover, remove_resume_sidecar, resume_sidecar_path,
     sanitize_filename, AdapterUpdate, DownloadCancelled, DownloadEngine, DownloadProbe,
-    NetworkAdapter, ProgressUpdate,
+    NetworkAdapter, ProgressUpdate, RequestHeaders,
 };
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -171,13 +172,16 @@ pub struct ProbeResult {
 }
 
 #[tauri::command]
-pub async fn probe_url(url: String) -> Result<ProbeResult, String> {
+pub async fn probe_url(
+    url: String,
+    headers: Option<RequestHeaders>,
+) -> Result<ProbeResult, String> {
     let url = url.trim().to_string();
     if url.is_empty() {
         return Err("Download URL is empty".to_string());
     }
     let probe = DownloadEngine::default()
-        .probe(&url)
+        .probe_with_headers(&url, headers)
         .await
         .map_err(|e| redact_error(&format!("{e:#}")))?;
     Ok(ProbeResult {
@@ -196,6 +200,7 @@ pub async fn start_download(
     url: String,
     save_dir: String,
     filename: Option<String>,
+    headers: Option<RequestHeaders>,
 ) -> Result<DownloadTaskState, String> {
     let url = url.trim().to_string();
     if url.is_empty() {
@@ -208,7 +213,7 @@ pub async fn start_download(
 
     // Probe exactly once; the same probe is handed to the engine.
     let probe = engine
-        .probe(&url)
+        .probe_with_headers(&url, headers)
         .await
         .map_err(|e| format!("Probe failed: {}", redact_error(&format!("{e:#}"))))?;
 
@@ -570,6 +575,31 @@ pub async fn update_settings(
 #[tauri::command]
 pub fn take_startup_notices(state: State<'_, AppState>) -> Vec<String> {
     state.take_notices()
+}
+
+/// Returns any pending external download request from the browser extension or CLI (on cold start).
+#[tauri::command]
+pub fn take_pending_download(state: State<'_, AppState>) -> Option<ExternalDownloadPayload> {
+    state.take_pending_download()
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct BrowserIntegrationStatus {
+    pub registered: bool,
+}
+
+/// Checks whether Conflux is registered as a native messaging host in the OS.
+#[tauri::command]
+pub fn get_browser_integration_status() -> BrowserIntegrationStatus {
+    BrowserIntegrationStatus {
+        registered: crate::browser_bridge::is_browser_integration_registered(),
+    }
+}
+
+/// Registers the native messaging hosts and conflux:// protocol handler in HKCU.
+#[tauri::command]
+pub fn register_browser_extension() -> Result<(), String> {
+    crate::browser_bridge::register_browser_integration().map_err(|e| e.to_string())
 }
 
 /// Whether `path` is an existing directory (the Settings page warns when the default
@@ -1451,5 +1481,12 @@ mod tests {
             zone_identifier_contents("https://example.com/a\r\nZoneId=0"),
             "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://example.com/aZoneId=0\r\n"
         );
+    }
+
+    #[test]
+    fn test_browser_integration_status_smoke() {
+        let status = get_browser_integration_status();
+        // Just verify it returns a valid boolean without panicking
+        let _ = status.registered;
     }
 }

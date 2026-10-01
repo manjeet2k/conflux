@@ -111,6 +111,8 @@ pub struct AppState {
     pub adapter_defaults: std::sync::Mutex<HashMap<String, bool>>,
     /// One-shot messages for the UI (e.g. a data file was reset), drained by the UI once.
     notices: std::sync::Mutex<Vec<String>>,
+    /// Pending external download from browser extension or command line on cold start.
+    pending_download: std::sync::Mutex<Option<crate::browser_bridge::ExternalDownloadPayload>>,
 }
 
 impl AppState {
@@ -132,7 +134,18 @@ impl AppState {
             last_adapters: Arc::new(RwLock::new(Vec::new())),
             adapter_defaults: std::sync::Mutex::new(HashMap::new()),
             notices: std::sync::Mutex::new(Vec::new()),
+            pending_download: std::sync::Mutex::new(None),
         }
+    }
+
+    pub fn set_pending_download(&self, payload: crate::browser_bridge::ExternalDownloadPayload) {
+        if let Ok(mut slot) = self.pending_download.lock() {
+            *slot = Some(payload);
+        }
+    }
+
+    pub fn take_pending_download(&self) -> Option<crate::browser_bridge::ExternalDownloadPayload> {
+        self.pending_download.lock().ok()?.take()
     }
 
     pub fn push_notice(&self, notice: String) {

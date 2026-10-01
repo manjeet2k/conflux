@@ -644,6 +644,13 @@ pub fn open_about_link(app: AppHandle, target: String) -> Result<(), String> {
             .opener()
             .open_url(format!("{REPO_URL}/releases"), None::<&str>)
             .map_err(|e| format!("Could not open the browser: {e}")),
+        "extension" => app
+            .opener()
+            .open_url(
+                format!("{REPO_URL}/tree/main/extensions/conflux-browser#readme"),
+                None::<&str>,
+            )
+            .map_err(|e| format!("Could not open the browser: {e}")),
         other => Err(format!("Unknown link: {other}")),
     }
 }

@@ -13,7 +13,26 @@
 ;     explicit and the dialog says plainly that downloads are not touched. Silent/passive
 ;     uninstalls and updates never ask and never delete anything.
 
+!macro NSIS_HOOK_POSTINSTALL
+  ; Register conflux:// URL protocol handler
+  WriteRegStr HKCU "Software\Classes\conflux" "" "URL:Conflux Protocol"
+  WriteRegStr HKCU "Software\Classes\conflux" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\conflux\DefaultIcon" "" "$INSTDIR\conflux-desktop.exe,0"
+  WriteRegStr HKCU "Software\Classes\conflux\shell\open\command" "" '"$INSTDIR\conflux-desktop.exe" "%1"'
+
+  ; Register Native Messaging Host for Chrome, Edge, and Firefox
+  WriteRegStr HKCU "Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop" "" "$INSTDIR\com.conflux.desktop.json"
+  WriteRegStr HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.conflux.desktop" "" "$INSTDIR\com.conflux.desktop.json"
+  WriteRegStr HKCU "Software\Mozilla\NativeMessagingHosts\com.conflux.desktop" "" "$INSTDIR\com.conflux.desktop.firefox.json"
+!macroend
+
 !macro NSIS_HOOK_POSTUNINSTALL
+  ; Clean up conflux:// protocol and native messaging registry entries
+  DeleteRegKey HKCU "Software\Classes\conflux"
+  DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop"
+  DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.conflux.desktop"
+  DeleteRegKey HKCU "Software\Mozilla\NativeMessagingHosts\com.conflux.desktop"
+
   ${If} $DeleteAppDataCheckboxState <> 1
   ${AndIf} $UpdateMode <> 1
   ${AndIf} $PassiveMode <> 1
