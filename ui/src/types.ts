@@ -2,6 +2,9 @@
 
 export type AdapterKind = 'ethernet' | 'wifi' | 'cellular' | 'virtual' | 'loopback' | 'other';
 
+/** Why discovery disables an adapter by default (Rust DisabledReason, snake_case). */
+export type DisabledReason = 'loopback' | 'link_local' | 'no_ipv4' | 'virtual';
+
 // Matches Rust AdapterInfo
 export interface AdapterInfo {
   id: string;
@@ -14,6 +17,8 @@ export interface AdapterInfo {
   /** The engine can bind to it (IPv4, not loopback, not link-local). */
   usable: boolean;
   kind: AdapterKind;
+  /** Set when discovery disables the adapter by default, whatever the user chose since. */
+  disabled_reason: DisabledReason | null;
 }
 
 // Matches Rust TaskStatus (serde rename_all = "lowercase")
@@ -72,6 +77,8 @@ export type ThemePreference = 'system' | 'light' | 'dark';
 
 // Matches Rust Settings
 export interface Settings {
+  /** Version of the on-disk layout; owned by the backend. */
+  schema_version?: number;
   theme: ThemePreference;
   /** null = the OS Downloads folder. */
   default_save_dir: string | null;
@@ -81,6 +88,35 @@ export interface Settings {
   close_to_tray: boolean;
   auto_aggregate_adapters: boolean;
   adapter_overrides?: Record<string, boolean>;
+}
+
+// Matches Rust Diagnostics (get_diagnostics): no paths, user names, URLs or full IPs.
+export interface Diagnostics {
+  app_version: string;
+  os: string;
+  arch: string;
+  webview_version: string | null;
+  adapters: {
+    name: string;
+    kind: AdapterKind;
+    enabled: boolean;
+    usable: boolean;
+    disabled_reason: DisabledReason | null;
+    /** Address with the host part masked, e.g. 192.168.1.x. */
+    subnet: string;
+  }[];
+  settings: {
+    schema_version: number;
+    theme: ThemePreference;
+    connections_per_adapter: number;
+    chunk_size_mb: number;
+    notify_on_complete: boolean;
+    close_to_tray: boolean;
+    auto_aggregate_adapters: boolean;
+    custom_save_dir: boolean;
+    adapter_override_count: number;
+  };
+  recent_errors: string[];
 }
 
 // Matches Rust WindowBackdrop (returned by apply_window_theme)

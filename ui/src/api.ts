@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AdapterInfo, DownloadTask, ProbeResult, Settings, WindowBackdrop } from './types';
+import type { AdapterInfo, Diagnostics, DownloadTask, ProbeResult, Settings, WindowBackdrop } from './types';
 
 /** Typed wrappers around the Tauri commands in crates/conflux-desktop/src/commands.rs. */
 export const api = {
@@ -20,6 +20,10 @@ export const api = {
   revealFile: (taskId: string) => invoke<void>('reveal_file', { taskId }),
   getSettings: () => invoke<Settings>('get_settings'),
   updateSettings: (settings: Settings) => invoke<Settings>('update_settings', { settings }),
+  takeStartupNotices: () => invoke<string[]>('take_startup_notices'),
+  folderExists: (path: string) => invoke<boolean>('folder_exists', { path }),
+  getDiagnostics: () => invoke<Diagnostics>('get_diagnostics'),
+  openLogsFolder: () => invoke<void>('open_logs_folder'),
   applyWindowTheme: (dark: boolean) => invoke<WindowBackdrop>('apply_window_theme', { dark }),
 };
 

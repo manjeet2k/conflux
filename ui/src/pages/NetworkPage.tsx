@@ -9,7 +9,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { ArrowClockwise20Regular } from '@fluentui/react-icons';
-import type { AdapterInfo, DownloadTask } from '../types';
+import type { AdapterInfo, DisabledReason, DownloadTask } from '../types';
 import type { SpeedSample } from '../hooks/useSpeedHistory';
 import { HISTORY_SECONDS, adapterKey } from '../hooks/useSpeedHistory';
 import { Page, SectionHeader } from '../components/Page';
@@ -49,6 +49,15 @@ const useStyles = makeStyles({
   statValue: { fontVariantNumeric: 'tabular-nums', fontWeight: tokens.fontWeightSemibold },
   muted: { color: tokens.colorNeutralForeground3 },
 });
+
+/** Short explanation of why discovery leaves an adapter off by default. */
+const disabledHint: Record<DisabledReason, string> = {
+  virtual:
+    'Off by default: it looks like a virtual adapter (VPN, bridge, container). Turn it on if it is a real connection.',
+  link_local: 'Off by default: it only has a link-local address (no DHCP lease or router).',
+  loopback: 'Off by default: loopback is never used for downloads.',
+  no_ipv4: 'Off by default: it has no IPv4 address, which the engine needs to bind.',
+};
 
 interface LiveStat {
   speed: number;
@@ -92,8 +101,9 @@ export const NetworkPage: React.FC<NetworkPageProps> = ({
   onToggleAdapter,
 }) => {
   const styles = useStyles();
-  // Display only real, ready physical adapters (hide virtual/loopback/link-local)
-  const usable = usableAdapters(adapters).filter((a) => a.kind !== 'virtual' && a.kind !== 'loopback');
+  // Bindable IPv4 adapters. Virtual-looking ones are listed too (off by default, with a hint):
+  // a real uplink can carry a virtual-looking name such as "br0".
+  const usable = usableAdapters(adapters).filter((a) => a.kind !== 'loopback');
   const stats = liveStats(tasks);
   const totalNow = history.length > 0 ? history[history.length - 1].total : 0;
   const accent = dark ? '#60CDFF' : '#005FB8';
@@ -189,6 +199,11 @@ export const NetworkPage: React.FC<NetworkPageProps> = ({
                   />
                 </div>
               </div>
+              {!a.enabled && a.disabled_reason && (
+                <Caption1 className={styles.muted} style={{ display: 'block', marginBottom: '8px' }}>
+                  {disabledHint[a.disabled_reason]}
+                </Caption1>
+              )}
               <div className={styles.stats}>
                 <div className={styles.stat}>
                   <Caption1 className={styles.muted}>Speed</Caption1>

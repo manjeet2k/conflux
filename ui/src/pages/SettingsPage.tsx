@@ -8,11 +8,13 @@ import {
   PuzzlePiece20Regular,
   Info20Regular,
   Navigation20Regular,
+  Warning20Regular,
+  Bug20Regular,
 } from '@fluentui/react-icons';
 import { open } from '@tauri-apps/plugin-dialog';
 import { downloadDir } from '@tauri-apps/api/path';
 import { getVersion } from '@tauri-apps/api/app';
-import { errorText } from '../api';
+import { api, errorText } from '../api';
 import type { Settings, ThemePreference } from '../types';
 import { Page, SectionHeader, SettingsCard } from '../components/Page';
 
@@ -26,6 +28,14 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
   },
   dropdown: { minWidth: '160px' },
+  warning: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '8px 12px',
+    color: tokens.colorPaletteDarkOrangeForeground1,
+  },
+  buttons: { display: 'flex', gap: '8px' },
 });
 
 const themeLabels: Record<ThemePreference, string> = { system: 'Use system setting', light: 'Light', dark: 'Dark' };
@@ -43,11 +53,44 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
   const styles = useStyles();
   const [osDownloads, setOsDownloads] = useState('');
   const [version, setVersion] = useState('');
+  // The folder last found missing; the warning shows only while it is still the chosen one.
+  const [missingDir, setMissingDir] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     downloadDir().then(setOsDownloads).catch(() => {});
     getVersion().then(setVersion).catch(() => {});
   }, []);
+
+  // Warn when the chosen default folder is gone (e.g. an unplugged drive).
+  useEffect(() => {
+    const dir = settings.default_save_dir;
+    if (!dir) return;
+    let current = true;
+    api
+      .folderExists(dir)
+      .then((exists) => current && setMissingDir(exists ? null : dir))
+      .catch(() => current && setMissingDir(null));
+    return () => {
+      current = false;
+    };
+  }, [settings.default_save_dir]);
+  const folderMissing = settings.default_save_dir !== null && missingDir === settings.default_save_dir;
+
+  const copyDiagnostics = async () => {
+    try {
+      const diagnostics = await api.getDiagnostics();
+      await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2500);
+    } catch (e) {
+      onError(`Couldn't copy diagnostics: ${errorText(e)}`);
+    }
+  };
+
+  const openLogs = () => {
+    api.openLogsFolder().catch((e) => onError(`Couldn't open the log folder: ${errorText(e)}`));
+  };
 
   const browse = async () => {
     try {
@@ -104,6 +147,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
           )}
           <Button onClick={browse}>Browse</Button>
         </SettingsCard>
+        {folderMissing && (
+          <div className={styles.warning} role="alert">
+            <Warning20Regular />
+            <Text size={200}>
+              This folder no longer exists (is the drive connected?). Downloads will fail until you pick another
+              folder or reset it.
+            </Text>
+          </div>
+        )}
         <SettingsCard
           icon={<PlugConnected20Regular />}
           title="Connections per adapter"
@@ -184,6 +236,18 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
           label={settings.notify_on_complete ? 'On' : 'Off'}
           labelPosition="before"
         />
+      </SettingsCard>
+
+      <SectionHeader>Support</SectionHeader>
+      <SettingsCard
+        icon={<Bug20Regular />}
+        title="Diagnostics"
+        description="Copy app version, system, adapter and error details for a bug report. Contains no file paths, user names, URLs or full IP addresses."
+      >
+        <div className={styles.buttons}>
+          <Button onClick={copyDiagnostics}>{copied ? 'Copied' : 'Copy diagnostics'}</Button>
+          <Button onClick={openLogs}>Open logs folder</Button>
+        </div>
       </SettingsCard>
 
       <SectionHeader>About</SectionHeader>

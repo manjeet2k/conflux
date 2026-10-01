@@ -100,11 +100,19 @@ export const App: React.FC = () => {
         <Toast>
           <ToastTitle>{title}</ToastTitle>
         </Toast>,
-        { intent, timeout: intent === 'error' ? 8000 : 3000 }
+        { intent, timeout: intent === 'error' || intent === 'warning' ? 8000 : 3000 }
       ),
     [dispatchToast]
   );
   const onError = useCallback((message: string) => notify('error', message), [notify]);
+
+  // One-time messages from startup, e.g. a damaged data file was reset (backup kept).
+  useEffect(() => {
+    api
+      .takeStartupNotices()
+      .then((notices) => notices.forEach((n) => notify('warning', n)))
+      .catch((e) => console.error('Failed to read startup notices:', e));
+  }, [notify]);
 
   const { settings, loaded: settingsLoaded, update: updateSettings } = useSettings(onError);
   const { dark, mica } = useWindowTheme(settings.theme);

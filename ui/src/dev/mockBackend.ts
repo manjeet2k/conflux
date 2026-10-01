@@ -3,17 +3,18 @@
 // main.tsx only imports it when running outside Tauri in dev mode.
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
-import type { AdapterInfo, DownloadTask, Settings } from '../types';
+import type { AdapterInfo, Diagnostics, DownloadTask, Settings } from '../types';
 import { NETWORK_ADAPTERS_CHANGED_EVENT, PROGRESS_EVENT } from '../types';
 
 const MB = 1024 * 1024;
 const adapters: AdapterInfo[] = [
-  { id: 'Ethernet:192.168.1.24', name: 'Ethernet', ip: '192.168.1.24', is_ipv4: true, is_loopback: false, enabled: true, usable: true, kind: 'ethernet' },
-  { id: 'Wi-Fi:192.168.0.105', name: 'Wi-Fi', ip: '192.168.0.105', is_ipv4: true, is_loopback: false, enabled: true, usable: true, kind: 'wifi' },
-  { id: 'Cellular:10.44.2.9', name: 'Cellular', ip: '10.44.2.9', is_ipv4: true, is_loopback: false, enabled: true, usable: true, kind: 'cellular' },
-  { id: 'vEthernet (WSL):172.24.0.1', name: 'vEthernet (WSL)', ip: '172.24.0.1', is_ipv4: true, is_loopback: false, enabled: false, usable: true, kind: 'virtual' },
-  { id: 'Ethernet:fe80::4022:7688:97ea:1', name: 'Ethernet', ip: 'fe80::4022:7688:97ea:1', is_ipv4: false, is_loopback: false, enabled: false, usable: false, kind: 'ethernet' },
-  { id: 'Loopback:127.0.0.1', name: 'Loopback Pseudo-Interface 1', ip: '127.0.0.1', is_ipv4: true, is_loopback: true, enabled: false, usable: false, kind: 'loopback' },
+  { id: 'Ethernet:192.168.1.24', name: 'Ethernet', ip: '192.168.1.24', is_ipv4: true, is_loopback: false, enabled: true, usable: true, kind: 'ethernet', disabled_reason: null },
+  { id: 'Wi-Fi:192.168.0.105', name: 'Wi-Fi', ip: '192.168.0.105', is_ipv4: true, is_loopback: false, enabled: true, usable: true, kind: 'wifi', disabled_reason: null },
+  { id: 'Cellular:10.44.2.9', name: 'Cellular', ip: '10.44.2.9', is_ipv4: true, is_loopback: false, enabled: true, usable: true, kind: 'cellular', disabled_reason: null },
+  { id: 'vEthernet (WSL):172.24.0.1', name: 'vEthernet (WSL)', ip: '172.24.0.1', is_ipv4: true, is_loopback: false, enabled: false, usable: true, kind: 'virtual', disabled_reason: 'virtual' },
+  { id: 'Ethernet:fe80::4022:7688:97ea:1', name: 'Ethernet', ip: 'fe80::4022:7688:97ea:1', is_ipv4: false, is_loopback: false, enabled: false, usable: false, kind: 'ethernet', disabled_reason: 'link_local' },
+  { id: 'br0:192.168.50.2', name: 'br0', ip: '192.168.50.2', is_ipv4: true, is_loopback: false, enabled: false, usable: true, kind: 'virtual', disabled_reason: 'virtual' },
+  { id: 'Loopback:127.0.0.1', name: 'Loopback Pseudo-Interface 1', ip: '127.0.0.1', is_ipv4: true, is_loopback: true, enabled: false, usable: false, kind: 'loopback', disabled_reason: 'loopback' },
 ];
 const speeds = [9.5 * MB, 6.2 * MB, 3.1 * MB];
 // Mirrors crates/conflux-desktop/src/settings.rs.
@@ -165,6 +166,42 @@ export function installMockBackend() {
             adapter_overrides: settings.adapter_overrides,
           };
           return { ...settings, adapter_overrides: { ...settings.adapter_overrides } };
+        }
+        case 'take_startup_notices':
+          return [];
+        case 'folder_exists':
+          return !String(args.path).startsWith('Z:');
+        case 'open_logs_folder':
+          return null;
+        case 'get_diagnostics': {
+          // Same shape and redaction rules as the backend: no paths, user names, URLs, full IPs.
+          const diag: Diagnostics = {
+            app_version: '0.1.0',
+            os: 'windows',
+            arch: 'x86_64',
+            webview_version: '130.0.2849.80',
+            adapters: adapters.map((a) => ({
+              name: a.name,
+              kind: a.kind,
+              enabled: a.enabled,
+              usable: a.usable,
+              disabled_reason: a.disabled_reason,
+              subnet: a.is_ipv4 ? a.ip.replace(/\.\d+$/, '.x') : '<ipv6>',
+            })),
+            settings: {
+              schema_version: 1,
+              theme: settings.theme,
+              connections_per_adapter: settings.connections_per_adapter,
+              chunk_size_mb: settings.chunk_size_mb,
+              notify_on_complete: settings.notify_on_complete,
+              close_to_tray: settings.close_to_tray,
+              auto_aggregate_adapters: settings.auto_aggregate_adapters,
+              custom_save_dir: settings.default_save_dir !== null,
+              adapter_override_count: Object.keys(settings.adapter_overrides ?? {}).length,
+            },
+            recent_errors: ['2026-10-01T10:00:00Z  WARN conflux_desktop_lib: example warning from 10.44.2.x'],
+          };
+          return diag;
         }
         case 'apply_window_theme':
           return { mica: false };
