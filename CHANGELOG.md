@@ -9,7 +9,16 @@ All notable changes to Conflux are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0-beta.2] - 2026-10-01
+
 ### Added
+- **Browser Extension Integration:** Native messaging bridge and browser extension for Google Chrome, Microsoft Edge, and Mozilla Firefox.
+  - Context menu integration: Right-click any link or file to download with Conflux.
+  - Optional auto-interception of browser downloads with configurable exclusions and file extension filters.
+  - Secure credential forwarding: Passes session cookies, referer, and user-agent headers so authenticated downloads succeed.
+  - Safe cookie boundary: Origin-matching protection prevents cookie leakage if a download URL is edited in the dialog.
+  - Handoff queue: Rapid sequential downloads from the browser queue gracefully in the Add Download dialog.
+  - Settings page integration: Native messaging host status indicator, setup guide link, and on-demand registration button.
 - Project website at https://manjeet2k.github.io/conflux/: frosted-glass hero that fits the first screen on any device, direct download links, a speed calculator, a "pull the plug" simulation, FAQ and social preview cards. Fonts are self-hosted; the page makes no third-party requests except GitHub's API for the latest release.
 
 ## [0.2.0-beta.1] - 2026-10-01

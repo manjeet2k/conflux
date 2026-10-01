@@ -1,7 +1,7 @@
 {
   "name": "conflux-ui",
   "private": true,
-  "version": "0.2.0-beta.1",
+  "version": "0.2.0-beta.2",
   "description": "Conflux Desktop - Multi-Interface Download Accelerator",
   "author": "Manjeet Singh <manjeetsgh11@gmail.com>",
   "license": "MIT OR Apache-2.0",
