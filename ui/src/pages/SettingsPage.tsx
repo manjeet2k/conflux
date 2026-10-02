@@ -324,7 +324,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
           title="Browser extension"
           description={
             browserHostRegistered
-              ? 'Conflux native messaging host is registered. Install or load the browser extension in Chrome, Edge, or Firefox to capture downloads.'
+              ? 'Conflux native messaging host is registered for Chrome, Edge, Brave, and Firefox. Install or load the extension to capture downloads.'
               : 'Conflux native messaging host is not registered. Register the host to enable browser extension communication.'
           }
         >
@@ -338,8 +338,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
                 {browserHostRegistered ? 'Host Registered' : 'Not Registered'}
               </Badge>
             )}
-            <Button appearance="primary" onClick={() => api.openAboutLink('extension')}>
-              Setup guide
+            <Button appearance="secondary" onClick={() => api.openAboutLink('extension-chrome')}>
+              Chrome / Edge / Brave
+            </Button>
+            <Button appearance="secondary" onClick={() => api.openAboutLink('extension-firefox')}>
+              Firefox
             </Button>
             <Button onClick={handleRegisterHost} disabled={registeringHost}>
               {registeringHost

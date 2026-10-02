@@ -6,7 +6,7 @@ The official browser companion for **Conflux Download Accelerator**. Seamlessly 
 
 - **Context Menu Integration**: Right-click any link, video, or audio file and choose **"Download with Conflux"**.
 - **Auth & Session Preservation**: Automatically extracts session cookies (`Cookie`) and page context (`Referer`, `User-Agent`) so private and authenticated downloads (Google Drive, cloud drives, member portals) succeed without `403 Forbidden` or `401 Unauthorized`.
-- **Automatic Interception (Opt-in)**: Intercepts browser downloads matching configurable file extensions (`.zip`, `.iso`, `.exe`, `.tar.gz`, `.mp4`, etc.) and routes them to Conflux.
+- **Automatic Interception (Opt-in)**: Intercepts browser downloads matching configurable file extensions (`.zip`, `.iso`, `.exe`, `.tar.gz`, `.mp4`, etc.) and optional minimum file size thresholds, routing them to Conflux.
 - **Zero Background Daemons**: Uses the Windows Native Messaging API and Conflux's single-instance IPC bridge (`conflux-desktop.exe --from-browser <payload>`) to wake the desktop app in under 20ms with zero persistent background servers or listening ports.
 - **Zero-Extension Fallback**: Works alongside `conflux://` protocol links for environments without extension support.
 
@@ -15,8 +15,9 @@ The official browser companion for **Conflux Download Accelerator**. Seamlessly 
 ### Chromium Browsers (Google Chrome, Microsoft Edge, Brave, Vivaldi, Opera)
 
 1. Open your browser's extensions page:
-   - Chrome / Brave: `chrome://extensions`
+   - Chrome: `chrome://extensions`
    - Edge: `edge://extensions`
+   - Brave: `brave://extensions`
 2. Enable **"Developer mode"** (top right toggle).
 3. Click **"Load unpacked"**.
 4. Select the `extensions/conflux-browser` directory in this repository.
@@ -32,9 +33,10 @@ The official browser companion for **Conflux Download Accelerator**. Seamlessly 
 
 When Conflux is installed via the Windows NSIS installer, the native messaging manifests are automatically registered in the Windows registry:
 
-- Chrome / Brave / Opera: `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop`
+- Google Chrome / Chromium / Opera / Vivaldi: `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop`
 - Microsoft Edge: `HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.conflux.desktop`
-- Firefox: `HKCU\Software\Mozilla\NativeMessagingHosts\com.conflux.desktop`
+- Brave Browser: `HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.conflux.desktop`
+- Mozilla Firefox: `HKCU\Software\Mozilla\NativeMessagingHosts\com.conflux.desktop`
 
 ### Manual / Development Registration
 
@@ -55,3 +57,4 @@ conflux-desktop.exe --unregister-browser
 - **No Remote Telemetry**: The extension contains no analytics, ads, or external scripts.
 - **Localhost Only**: Communication occurs strictly over OS-level stdio pipes directly with the local `conflux-desktop.exe` binary.
 - **Cookie Scope**: Cookies are read exclusively for the target download domain at the moment of download dispatch and passed directly into Conflux's secure in-memory download engine.
+- **Privacy Policy**: Read our complete [Browser Extension Privacy Policy](https://manjeet2k.github.io/conflux/privacy.html).

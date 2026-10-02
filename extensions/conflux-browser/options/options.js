@@ -17,6 +17,7 @@ const DEFAULT_SETTINGS = {
 document.addEventListener("DOMContentLoaded", () => {
   const interceptDownloads = document.getElementById("interceptDownloads");
   const fileExtensions = document.getElementById("fileExtensions");
+  const minSizeMb = document.getElementById("minSizeMb");
   const excludedDomains = document.getElementById("excludedDomains");
   const saveBtn = document.getElementById("saveBtn");
   const resetBtn = document.getElementById("resetBtn");
@@ -27,6 +28,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function populate(settings) {
     interceptDownloads.checked = !!settings.interceptDownloads;
     fileExtensions.value = (settings.fileExtensions || []).join(", ");
+    minSizeMb.value = settings.minSizeMb !== undefined ? settings.minSizeMb : 10;
     excludedDomains.value = (settings.excludedDomains || []).join("\n");
   }
 
@@ -48,9 +50,12 @@ document.addEventListener("DOMContentLoaded", () => {
       .map((s) => s.trim().toLowerCase())
       .filter((s) => s.length > 0);
 
+    const parsedMinSize = parseInt(minSizeMb.value, 10);
+
     const updated = {
       interceptDownloads: interceptDownloads.checked,
       fileExtensions: rawExts,
+      minSizeMb: isNaN(parsedMinSize) ? 10 : Math.max(0, parsedMinSize),
       excludedDomains: rawDomains
     };
 

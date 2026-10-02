@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="theme-color" content="#0d0628">
+  <meta name="color-scheme" content="dark">
+  <title>Privacy Policy - Conflux Browser Extension</title>
+  <meta name="description" content="Privacy policy for the Conflux Download Accelerator browser companion extension.">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{SITE_URL}}favicon-32.png">
+  <link rel="stylesheet" href="{{SITE_URL}}styles.css">
+  <style>
+    .legal-content {
+      max-width: 820px;
+      margin: 40px auto 80px;
+      padding: 0 24px;
+      color: #e2e8f0;
+      line-height: 1.7;
+    }
+    .legal-content h1 {
+      font-size: 2.2rem;
+      margin-bottom: 8px;
+      color: #ffffff;
+    }
+    .legal-content h2 {
+      font-size: 1.35rem;
+      margin-top: 36px;
+      margin-bottom: 12px;
+      color: #93c5fd;
+    }
+    .legal-content p, .legal-content ul {
+      margin-bottom: 16px;
+      font-size: 1rem;
+    }
+    .legal-content ul {
+      padding-left: 24px;
+    }
+    .legal-content li {
+      margin-bottom: 8px;
+    }
+    .legal-content code {
+      background: rgba(255, 255, 255, 0.08);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.9em;
+      color: #fca5a5;
+    }
+    .legal-date {
+      color: #94a3b8;
+      font-size: 0.9rem;
+      margin-bottom: 32px;
+    }
+    .nav-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #60a5fa;
+      text-decoration: none;
+      font-size: 0.95rem;
+      margin-bottom: 24px;
+    }
+    .nav-back:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="glow" aria-hidden="true"><i class="g-violet"></i><i class="g-pink"></i><i class="noise"></i></div>
+  <main class="legal-content">
+    <a href="{{SITE_URL}}" class="nav-back">← Back to Conflux</a>
+    <h1>Conflux Browser Extension Privacy Policy</h1>
+    <p class="legal-date">Last updated: {{BUILD_DATE}}</p>
+
+    <h2>Overview</h2>
+    <p>The Conflux browser extension is a companion utility designed for the free and open-source <strong>Conflux Download Accelerator</strong> desktop application. Its sole purpose is to send download requests from your web browser to your local Conflux desktop client.</p>
+
+    <h2>Information We Access</h2>
+    <p>When you explicitly initiate a download with Conflux (via the right-click "Download with Conflux" context menu or automatic download interception), the extension reads the following metadata strictly to fulfill your request:</p>
+    <ul>
+      <li><strong>Target URL:</strong> The address of the file being downloaded.</li>
+      <li><strong>HTTP Cookies:</strong> Session cookies for the specific domain hosting the download. These are included solely so authenticated downloads (such as cloud storage or member portals) do not fail with HTTP 401 Unauthorized or 403 Forbidden errors.</li>
+      <li><strong>Referrer URL:</strong> The HTTP <code>Referer</code> header of the originating webpage, required by some download servers to validate the request.</li>
+      <li><strong>User-Agent:</strong> The browser's User-Agent string to match request signatures expected by the host server.</li>
+      <li><strong>File Name and Size:</strong> The suggested filename and total byte length provided by the browser download event.</li>
+    </ul>
+
+    <h2>Where Your Data Goes</h2>
+    <p><strong>Your data never leaves your computer.</strong> All captured information is transmitted locally to the Conflux desktop application using the operating system's standard input and output pipes (WebExtensions Native Messaging API).</p>
+    <ul>
+      <li>We operate <strong>no remote servers, cloud backends, or third-party proxies</strong>.</li>
+      <li>No browsing activity, cookies, URLs, or download logs are ever collected, transmitted, sold, or shared with anyone.</li>
+    </ul>
+
+    <h2>Data Storage</h2>
+    <p>The extension stores your personal extension configuration (such as whether auto-interception is enabled, file extension filters, and excluded domain lists) in your browser's local or synced extension storage (<code>chrome.storage.sync</code>). No download URLs or session cookies are ever written to persistent storage by the extension.</p>
+
+    <h2>Analytics and Third-Party Code</h2>
+    <p>The Conflux browser extension contains <strong>zero tracking scripts, zero advertising networks, and zero telemetry or analytics services</strong>. It does not communicate with any external domains except the local native messaging host registered on your device.</p>
+
+    <h2>Open Source</h2>
+    <p>Conflux is fully open source under the MIT and Apache-2.0 licenses. The complete source code for both the desktop application and this browser extension is publicly verifiable on GitHub at <a href="{{REPO_URL}}" style="color: #60a5fa;">{{REPO_URL}}</a>.</p>
+
+    <h2>Contact</h2>
+    <p>If you have any questions or concerns regarding this privacy policy or the security of Conflux, please submit an inquiry or open an issue on our <a href="{{REPO_URL}}/issues" style="color: #60a5fa;">GitHub Issues page</a>.</p>
+  </main>
+</body>
+</html>

@@ -105,7 +105,13 @@ export interface UpdateInfo {
 }
 
 /** Targets `open_about_link` accepts; the backend maps them to fixed paths/URLs. */
-export type AboutLink = 'licenses' | 'repo' | 'releases' | 'extension';
+export type AboutLink =
+  | 'licenses'
+  | 'repo'
+  | 'releases'
+  | 'extension'
+  | 'extension-chrome'
+  | 'extension-firefox';
 
 // Matches Rust Diagnostics (get_diagnostics): no paths, user names, URLs or full IPs.
 export interface Diagnostics {

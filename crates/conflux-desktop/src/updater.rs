@@ -651,6 +651,20 @@ pub fn open_about_link(app: AppHandle, target: String) -> Result<(), String> {
                 None::<&str>,
             )
             .map_err(|e| format!("Could not open the browser: {e}")),
+        "extension-chrome" => app
+            .opener()
+            .open_url(
+                format!("{REPO_URL}/tree/main/extensions/conflux-browser#chromium-browsers-google-chrome-microsoft-edge-brave-vivaldi-opera"),
+                None::<&str>,
+            )
+            .map_err(|e| format!("Could not open the browser: {e}")),
+        "extension-firefox" => app
+            .opener()
+            .open_url(
+                format!("{REPO_URL}/tree/main/extensions/conflux-browser#mozilla-firefox"),
+                None::<&str>,
+            )
+            .map_err(|e| format!("Could not open the browser: {e}")),
         other => Err(format!("Unknown link: {other}")),
     }
 }

@@ -190,6 +190,12 @@ pub fn run_native_host() {
                     }),
                 );
             }
+            "open" => {
+                if let Ok(exe_path) = std::env::current_exe() {
+                    let _ = std::process::Command::new(exe_path).spawn();
+                }
+                let _ = send_response(&mut stdout, serde_json::json!({ "status": "ok" }));
+            }
             "download" | "start_download" => {
                 if let Some(raw_url) = msg.url {
                     if is_valid_url(&raw_url) {
@@ -371,6 +377,16 @@ pub fn register_browser_integration() -> std::io::Result<()> {
         ],
         vec![
             "add",
+            r"HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.conflux.desktop",
+            "/ve",
+            "/t",
+            "REG_SZ",
+            "/d",
+            &chrome_manifest_str,
+            "/f",
+        ],
+        vec![
+            "add",
             r"HKCU\Software\Mozilla\NativeMessagingHosts\com.conflux.desktop",
             "/ve",
             "/t",
@@ -398,6 +414,7 @@ pub fn unregister_browser_integration() -> std::io::Result<()> {
         r"HKCU\Software\Classes\conflux",
         r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop",
         r"HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.conflux.desktop",
+        r"HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.conflux.desktop",
         r"HKCU\Software\Mozilla\NativeMessagingHosts\com.conflux.desktop",
     ];
 
@@ -581,5 +598,15 @@ mod tests {
         });
         let msg: ExtensionMessage = serde_json::from_value(raw_json).unwrap();
         assert_eq!(msg.filename, Some("test.bin".into()));
+    }
+
+    #[test]
+    fn test_extension_message_open_action() {
+        let raw_json = serde_json::json!({
+            "action": "open"
+        });
+        let msg: ExtensionMessage = serde_json::from_value(raw_json).unwrap();
+        assert_eq!(msg.action, "open");
+        assert_eq!(msg.url, None);
     }
 }

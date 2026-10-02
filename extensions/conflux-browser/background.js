@@ -133,6 +133,14 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     return;
   }
 
+  // Check minimum file size threshold (skip files smaller than minSizeMb if size is known)
+  if (settings.minSizeMb > 0 && downloadItem.totalBytes > 0) {
+    const minBytes = settings.minSizeMb * 1024 * 1024;
+    if (downloadItem.totalBytes < minBytes) {
+      return;
+    }
+  }
+
   // Cancel and erase browser download
   chrome.downloads.cancel(downloadItem.id, () => {
     chrome.downloads.erase({ id: downloadItem.id });
