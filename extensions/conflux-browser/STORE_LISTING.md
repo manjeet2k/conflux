@@ -64,6 +64,8 @@ When submitting to the Chrome Web Store Developer Dashboard, you will be asked t
    - *Justification:* Required to save user preferences (interception toggle state, file extension filters, minimum file size threshold, and excluded domains) in synced extension storage.
 6. **`notifications`**
    - *Justification:* Required to notify the user if communication with Conflux Desktop fails or if the desktop app needs to be launched.
+7. **`tabs`**
+   - *Justification:* Required to query and update the active browser tab when launching the Conflux Desktop application via custom protocol (`conflux://open`), ensuring browser external protocol permission prompts appear in the center of the window rather than being clipped.
 
 ---
 
