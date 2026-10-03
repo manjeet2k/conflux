@@ -2,7 +2,7 @@ const NATIVE_HOST = "com.conflux.desktop";
 
 const DEFAULT_SETTINGS = {
   interceptDownloads: false,
-  minSizeMb: 10,
+  minSizeMb: 0,
   fileExtensions: [
     ".zip", ".rar", ".7z", ".tar.gz", ".tgz", ".bz2", ".xz",
     ".iso", ".img", ".bin",
@@ -36,7 +36,7 @@ async function getCookiesForUrl(url) {
     if (!cookies || cookies.length === 0) return null;
     return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
   } catch (err) {
-    console.debug("Failed to retrieve cookies for URL:", url, err);
+    console.debug("[Conflux] Failed to retrieve cookies for URL:", url, err);
     return null;
   }
 }
@@ -54,16 +54,25 @@ function showNotification(title, message) {
 
 function sendDownloadToConflux(payload) {
   return new Promise((resolve, reject) => {
+    console.log("[Conflux] Sending download payload to desktop host:", payload);
     chrome.runtime.sendNativeMessage(NATIVE_HOST, payload, (response) => {
       if (chrome.runtime.lastError) {
         const err = chrome.runtime.lastError.message;
-        console.warn("Conflux native messaging error:", err);
+        console.warn("[Conflux] Native messaging error:", err);
         showNotification(
           "Conflux Download Manager",
           "Could not communicate with Conflux Desktop. Please ensure Conflux is installed and running."
         );
         reject(new Error(err));
+      } else if (response && response.status === "error") {
+        console.warn("[Conflux] Desktop returned error:", response.message);
+        showNotification(
+          "Conflux Download Manager",
+          `Desktop rejected link: ${response.message || "Invalid URL"}`
+        );
+        reject(new Error(response.message || "Desktop rejected link"));
       } else {
+        console.log("[Conflux] Native host responded successfully:", response);
         resolve(response);
       }
     });
@@ -82,26 +91,34 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "conflux-download-link") {
     const targetUrl = info.linkUrl || info.srcUrl;
-    if (!targetUrl) return;
+    console.log("[Conflux] Context menu clicked. Target URL:", targetUrl);
+    if (!targetUrl) {
+      showNotification("Conflux", "Please right-click directly on a download link or media file.");
+      return;
+    }
 
     const referer = tab?.url || "";
     const cookies = await getCookiesForUrl(targetUrl);
+    let extractedName = null;
+    try {
+      const pathname = new URL(targetUrl).pathname;
+      const leaf = pathname.split("/").pop();
+      if (leaf && leaf.includes(".")) extractedName = leaf;
+    } catch (_) {}
 
     const payload = {
-      version: 1,
       action: "download",
       url: targetUrl,
       referer: referer || null,
       user_agent: navigator.userAgent,
       cookies: cookies || null,
-      filename: null,
-      suggested_filename: null
+      filename: extractedName
     };
 
     try {
       await sendDownloadToConflux(payload);
     } catch (e) {
-      console.error("Failed to forward download to Conflux:", e);
+      console.error("[Conflux] Failed to forward download to Conflux:", e);
     }
   }
 });
@@ -109,10 +126,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // Automatic download interception (opt-in)
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
   const settings = await getSettings();
-  if (!settings.interceptDownloads) return;
+  console.log("[Conflux] onCreated event:", downloadItem.url, "| Intercept enabled:", settings.interceptDownloads);
+  if (!settings.interceptDownloads) {
+    console.log("[Conflux] Automatic interception is disabled in settings. Skipping.");
+    return;
+  }
 
   const url = downloadItem.url || downloadItem.finalUrl;
   if (!url || url.startsWith("blob:") || url.startsWith("data:") || url.startsWith("about:")) {
+    console.log("[Conflux] In-memory, data, or blob URL. Cannot download over network socket:", url);
     return;
   }
 
@@ -120,16 +142,30 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   try {
     const parsed = new URL(url);
     if (settings.excludedDomains.some((d) => parsed.hostname === d || parsed.hostname.endsWith("." + d))) {
+      console.log("[Conflux] Excluded domain match:", parsed.hostname);
       return;
     }
   } catch {
     return;
   }
 
-  // Match file extension
-  const candidate = (downloadItem.filename || url).toLowerCase();
-  const matchedExt = settings.fileExtensions.some((ext) => candidate.endsWith(ext.toLowerCase()));
+  // Match file extension against filename AND against URL pathname (stripping query parameters)
+  let urlPath = "";
+  try {
+    const parsed = new URL(url);
+    urlPath = parsed.pathname.toLowerCase();
+  } catch {
+    urlPath = url.toLowerCase();
+  }
+
+  const candidateName = (downloadItem.filename || "").toLowerCase();
+  const matchedExt = settings.fileExtensions.some((ext) => {
+    const e = ext.toLowerCase();
+    return candidateName.endsWith(e) || urlPath.endsWith(e);
+  });
+
   if (!matchedExt) {
+    console.log("[Conflux] File extension does not match filters. Candidate:", candidateName, "urlPath:", urlPath);
     return;
   }
 
@@ -137,6 +173,7 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   if (settings.minSizeMb > 0 && downloadItem.totalBytes > 0) {
     const minBytes = settings.minSizeMb * 1024 * 1024;
     if (downloadItem.totalBytes < minBytes) {
+      console.log(`[Conflux] File size ${downloadItem.totalBytes}B is below ${settings.minSizeMb}MB threshold. Skipping.`);
       return;
     }
   }
@@ -147,23 +184,23 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   });
 
   const cookies = await getCookiesForUrl(url);
-  const extractedName = downloadItem.filename ? downloadItem.filename.split(/[\\/]/).pop() : null;
+  const extractedName = downloadItem.filename
+    ? downloadItem.filename.split(/[\\/]/).pop()
+    : (urlPath.split("/").pop() || null);
+
   const payload = {
-    version: 1,
     action: "download",
     url: url,
     referer: downloadItem.referrer || null,
     user_agent: navigator.userAgent,
     cookies: cookies || null,
-    filename: extractedName,
-    suggested_filename: extractedName,
-    total_bytes: downloadItem.totalBytes > 0 ? downloadItem.totalBytes : null
+    filename: extractedName
   };
 
   try {
     await sendDownloadToConflux(payload);
   } catch (e) {
-    console.error("Failed to auto-intercept download to Conflux:", e);
+    console.error("[Conflux] Failed to auto-intercept download to Conflux:", e);
   }
 });
 

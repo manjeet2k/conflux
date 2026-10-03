@@ -25,8 +25,10 @@ struct ExtensionMessage {
     pub action: String,
     #[serde(default)]
     pub url: Option<String>,
-    #[serde(default, alias = "suggested_filename")]
+    #[serde(default)]
     pub filename: Option<String>,
+    #[serde(default)]
+    pub suggested_filename: Option<String>,
     #[serde(default)]
     pub cookies: Option<String>,
     #[serde(default)]
@@ -201,7 +203,7 @@ pub fn run_native_host() {
                     if is_valid_url(&raw_url) {
                         let payload = ExternalDownloadPayload {
                             url: raw_url,
-                            filename: msg.filename,
+                            filename: msg.filename.or(msg.suggested_filename),
                             headers: Some(RequestHeaders {
                                 cookie: msg.cookies.filter(|c| !c.trim().is_empty()),
                                 referer: msg.referer.filter(|r| !r.trim().is_empty()),
@@ -594,10 +596,14 @@ mod tests {
         let raw_json = serde_json::json!({
             "action": "download",
             "url": "https://example.com/test.bin",
+            "filename": "test.bin",
             "suggested_filename": "test.bin"
         });
         let msg: ExtensionMessage = serde_json::from_value(raw_json).unwrap();
-        assert_eq!(msg.filename, Some("test.bin".into()));
+        assert_eq!(
+            msg.filename.or(msg.suggested_filename),
+            Some("test.bin".into())
+        );
     }
 
     #[test]

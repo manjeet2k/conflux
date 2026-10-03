@@ -30,7 +30,8 @@
     "storage",
     "cookies",
     "nativeMessaging",
-    "notifications"
+    "notifications",
+    "tabs"
   ],
   "host_permissions": [
     "<all_urls>"
