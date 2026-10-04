@@ -4,6 +4,7 @@
   "path": "conflux-desktop.exe",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://ddnnilfjdnicfekflgpibapcoakighmf/"
+    "chrome-extension://ddnnilfjdnicfekflgpibapcoakighmf/",
+    "chrome-extension://ncapjgooomipdohlolfbbknhbjcfdjml/"
   ]
 }

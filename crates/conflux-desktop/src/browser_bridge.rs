@@ -284,7 +284,8 @@ pub fn register_browser_integration() -> std::io::Result<()> {
             "path": exe_str,
             "type": "stdio",
             "allowed_origins": [
-                "chrome-extension://ddnnilfjdnicfekflgpibapcoakighmf/"
+                "chrome-extension://ddnnilfjdnicfekflgpibapcoakighmf/",
+                "chrome-extension://ncapjgooomipdohlolfbbknhbjcfdjml/"
             ]
         });
         let _ = std::fs::write(
