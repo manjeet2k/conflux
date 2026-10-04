@@ -239,7 +239,7 @@ const screenshot2Svg = `
 
   <!-- Top Hero Header -->
   <text x="640" y="80" text-anchor="middle" font-family="'Segoe UI', system-ui, sans-serif" font-weight="800" font-size="34" fill="#ffffff" letter-spacing="-0.5">Right-Click Download Acceleration</text>
-  <text x="640" y="115" text-anchor="middle" font-family="'Segoe UI', system-ui, sans-serif" font-weight="500" font-size="17" fill="#cbd5e1">Automatically preserves session cookies, referrers &amp; headers for authenticated portals</text>
+  <text x="640" y="115" text-anchor="middle" font-family="'Segoe UI', system-ui, sans-serif" font-weight="500" font-size="17" fill="#cbd5e1">Hands links and files straight to the Conflux desktop accelerator</text>
 
   <!-- Browser Window Mockup -->
   <g transform="translate(140, 160)" filter="url(#shadow2)">
@@ -290,10 +290,10 @@ const screenshot2Svg = `
     <!-- Callout Annotation Pill -->
     <g transform="translate(560, 310)">
       <rect width="340" height="110" rx="10" fill="#181136" stroke="#f88cd4" stroke-opacity="0.6" stroke-width="1.5"/>
-      <text x="20" y="32" font-family="'Segoe UI', system-ui, sans-serif" font-weight="700" font-size="14" fill="#f88cd4">Cookie &amp; Auth Pass-Through</text>
-      <text x="20" y="56" font-family="'Segoe UI', system-ui, sans-serif" font-size="12" fill="#e2e8f0">Forwards session cookies to eliminate</text>
-      <text x="20" y="74" font-family="'Segoe UI', system-ui, sans-serif" font-size="12" fill="#e2e8f0">403 Forbidden and 401 Unauthorized</text>
-      <text x="20" y="94" font-family="'Segoe UI', system-ui, sans-serif" font-size="12" fill="#38bdf8">errors on protected cloud storage links.</text>
+      <text x="20" y="32" font-family="'Segoe UI', system-ui, sans-serif" font-weight="700" font-size="14" fill="#f88cd4">Zero Website Access</text>
+      <text x="20" y="56" font-family="'Segoe UI', system-ui, sans-serif" font-size="12" fill="#e2e8f0">No host permissions, no cookies,</text>
+      <text x="20" y="74" font-family="'Segoe UI', system-ui, sans-serif" font-size="12" fill="#e2e8f0">and no tab access: only the link,</text>
+      <text x="20" y="94" font-family="'Segoe UI', system-ui, sans-serif" font-size="12" fill="#38bdf8">referrer and User-Agent go to Conflux.</text>
     </g>
   </g>
 </svg>

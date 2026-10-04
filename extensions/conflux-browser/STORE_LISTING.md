@@ -29,7 +29,8 @@ This companion extension seamlessly bridges your web browser and the Conflux Des
 KEY FEATURES
 
 • One-Click Context Menu: Right-click any link, video stream, or audio file and choose "Download with Conflux" to immediately send it to the desktop accelerator.
-• Session & Auth Preservation: Automatically forwards session cookies, Referer, and User-Agent headers to Conflux so authenticated downloads (Google Drive, cloud drives, member portals) succeed without 403 Forbidden or 401 Unauthorized errors.
+• Request Context: Forwards the Referer and User-Agent to Conflux so servers that validate them accept the hand-off.
+• Minimal Permissions: No access to website data, cookies, or your tabs.
 • Automatic Download Interception (Opt-in): Intercepts browser downloads for designated file types (.zip, .iso, .exe, .tar.gz, .mp4, etc.) and routes them to Conflux.
 • Filter Rules: Configure custom file extensions, minimum file size thresholds, and domain exclusions in the extension options.
 • Fast Native Messaging: Communicates directly with the Conflux Desktop application using the OS-level Native Messaging API without background network servers or open listening ports.
@@ -56,16 +57,14 @@ When submitting to the Chrome Web Store Developer Dashboard, you will be asked t
    - *Justification:* Required to detect when the user starts downloading a file (`chrome.downloads.onCreated`), verify whether it matches the user's interception filters, and cancel the browser download so it can be accelerated by Conflux.
 2. **`nativeMessaging`**
    - *Justification:* Required to communicate with the locally installed Conflux desktop application via the OS-level standard input/output pipe.
-3. **`cookies` & `<all_urls>` (host_permissions)**
-   - *Justification:* Required to retrieve session cookies for the specific download URL (`chrome.cookies.getAll`) so protected or authenticated downloads (e.g. cloud storage services) do not fail with HTTP 403 Forbidden errors when handed off to Conflux.
-4. **`contextMenus`**
+3. **`contextMenus`**
    - *Justification:* Required to provide the right-click "Download with Conflux" menu item on links, audio, and video elements.
-5. **`storage`**
+4. **`storage`**
    - *Justification:* Required to save user preferences (interception toggle state, file extension filters, minimum file size threshold, and excluded domains) in synced extension storage.
-6. **`notifications`**
+5. **`notifications`**
    - *Justification:* Required to notify the user if communication with Conflux Desktop fails or if the desktop app needs to be launched.
-7. **`tabs`**
-   - *Justification:* Required to query and update the active browser tab when launching the Conflux Desktop application via custom protocol (`conflux://open`), ensuring browser external protocol permission prompts appear in the center of the window rather than being clipped.
+
+*Host permissions: none requested. The extension does not read page content, cookies, or tab URLs.*
 
 ---
 
@@ -75,7 +74,7 @@ Submit this URL in the developer dashboard:
 `https://manjeet2k.github.io/conflux/privacy.html`
 
 Single-purpose statement:
-*"The single purpose of this extension is to forward user-selected download links and associated session metadata from the browser to the locally installed Conflux Desktop download manager."*
+*"The single purpose of this extension is to forward user-selected download links and their referrer and User-Agent from the browser to the locally installed Conflux Desktop download manager."*
 
 ---
 

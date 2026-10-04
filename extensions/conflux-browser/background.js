@@ -30,17 +30,6 @@ async function getSettings() {
   });
 }
 
-async function getCookiesForUrl(url) {
-  try {
-    const cookies = await chrome.cookies.getAll({ url });
-    if (!cookies || cookies.length === 0) return null;
-    return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
-  } catch (err) {
-    console.debug("[Conflux] Failed to retrieve cookies for URL:", url, err);
-    return null;
-  }
-}
-
 function showNotification(title, message) {
   if (chrome.notifications) {
     chrome.notifications.create({
@@ -54,7 +43,7 @@ function showNotification(title, message) {
 
 function sendDownloadToConflux(payload) {
   return new Promise((resolve, reject) => {
-    console.log("[Conflux] Sending download payload to desktop host:", payload);
+    console.log("[Conflux] Sending download to desktop host:", payload.url);
     chrome.runtime.sendNativeMessage(NATIVE_HOST, payload, (response) => {
       if (chrome.runtime.lastError) {
         const err = chrome.runtime.lastError.message;
@@ -88,7 +77,7 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+chrome.contextMenus.onClicked.addListener(async (info) => {
   if (info.menuItemId === "conflux-download-link") {
     const targetUrl = info.linkUrl || info.srcUrl;
     console.log("[Conflux] Context menu clicked. Target URL:", targetUrl);
@@ -97,8 +86,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       return;
     }
 
-    const referer = tab?.url || "";
-    const cookies = await getCookiesForUrl(targetUrl);
+    const referer = info.pageUrl || "";
     let extractedName = null;
     try {
       const pathname = new URL(targetUrl).pathname;
@@ -111,7 +99,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       url: targetUrl,
       referer: referer || null,
       user_agent: navigator.userAgent,
-      cookies: cookies || null,
       filename: extractedName
     };
 
@@ -178,12 +165,6 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     }
   }
 
-  // Cancel and erase browser download
-  chrome.downloads.cancel(downloadItem.id, () => {
-    chrome.downloads.erase({ id: downloadItem.id });
-  });
-
-  const cookies = await getCookiesForUrl(url);
   const extractedName = downloadItem.filename
     ? downloadItem.filename.split(/[\\/]/).pop()
     : (urlPath.split("/").pop() || null);
@@ -193,14 +174,17 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
     url: url,
     referer: downloadItem.referrer || null,
     user_agent: navigator.userAgent,
-    cookies: cookies || null,
     filename: extractedName
   };
 
   try {
     await sendDownloadToConflux(payload);
+    // Only drop the browser download once Conflux has accepted it
+    chrome.downloads.cancel(downloadItem.id, () => {
+      chrome.downloads.erase({ id: downloadItem.id });
+    });
   } catch (e) {
-    console.error("[Conflux] Failed to auto-intercept download to Conflux:", e);
+    console.error("[Conflux] Failed to auto-intercept download to Conflux; leaving browser download running:", e);
   }
 });
 
