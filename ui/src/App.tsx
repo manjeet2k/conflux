@@ -186,12 +186,15 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  const removeTasks = tasks.filter((t) => removeIds.includes(t.id));
+  const removeOpen = removeTasks.length > 0;
+
   // Read by `openAdd` so a second open request (tray, paste, shortcut) never resets an open
   // form or stacks a dialog on top of another one (e.g. the Remove dialog).
   const dialogOpenRef = useRef(false);
   useEffect(() => {
-    dialogOpenRef.current = addOpen || removeIds.length > 0;
-  }, [addOpen, removeIds]);
+    dialogOpenRef.current = addOpen || removeOpen;
+  }, [addOpen, removeOpen]);
 
   const openAdd = useCallback(
     (url = '', filename: string | null = null, headers: RequestHeaders | null = null) => {
@@ -561,7 +564,7 @@ export const App: React.FC = () => {
         onCancelAll={handleCancelAll}
       />
       <RemoveDialog
-        tasks={tasks.filter((t) => removeIds.includes(t.id))}
+        tasks={removeTasks}
         onConfirm={(ids, deleteFiles) => {
           remove(ids, deleteFiles);
           setSelected(new Set());

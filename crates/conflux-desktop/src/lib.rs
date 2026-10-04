@@ -63,10 +63,26 @@ pub fn run() {
     tauri::Builder::default()
         // Registered first so a second launch exits before touching shared data files.
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            // Args are logged redacted (they may be a download URL) and forwarded to the UI
+            // Args are logged redacted (they may be a download URL or hex payload) and forwarded to the UI
             // for later protocol-handler / "open with" support.
+            let safe_args: Vec<String> = {
+                let raw: Vec<String> = args.iter().skip(1).cloned().collect();
+                let mut safe = Vec::with_capacity(raw.len());
+                let mut iter = raw.into_iter();
+                while let Some(arg) = iter.next() {
+                    if arg == "--from-browser" {
+                        safe.push(arg);
+                        if iter.next().is_some() {
+                            safe.push("<redacted-payload>".to_string());
+                        }
+                    } else {
+                        safe.push(arg);
+                    }
+                }
+                safe
+            };
             info!(
-                args = %redact::redact_urls(&format!("{:?}", args.iter().skip(1).collect::<Vec<_>>())),
+                args = %redact::redact_urls(&format!("{:?}", safe_args)),
                 "Second instance launched; focusing the main window"
             );
             tray::show_main_window(app);
@@ -119,7 +135,7 @@ pub fn run() {
 
             let cli_args: Vec<String> = std::env::args().collect();
             if let Some(payload) = browser_bridge::parse_cli_download_args(&cli_args) {
-                info!(url = %payload.url, "Cold start with external download request");
+                info!(url = %redact::redact_url(&payload.url), "Cold start with external download request");
                 app.state::<AppState>().set_pending_download(payload);
             }
 

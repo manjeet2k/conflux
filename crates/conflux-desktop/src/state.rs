@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{watch, Mutex, RwLock};
+use tokio::sync::{watch, Mutex, Notify, RwLock};
 
 /// Lifecycle status of a download task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +109,9 @@ pub struct AppState {
     /// `refresh_adapters` (under the `last_adapters` lock), read when building UI records.
     /// A plain mutex, never held across an await.
     pub adapter_defaults: std::sync::Mutex<HashMap<String, bool>>,
+    /// Tasks currently winding down in `stop_task`, with a notifier that wakes waiters
+    /// when the engine task has fully exited and status has been updated.
+    pub stopping_tasks: Arc<std::sync::Mutex<HashMap<String, Arc<Notify>>>>,
     /// One-shot messages for the UI (e.g. a data file was reset), drained by the UI once.
     notices: std::sync::Mutex<Vec<String>>,
     /// Pending external download from browser extension or command line on cold start.
@@ -133,6 +136,7 @@ impl AppState {
             history: Arc::new(history),
             last_adapters: Arc::new(RwLock::new(Vec::new())),
             adapter_defaults: std::sync::Mutex::new(HashMap::new()),
+            stopping_tasks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             notices: std::sync::Mutex::new(Vec::new()),
             pending_download: std::sync::Mutex::new(None),
         }

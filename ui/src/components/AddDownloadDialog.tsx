@@ -81,7 +81,7 @@ interface AddDownloadDialogProps {
 /** Keyed on open state so every open starts from a fresh form. */
 export const AddDownloadDialog: React.FC<AddDownloadDialogProps> = (props) => (
   <Dialog open={props.open} onOpenChange={(_, d) => !d.open && (props.onCancelAll ? props.onCancelAll() : props.onClose())}>
-    <AddDownloadForm key={`${props.open}:${props.initialUrl}:${props.initialFilename ?? ''}`} {...props} />
+    <AddDownloadForm key={`${props.open}:${props.initialUrl}:${props.initialFilename ?? ''}:${props.queueCount ?? 0}`} {...props} />
   </Dialog>
 );
 

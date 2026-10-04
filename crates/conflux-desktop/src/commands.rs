@@ -40,6 +40,7 @@ struct Shared {
     app: AppHandle,
     tasks: Arc<RwLock<HashMap<String, DownloadTaskState>>>,
     handles: Arc<Mutex<HashMap<String, TaskHandle>>>,
+    stopping_tasks: Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
     reserved_paths: Arc<Mutex<HashSet<PathBuf>>>,
     settings: Arc<RwLock<Settings>>,
     history: Arc<HistoryStore>,
@@ -51,6 +52,7 @@ impl Shared {
             app: app.clone(),
             tasks: state.tasks.clone(),
             handles: state.handles.clone(),
+            stopping_tasks: state.stopping_tasks.clone(),
             reserved_paths: state.reserved_paths.clone(),
             settings: state.settings.clone(),
             history: state.history.clone(),
@@ -221,7 +223,15 @@ pub async fn start_download(
         .map(|f| sanitize_filename(&f))
         .filter(|f| !f.is_empty())
         .unwrap_or_else(|| probe.suggested_filename.clone());
-    let output_path = reserve_output_path(&state.reserved_paths, &dir, &requested_name).await?;
+    let claimed_paths: Vec<PathBuf> = state
+        .tasks
+        .read()
+        .await
+        .values()
+        .map(|t| PathBuf::from(&t.save_path))
+        .collect();
+    let output_path =
+        reserve_output_path(&state.reserved_paths, &claimed_paths, &dir, &requested_name).await?;
     let save_path = output_path.to_string_lossy().to_string();
     let filename = output_path
         .file_name()
@@ -297,6 +307,24 @@ pub async fn resume_task_internal(
     state: &AppState,
     task_id: &str,
 ) -> Result<DownloadTaskState, String> {
+    // If the task is currently winding down in `stop_task`, wait for it to fully exit.
+    loop {
+        let maybe_notify = {
+            let stopping = state.stopping_tasks.lock().unwrap();
+            stopping.get(task_id).cloned()
+        };
+        if let Some(notify) = maybe_notify {
+            if tokio::time::timeout(STOP_TIMEOUT, notify.notified())
+                .await
+                .is_err()
+            {
+                return Err("Download is still stopping; try again in a moment".to_string());
+            }
+        } else {
+            break;
+        }
+    }
+
     let task = state
         .tasks
         .read()
@@ -524,6 +552,7 @@ pub async fn remove_download(
 /// file is only deleted with positive evidence:
 /// - its resume sidecar exists (written next to the file by the chunked engine), or
 /// - it is a chunked download and the file length equals the pre-allocated `total_bytes`, or
+/// - it is an incomplete single-stream download whose length matches the bytes written so far, or
 /// - it is empty (the placeholder claimed when the download started; nothing to lose).
 ///
 /// `file_len` is `None` when there is no file.
@@ -532,7 +561,9 @@ fn partial_file_is_ours(task: &DownloadTaskState, file_len: Option<u64>, sidecar
         return false;
     };
     let chunked = task.supports_ranges && task.total_bytes > 0;
-    sidecar || len == 0 || (chunked && len == task.total_bytes)
+    let single_stream_partial =
+        !task.supports_ranges && task.downloaded_bytes > 0 && len == task.downloaded_bytes;
+    sidecar || len == 0 || (chunked && len == task.total_bytes) || single_stream_partial
 }
 
 // ─── 7. List Tasks ──────────────────────────────────────────
@@ -969,6 +1000,21 @@ async fn notify_finished(shared: &Shared, task: &DownloadTaskState) {
     }
 }
 
+struct StoppingGuard {
+    stopping_tasks: Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
+    task_id: String,
+    notify: Arc<tokio::sync::Notify>,
+}
+
+impl Drop for StoppingGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.stopping_tasks.lock() {
+            map.remove(&self.task_id);
+        }
+        self.notify.notify_waiters();
+    }
+}
+
 /// Signals the task to stop, waits for it to wind down (aborting after `STOP_TIMEOUT`),
 /// and returns the task's resulting snapshot. `None` if the task id is unknown.
 async fn stop_task(shared: &Shared, task_id: &str) -> Option<DownloadTaskState> {
@@ -986,6 +1032,17 @@ async fn stop_task(shared: &Shared, task_id: &str) -> Option<DownloadTaskState> 
         drop(handles);
         return snapshot;
     };
+
+    let notify = Arc::new(tokio::sync::Notify::new());
+    if let Ok(mut map) = shared.stopping_tasks.lock() {
+        map.insert(task_id.to_string(), notify.clone());
+    }
+    let guard = StoppingGuard {
+        stopping_tasks: shared.stopping_tasks.clone(),
+        task_id: task_id.to_string(),
+        notify,
+    };
+
     // Release the lock before awaiting: the task itself locks `handles` during cleanup.
     drop(handles);
 
@@ -1006,7 +1063,9 @@ async fn stop_task(shared: &Shared, task_id: &str) -> Option<DownloadTaskState> 
     drop(cancel_tx);
 
     // The task records its own final status unless it was aborted.
-    pause_if_downloading(shared, task_id).await
+    let snapshot = pause_if_downloading(shared, task_id).await;
+    drop(guard);
+    snapshot
 }
 
 /// Marks a `Downloading` task `Paused` and returns its snapshot; `None` if the id is unknown.
@@ -1208,6 +1267,7 @@ fn validate_save_dir(save_dir: &str) -> Result<PathBuf, String> {
 /// missing on disk while its engine is about to recreate it.
 async fn reserve_output_path(
     reserved: &Mutex<HashSet<PathBuf>>,
+    claimed_paths: &[PathBuf],
     dir: &Path,
     filename: &str,
 ) -> Result<PathBuf, String> {
@@ -1220,7 +1280,11 @@ async fn reserve_output_path(
             dir.join(numbered_filename(filename, n))
         };
         n += 1;
-        if reserved.contains(&candidate) {
+        if reserved.contains(&candidate) || claimed_paths.iter().any(|p| p == &candidate) {
+            continue;
+        }
+        let sidecar = conflux_core::resume_sidecar_path(&candidate);
+        if sidecar.exists() {
             continue;
         }
         let created = std::fs::OpenOptions::new()
@@ -1327,13 +1391,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let reserved = Mutex::new(HashSet::new());
 
-        let a = reserve_output_path(&reserved, &dir, "file.bin")
+        let a = reserve_output_path(&reserved, &[], &dir, "file.bin")
             .await
             .unwrap();
-        let b = reserve_output_path(&reserved, &dir, "file.bin")
+        let b = reserve_output_path(&reserved, &[], &dir, "file.bin")
             .await
             .unwrap();
-        let c = reserve_output_path(&reserved, &dir, "file.bin")
+        let c = reserve_output_path(&reserved, &[], &dir, "file.bin")
             .await
             .unwrap();
 
@@ -1348,23 +1412,38 @@ mod tests {
 
         // A file created by someone else (another process) is skipped, even unreserved.
         std::fs::write(dir.join("other.bin"), b"keep").unwrap();
-        let d = reserve_output_path(&reserved, &dir, "other.bin")
+        let d = reserve_output_path(&reserved, &[], &dir, "other.bin")
             .await
             .unwrap();
         assert_eq!(d, dir.join("other (1).bin"));
         assert_eq!(std::fs::read(dir.join("other.bin")).unwrap(), b"keep");
 
-        // A reserved path missing on disk (resumed task) is skipped too.
+        // A reserved path missing on disk (running task) is skipped too.
         let resumed = dir.join("resumed.bin");
         reserved.lock().await.insert(resumed.clone());
-        let e = reserve_output_path(&reserved, &dir, "resumed.bin")
+        let e = reserve_output_path(&reserved, &[], &dir, "resumed.bin")
             .await
             .unwrap();
         assert_eq!(e, dir.join("resumed (1).bin"));
         assert!(!resumed.exists());
 
+        // A claimed path from an inactive/paused task (missing on disk) is skipped.
+        let paused_path = dir.join("paused.bin");
+        let f = reserve_output_path(&reserved, &[paused_path.clone()], &dir, "paused.bin")
+            .await
+            .unwrap();
+        assert_eq!(f, dir.join("paused (1).bin"));
+
+        // A candidate with an existing resume sidecar is skipped.
+        let sidecar_target = dir.join("with_sidecar.bin");
+        std::fs::write(conflux_core::resume_sidecar_path(&sidecar_target), b"{}").unwrap();
+        let g = reserve_output_path(&reserved, &[], &dir, "with_sidecar.bin")
+            .await
+            .unwrap();
+        assert_eq!(g, dir.join("with_sidecar (1).bin"));
+
         assert!(
-            reserve_output_path(&reserved, &dir.join("missing"), "x.bin")
+            reserve_output_path(&reserved, &[], &dir.join("missing"), "x.bin")
                 .await
                 .is_err()
         );
@@ -1413,10 +1492,15 @@ mod tests {
         assert!(!partial_file_is_ours(&chunked, Some(999), false));
         assert!(!partial_file_is_ours(&chunked, Some(5000), false));
 
-        // Streaming downloads are not pre-allocated: length alone is no evidence.
+        // Streaming downloads are not pre-allocated: length alone without progress is no evidence.
         let streaming = task(false, 1000);
         assert!(!partial_file_is_ours(&streaming, Some(1000), false));
         assert!(partial_file_is_ours(&streaming, Some(1000), true));
+        // An incomplete streaming download whose file length matches downloaded bytes IS ours.
+        let mut streaming_partial = task(false, 1000);
+        streaming_partial.downloaded_bytes = 500;
+        assert!(partial_file_is_ours(&streaming_partial, Some(500), false));
+        assert!(!partial_file_is_ours(&streaming_partial, Some(600), false));
         let unknown_size = task(true, 0);
         assert!(!partial_file_is_ours(&unknown_size, Some(42), false));
         assert!(partial_file_is_ours(&unknown_size, Some(0), false));

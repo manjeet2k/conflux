@@ -224,6 +224,9 @@ enum AttemptError {
     /// The remote resource is no longer the one the probe saw; retrying cannot help and
     /// the bytes already written are from the old version, so the whole download fails.
     ResourceChanged(anyhow::Error),
+    /// A local disk / file system error (e.g. disk full, permission denied). Retrying
+    /// over the network cannot succeed and would falsely penalize adapters.
+    Disk(std::io::Error),
 }
 
 impl From<anyhow::Error> for AttemptError {
@@ -456,6 +459,8 @@ struct ChunkedShared {
     last_error: Mutex<Option<String>>,
     /// Set when the remote resource changed mid-download; fails the download.
     resource_changed: Mutex<Option<String>>,
+    /// Set when a local disk I/O error occurred; fails the download immediately.
+    disk_error: Mutex<Option<String>>,
 }
 
 impl ChunkedShared {
@@ -664,14 +669,25 @@ impl DownloadEngine {
             Self::check_chunk_plan(total_bytes, self.chunk_size)?;
         }
 
+        // On cross-origin redirects (e.g. example.com -> s3.amazonaws.com), reqwest strips
+        // cookies. Do not re-attach origin cookies to the redirect target for chunks.
+        let effective_headers = if final_url.origin() != parsed_url.origin() {
+            headers.map(|mut h| {
+                h.cookie = None;
+                h
+            })
+        } else {
+            headers
+        };
+
         Ok(DownloadProbe {
-            url: url.to_string(),
+            url: final_url.to_string(),
             total_bytes,
             supports_ranges,
             suggested_filename,
             etag,
             last_modified,
-            headers,
+            headers: effective_headers,
         })
     }
 
@@ -731,8 +747,18 @@ impl DownloadEngine {
             bail!("Remote server returned non-success status: {}", status);
         }
         let headers = resp.headers();
+        let final_url = resp.url().clone();
+        let effective_headers = if final_url.origin() != parsed_url.origin() {
+            custom_headers.cloned().map(|mut h| {
+                h.cookie = None;
+                h
+            })
+        } else {
+            custom_headers.cloned()
+        };
+
         Ok(DownloadProbe {
-            url: url.to_string(),
+            url: final_url.to_string(),
             total_bytes: content_length_header(headers).unwrap_or(0),
             // Range support is unverified without a ranged GET; stay on the safe path.
             supports_ranges: false,
@@ -742,7 +768,7 @@ impl DownloadEngine {
             ),
             etag: header_str(headers, header::ETAG).map(str::to_string),
             last_modified: header_str(headers, header::LAST_MODIFIED).map(str::to_string),
-            headers: custom_headers.cloned(),
+            headers: effective_headers,
         })
     }
 
@@ -896,10 +922,13 @@ impl DownloadEngine {
         );
 
         if !probe.supports_ranges || probe.total_bytes == 0 {
-            info!("Using single-stream download (no verified range support or unknown/zero size)");
             if resume {
-                info!("Single-stream downloads cannot resume; starting from zero");
+                bail!(
+                    "Server no longer reports range support (or reported zero size) for {:?}; partial download preserved",
+                    output_path
+                );
             }
+            info!("Using single-stream download (no verified range support or unknown/zero size)");
             // A stale sidecar must never outlive the file it described.
             remove_resume_sidecar(output_path).with_context(|| {
                 format!("Failed to remove stale resume data for {:?}", output_path)
@@ -1037,9 +1066,15 @@ impl DownloadEngine {
             stop_tx,
             last_error: Mutex::new(None),
             resource_changed: Mutex::new(None),
+            disk_error: Mutex::new(None),
         });
         let _stop_guard = StopOnDrop(Arc::clone(&shared));
 
+        let sidecar_headers = effective_headers.as_ref().map(|h| RequestHeaders {
+            cookie: None, // Ephemeral: cookies are never persisted to disk (Decision D2)
+            referer: h.referer.clone(),
+            user_agent: h.user_agent.clone(),
+        });
         let sidecar = Arc::new(SidecarTarget {
             path: resume_sidecar_path(output_path),
             template: ResumeState {
@@ -1048,7 +1083,7 @@ impl DownloadEngine {
                 chunk_size,
                 etag: probe.etag.clone(),
                 last_modified: probe.last_modified.clone(),
-                headers: effective_headers,
+                headers: sidecar_headers,
                 completed: String::new(),
             },
         });
@@ -1225,6 +1260,15 @@ impl DownloadEngine {
                 "Download failed: the file changed on the server during the download; start it again. {}",
                 msg
             );
+        }
+
+        let disk_error = shared
+            .disk_error
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        if let Some(msg) = disk_error {
+            bail!("Download failed: {}", msg);
         }
 
         {
@@ -1526,6 +1570,22 @@ async fn run_chunk_worker(
                 shared.stop_tx.send_replace(true);
                 return;
             }
+            Err(AttemptError::Disk(e)) => {
+                shared
+                    .counters
+                    .downloaded
+                    .fetch_sub(counted, Ordering::SeqCst);
+                shared.scheduler().release(chunk.id);
+                let msg = format!(
+                    "disk write error for chunk {} at offset {}: {:#}",
+                    chunk.id, chunk.start, e
+                );
+                error!("Disk write failure; stopping download: {}", msg);
+                shared.record_error(msg.clone());
+                *shared.disk_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
+                shared.stop_tx.send_replace(true);
+                return;
+            }
             Err(AttemptError::Failed(e)) => {
                 // Only this attempt's own bytes are subtracted: no underflow possible.
                 shared
@@ -1568,6 +1628,7 @@ async fn run_chunk_worker(
                             adapter.drop_with_reason(format!(
                                 "dropped after {failures} consecutive failures"
                             ));
+                            adapter.retire_tx.send_replace(true);
                             error!(
                                 "Dropping adapter {} for this download after {} consecutive failures",
                                 adapter.label, failures
@@ -1714,7 +1775,7 @@ async fn fetch_chunk(
     }
     if let Some(total) = parsed.total {
         if total != shared.total_bytes {
-            return Err(AttemptError::Failed(anyhow!(
+            return Err(AttemptError::ResourceChanged(anyhow!(
                 "remote size changed: Content-Range total {} != probed {}",
                 total,
                 shared.total_bytes
@@ -1741,7 +1802,12 @@ async fn fetch_chunk(
                 range
             )));
         }
-        shared.writer.write_at(offset, bytes).await?;
+        if let Err(e) = shared.writer.write_at(offset, bytes).await {
+            let io_err = e
+                .downcast::<std::io::Error>()
+                .unwrap_or_else(|e| std::io::Error::other(e.to_string()));
+            return Err(AttemptError::Disk(io_err));
+        }
         offset += len;
         *counted += len;
         shared.counters.downloaded.fetch_add(len, Ordering::SeqCst);

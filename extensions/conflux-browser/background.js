@@ -41,6 +41,23 @@ function showNotification(title, message) {
   }
 }
 
+function sanitizeReferer(pageUrl, targetUrl) {
+  if (!pageUrl) return null;
+  try {
+    const page = new URL(pageUrl);
+    const target = new URL(targetUrl);
+    // If same origin, strip fragment only; if cross-origin, strip path and query to protect user privacy
+    if (page.origin === target.origin) {
+      page.hash = "";
+      return page.href;
+    } else {
+      return page.origin + "/";
+    }
+  } catch (_) {
+    return null;
+  }
+}
+
 function sendDownloadToConflux(payload) {
   return new Promise((resolve, reject) => {
     console.log("[Conflux] Sending download to desktop host:", payload.url);
@@ -97,7 +114,7 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
     const payload = {
       action: "download",
       url: targetUrl,
-      referer: referer || null,
+      referer: sanitizeReferer(info.pageUrl, targetUrl),
       user_agent: navigator.userAgent,
       filename: extractedName
     };
@@ -172,7 +189,7 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   const payload = {
     action: "download",
     url: url,
-    referer: downloadItem.referrer || null,
+    referer: sanitizeReferer(downloadItem.referrer, url),
     user_agent: navigator.userAgent,
     filename: extractedName
   };

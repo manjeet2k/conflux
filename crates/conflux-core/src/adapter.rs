@@ -67,6 +67,8 @@ pub(crate) struct InterfaceAddress {
     /// The OS reports a virtual or tunnel interface type.
     pub virtual_if_type: bool,
     pub ip: IpAddr,
+    /// Whether the interface reports an active default gateway.
+    pub has_gateway: bool,
 }
 
 fn is_loopback_interface(name: &str, ip: &IpAddr) -> bool {
@@ -135,8 +137,20 @@ pub(crate) fn classify_interface(iface: &InterfaceAddress) -> NetworkAdapter {
     let ip = iface.ip;
     let is_loopback = is_loopback_interface(name, &ip);
     let is_ipv4 = ip.is_ipv4();
-    let is_virtual =
-        iface.virtual_if_type || looks_virtual(name) || contains_virtual_hint(&iface.description);
+    let lower_name = name.to_ascii_lowercase();
+    let is_vethernet = lower_name.contains("vethernet");
+    let is_internal_vm = lower_name.contains("wsl")
+        || lower_name.contains("default switch")
+        || lower_name.contains("host-only");
+
+    let is_virtual = if is_vethernet && iface.has_gateway && !is_internal_vm {
+        // Hyper-V External Virtual Switch with an active default gateway:
+        // acts as the host's physical uplink; keep enabled.
+        false
+    } else {
+        iface.virtual_if_type || looks_virtual(name) || contains_virtual_hint(&iface.description)
+    };
+
     let enabled = is_ipv4 && !is_loopback && !is_link_local(&ip) && !is_virtual;
     NetworkAdapter {
         id: format!("{}:{}", name, ip),
@@ -156,6 +170,7 @@ pub(crate) fn classify_adapter(name: &str, ip: IpAddr) -> NetworkAdapter {
         description: String::new(),
         virtual_if_type: false,
         ip,
+        has_gateway: false,
     })
 }
 
@@ -225,6 +240,7 @@ mod sys {
                 description: String::new(),
                 virtual_if_type: false,
                 ip,
+                has_gateway: false,
             });
         }
 
@@ -340,6 +356,7 @@ mod sys {
             let name = unsafe { wide_to_string(a.FriendlyName) };
             let description = unsafe { wide_to_string(a.Description) };
             let virtual_if_type = is_virtual_if_type(a.IfType);
+            let has_gateway = !a.FirstGatewayAddress.is_null();
 
             let mut unicast = a.FirstUnicastAddress as *const IP_ADAPTER_UNICAST_ADDRESS_LH;
             while !unicast.is_null() {
@@ -355,6 +372,7 @@ mod sys {
                         description: description.clone(),
                         virtual_if_type,
                         ip,
+                        has_gateway,
                     });
                 }
             }
@@ -379,6 +397,7 @@ mod sys {
                 description: String::new(),
                 virtual_if_type: false,
                 ip,
+                has_gateway: false,
             })
             .collect())
     }
@@ -392,6 +411,57 @@ mod sys {
 /// `stall_timeout` (no bytes received for that long fails the request). There is
 /// deliberately no total request timeout, so large chunks on slow links are not killed.
 ///
+/// IP family filter for socket binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpFamily {
+    V4,
+    V6,
+}
+
+/// DNS resolver that restricts resolved addresses to match a specified IP family.
+///
+/// When an HTTP client binds its source address to an IPv4 local address, connecting to
+/// an IPv6 destination bypasses socket binding (hyper-util falls back to unbound `[::]:0`),
+/// quietly routing packets out the OS default gateway. This resolver ensures that bound
+/// workers only query and connect to IP addresses matching the adapter's family.
+pub struct FamilyFilteredResolver {
+    family: IpFamily,
+}
+
+impl FamilyFilteredResolver {
+    pub fn new(family: IpFamily) -> Self {
+        Self { family }
+    }
+}
+
+impl reqwest::dns::Resolve for FamilyFilteredResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let family = self.family;
+        Box::pin(async move {
+            let host_str = name.as_str();
+            let addrs = tokio::net::lookup_host((host_str, 0u16)).await?;
+            let filtered: Vec<std::net::SocketAddr> = match family {
+                IpFamily::V4 => addrs.filter(|a| a.is_ipv4()).collect(),
+                IpFamily::V6 => addrs.filter(|a| a.is_ipv6()).collect(),
+            };
+            if filtered.is_empty() {
+                let fam_str = match family {
+                    IpFamily::V4 => "IPv4",
+                    IpFamily::V6 => "IPv6",
+                };
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("no {} address found for host {}", fam_str, host_str),
+                ))
+                    as Box<dyn std::error::Error + Send + Sync>);
+            }
+            let iter: Box<dyn Iterator<Item = std::net::SocketAddr> + Send> =
+                Box::new(filtered.into_iter());
+            Ok(iter)
+        })
+    }
+}
+
 /// Limitation: binding the *source address* does not by itself pin the *egress interface*
 /// on weak-host-model stacks (Linux by default, and Windows for sends unless the route
 /// table cooperates). The OS still picks the outgoing interface from the routing table;
@@ -409,6 +479,11 @@ pub fn build_bound_http_client(
 
     if let Some(ip) = local_ip {
         builder = builder.local_address(Some(ip));
+        let family = match ip {
+            IpAddr::V4(_) => IpFamily::V4,
+            IpAddr::V6(_) => IpFamily::V6,
+        };
+        builder = builder.dns_resolver(std::sync::Arc::new(FamilyFilteredResolver::new(family)));
     }
     #[cfg(target_os = "linux")]
     if let Some(name) = interface.filter(|n| !n.is_empty()) {
@@ -501,6 +576,7 @@ mod tests {
             description: description.to_string(),
             virtual_if_type,
             ip: v4(10, 1, 2, 3),
+            has_gateway: false,
         }
     }
 
@@ -639,5 +715,62 @@ mod tests {
         assert!(
             build_bound_http_client(Some(v4(127, 0, 0, 1)), None, DEFAULT_STALL_TIMEOUT).is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn test_family_filtered_resolver_ipv4() {
+        use reqwest::dns::Resolve;
+        use std::str::FromStr;
+        let resolver = FamilyFilteredResolver::new(IpFamily::V4);
+        let name_v4 = reqwest::dns::Name::from_str("127.0.0.1").unwrap();
+        let addrs: Vec<std::net::SocketAddr> = resolver
+            .resolve(name_v4)
+            .await
+            .expect("IPv4 literal should resolve for V4 family")
+            .collect();
+        assert!(!addrs.is_empty());
+        assert!(addrs.iter().all(|a| a.is_ipv4()));
+
+        // IPv6 literal must fail for V4 family
+        let name_v6 = reqwest::dns::Name::from_str("[::1]").unwrap();
+        let res = resolver.resolve(name_v6).await;
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_classify_hyperv_external_switch_with_gateway() {
+        // External switch with active default gateway should be enabled
+        let ext = InterfaceAddress {
+            name: "vEthernet (Ethernet)".to_string(),
+            description: "Hyper-V Virtual Ethernet Adapter".to_string(),
+            virtual_if_type: false,
+            ip: v4(192, 168, 1, 50),
+            has_gateway: true,
+        };
+        let adapter = classify_interface(&ext);
+        assert!(
+            adapter.enabled,
+            "Hyper-V external switch with gateway must be enabled"
+        );
+
+        // External switch without gateway must be disabled
+        let no_gw = InterfaceAddress {
+            has_gateway: false,
+            ..ext.clone()
+        };
+        let adapter = classify_interface(&no_gw);
+        assert!(
+            !adapter.enabled,
+            "Hyper-V virtual switch without gateway must be disabled"
+        );
+
+        // Internal VM switches (WSL, Default Switch) must stay disabled even if they report gateway
+        let wsl = InterfaceAddress {
+            name: "vEthernet (WSL (Hyper-V firewall))".to_string(),
+            has_gateway: true,
+            ..ext
+        };
+        let adapter = classify_interface(&wsl);
+        assert!(!adapter.enabled, "vEthernet (WSL) must remain disabled");
     }
 }

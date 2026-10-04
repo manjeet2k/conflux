@@ -199,6 +199,8 @@ impl NetworkWatcher {
 mod os {
     use anyhow::{bail, Result};
     use std::ffi::c_void;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
     use tokio::sync::mpsc::UnboundedSender;
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::NetworkManagement::IpHelper::{
@@ -207,11 +209,15 @@ mod os {
     };
     use windows_sys::Win32::Networking::WinSock::AF_UNSPEC;
 
+    struct CallbackState {
+        active: AtomicBool,
+        tx: Mutex<Option<UnboundedSender<()>>>,
+    }
+
     pub struct OsWatcher {
         address_handle: HANDLE,
         interface_handle: HANDLE,
-        _address_tx: Box<UnboundedSender<()>>,
-        _interface_tx: Box<UnboundedSender<()>>,
+        state: *const CallbackState,
     }
 
     unsafe impl Send for OsWatcher {}
@@ -219,31 +225,35 @@ mod os {
 
     impl OsWatcher {
         pub fn start(tx: UnboundedSender<()>) -> Result<Self> {
-            let address_tx = Box::new(tx.clone());
+            let state = Box::into_raw(Box::new(CallbackState {
+                active: AtomicBool::new(true),
+                tx: Mutex::new(Some(tx)),
+            }));
+
             let mut address_handle: HANDLE = std::ptr::null_mut();
             let err = unsafe {
                 NotifyUnicastIpAddressChange(
                     AF_UNSPEC as _,
                     Some(unicast_ip_change_callback),
-                    address_tx.as_ref() as *const _ as *const c_void,
+                    state as *const c_void,
                     false,
                     &mut address_handle,
                 )
             };
             if err != 0 {
+                unsafe { drop(Box::from_raw(state)) };
                 bail!(
                     "NotifyUnicastIpAddressChange failed with Win32 error {}",
                     err
                 );
             }
 
-            let interface_tx = Box::new(tx);
             let mut interface_handle: HANDLE = std::ptr::null_mut();
             let err = unsafe {
                 NotifyIpInterfaceChange(
                     AF_UNSPEC as _,
                     Some(ip_interface_change_callback),
-                    interface_tx.as_ref() as *const _ as *const c_void,
+                    state as *const c_void,
                     false,
                     &mut interface_handle,
                 )
@@ -251,6 +261,7 @@ mod os {
             if err != 0 {
                 unsafe {
                     CancelMibChangeNotify2(address_handle);
+                    (*state).active.store(false, Ordering::SeqCst);
                 }
                 bail!("NotifyIpInterfaceChange failed with Win32 error {}", err);
             }
@@ -258,14 +269,22 @@ mod os {
             Ok(Self {
                 address_handle,
                 interface_handle,
-                _address_tx: address_tx,
-                _interface_tx: interface_tx,
+                state,
             })
         }
     }
 
     impl Drop for OsWatcher {
         fn drop(&mut self) {
+            if !self.state.is_null() {
+                // Signal in-flight callbacks to stand down immediately and drop sender.
+                unsafe {
+                    (*self.state).active.store(false, Ordering::SeqCst);
+                    if let Ok(mut lock) = (*self.state).tx.lock() {
+                        lock.take();
+                    }
+                }
+            }
             if !self.address_handle.is_null() {
                 unsafe {
                     CancelMibChangeNotify2(self.address_handle);
@@ -276,6 +295,10 @@ mod os {
                     CancelMibChangeNotify2(self.interface_handle);
                 }
             }
+            // Note: `self.state` is intentionally not freed with from_raw() here because
+            // `CancelMibChangeNotify2` returns asynchronously and in-flight callbacks may
+            // still be executing on a Windows threadpool thread. Leaking this small (~48 byte)
+            // structure guarantees memory safety against use-after-free crashes.
         }
     }
 
@@ -285,8 +308,14 @@ mod os {
         _notificationtype: MIB_NOTIFICATION_TYPE,
     ) {
         if !callercontext.is_null() {
-            let tx = &*(callercontext as *const UnboundedSender<()>);
-            let _ = tx.send(());
+            let state = &*(callercontext as *const CallbackState);
+            if state.active.load(Ordering::SeqCst) {
+                if let Ok(guard) = state.tx.lock() {
+                    if let Some(tx) = guard.as_ref() {
+                        let _ = tx.send(());
+                    }
+                }
+            }
         }
     }
 
@@ -296,8 +325,14 @@ mod os {
         _notificationtype: MIB_NOTIFICATION_TYPE,
     ) {
         if !callercontext.is_null() {
-            let tx = &*(callercontext as *const UnboundedSender<()>);
-            let _ = tx.send(());
+            let state = &*(callercontext as *const CallbackState);
+            if state.active.load(Ordering::SeqCst) {
+                if let Ok(guard) = state.tx.lock() {
+                    if let Some(tx) = guard.as_ref() {
+                        let _ = tx.send(());
+                    }
+                }
+            }
         }
     }
 }

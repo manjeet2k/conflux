@@ -44,6 +44,8 @@ pub struct ServerConfig {
     pub chunk_status: Option<u16>,
     /// Respond 503 to chunk requests coming from this peer IP.
     pub fail_peer_ip: Option<IpAddr>,
+    /// Stall the first N chunk requests from `fail_peer_ip` before failing subsequent requests.
+    pub stall_peer_first_n_chunks: usize,
     /// Sleep this long after each body write of `write_piece` bytes (throttling).
     pub throttle: Option<Duration>,
     pub write_piece: usize,
@@ -63,6 +65,10 @@ pub struct ServerConfig {
     pub honor_if_range: bool,
     /// Advertise this total in the probe's `Content-Range` instead of the real length.
     pub probe_total_override: Option<u64>,
+    /// Advertise this total in chunk `Content-Range` headers instead of the real length.
+    pub chunk_total_override: Option<u64>,
+    /// Respond 302 Redirect to this location.
+    pub redirect_to: Option<String>,
 }
 
 /// A new version of the resource, served from the `after_chunks`-th chunk request on
@@ -85,6 +91,7 @@ impl ServerConfig {
             stall_first_n_chunks: 0,
             chunk_status: None,
             fail_peer_ip: None,
+            stall_peer_first_n_chunks: 0,
             throttle: None,
             write_piece: 16 * 1024,
             content_disposition: None,
@@ -95,6 +102,8 @@ impl ServerConfig {
             content_change: None,
             honor_if_range: true,
             probe_total_override: None,
+            chunk_total_override: None,
+            redirect_to: None,
         }
     }
 
@@ -385,6 +394,14 @@ async fn handle(
     }
     let len = config.payload.len() as u64;
 
+    if let Some(target) = &config.redirect_to {
+        let headers = [
+            ("Location".to_string(), target.clone()),
+            ("Content-Length".to_string(), "0".to_string()),
+        ];
+        write_head(&mut sock, 302, &headers).await?;
+        return sock.shutdown().await;
+    }
     if let Some(code) = config.all_status {
         send_simple(&mut sock, code).await?;
         return sock.shutdown().await;
@@ -416,6 +433,27 @@ async fn handle(
             return sock.shutdown().await;
         }
         if config.fail_peer_ip == Some(peer.ip()) {
+            if config.stall_peer_first_n_chunks > 0
+                && stats.requests_by_peer_127_0_0_2.load(Ordering::SeqCst)
+                    <= config.stall_peer_first_n_chunks
+            {
+                if let Ok((start, end)) = parse_range(&range, len) {
+                    write_head(
+                        &mut sock,
+                        206,
+                        &[
+                            ("Content-Length".into(), (end - start + 1).to_string()),
+                            (
+                                "Content-Range".into(),
+                                format!("bytes {}-{}/{}", start, end, len),
+                            ),
+                        ],
+                    )
+                    .await?;
+                }
+                tokio::time::sleep(Duration::from_secs(120)).await;
+                return Ok(());
+            }
             send_simple(&mut sock, 503).await?;
             return sock.shutdown().await;
         }
@@ -483,8 +521,13 @@ async fn handle(
     } else {
         (start, end)
     };
-    let advertised_total = match (is_probe, config.probe_total_override) {
-        (true, Some(t)) => t,
+    let advertised_total = match (
+        is_probe,
+        config.probe_total_override,
+        config.chunk_total_override,
+    ) {
+        (true, Some(t), _) => t,
+        (false, _, Some(t)) => t,
         _ => len,
     };
     headers.push((

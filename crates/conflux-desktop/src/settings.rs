@@ -101,7 +101,17 @@ impl Settings {
     /// changed only through `set_adapter_enabled`, so the UI's possibly stale copy is ignored.
     pub fn apply_update(&self, update: Settings) -> Result<Settings, String> {
         let mut next = update.normalized();
-        next.validate()?;
+        // If the save directory was changed by the user, verify it exists.
+        // If it was untouched, require it to be absolute but do not fail if an external
+        // drive is temporarily unplugged while updating other settings.
+        if next.default_save_dir != self.default_save_dir {
+            next.validate()?;
+        } else if let Some(dir) = &next.default_save_dir {
+            let path = Path::new(dir);
+            if !path.is_absolute() {
+                return Err(format!("Default folder must be an absolute path: {dir}"));
+            }
+        }
         next.adapter_overrides = self.adapter_overrides.clone();
         Ok(next)
     }
@@ -303,5 +313,38 @@ mod tests {
         assert!(text.contains("\"schema_version\": 1"));
         assert_eq!(load(&path).0.schema_version, 1);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn apply_update_allows_unplugged_save_dir_if_unchanged() {
+        let missing = if cfg!(windows) {
+            "Z:\\NonExistentDrive\\Downloads"
+        } else {
+            "/tmp/non_existent_drive/downloads"
+        };
+        let current = Settings {
+            default_save_dir: Some(missing.to_string()),
+            theme: ThemePreference::Light,
+            ..Settings::default()
+        };
+
+        // Updating theme with untouched save folder succeeds even if drive is unplugged
+        let update = Settings {
+            default_save_dir: Some(missing.to_string()),
+            theme: ThemePreference::Dark,
+            ..Settings::default()
+        };
+        let next = current
+            .apply_update(update)
+            .expect("must succeed when save dir unchanged");
+        assert_eq!(next.theme, ThemePreference::Dark);
+        assert_eq!(next.default_save_dir.as_deref(), Some(missing));
+
+        // Explicitly changing to a different non-existent path fails validation
+        let bad_update = Settings {
+            default_save_dir: Some(format!("{missing}_other")),
+            ..Settings::default()
+        };
+        assert!(current.apply_update(bad_update).is_err());
     }
 }

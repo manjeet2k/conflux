@@ -798,7 +798,7 @@ async fn resume_with_corrupt_sidecar_or_missing_file_starts_fresh() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn single_stream_resume_restarts_and_reports_one_adapter() {
+async fn single_stream_resume_preserves_partial_file_and_aborts_on_range_loss() {
     let data = payload(PAYLOAD_LEN, 25);
     let mut cfg = ServerConfig::new(Arc::clone(&data));
     cfg.range_mode = RangeMode::Ignore;
@@ -806,16 +806,20 @@ async fn single_stream_resume_restarts_and_reports_one_adapter() {
     let engine = test_engine();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("single.bin");
-    // A stale sidecar must be ignored and removed.
-    std::fs::write(resume_sidecar_path(&path), b"{}").unwrap();
+    // Pre-create partial file and sidecar
+    std::fs::write(&path, b"partial data").unwrap();
+    std::fs::write(resume_sidecar_path(&path), b"{\"version\":1}").unwrap();
 
-    let (result, progress) = resume_to_end(&engine, &server.url("/single.bin"), &path).await;
-    assert_eq!(result.unwrap(), sha256_hex(&data));
-    assert!(!resume_sidecar_path(&path).exists());
-    assert!(progress.iter().all(|p| p.chunk_map.is_none()));
-    let last = progress.last().unwrap();
-    assert_eq!(last.adapters.len(), 1);
-    assert_eq!(last.adapters[0].downloaded_bytes, PAYLOAD_LEN as u64);
+    let (result, _) = resume_to_end(&engine, &server.url("/single.bin"), &path).await;
+    let err = result.expect_err("resuming when server reports no ranges must abort with error");
+    assert!(
+        err.to_string().contains("partial download preserved"),
+        "error must explicitly report that partial data was preserved: {}",
+        err
+    );
+    // Partial file and sidecar must NOT be truncated or removed
+    assert_eq!(std::fs::read(&path).unwrap(), b"partial data");
+    assert!(resume_sidecar_path(&path).exists());
 }
 
 #[tokio::test]
@@ -1599,4 +1603,175 @@ async fn download_carries_request_headers_on_probe_and_chunks() {
     assert!(user_agents
         .iter()
         .all(|ua| ua == "ConfluxBrowserBridge/1.0"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sidecar_never_persists_cookies_to_disk() {
+    let data = payload(PAYLOAD_LEN, 67);
+    let slow = TestServer::start(throttled_config(&data)).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("secure_resume.bin");
+
+    let custom_headers = RequestHeaders {
+        cookie: Some("session=ultra_secret_cookie_token".into()),
+        referer: Some("https://auth.example.com/vault".into()),
+        user_agent: Some("ConfluxTest/1.0".into()),
+    };
+
+    let probe = engine
+        .probe_with_headers(&slow.url("/secure_resume.bin"), Some(custom_headers))
+        .await
+        .unwrap();
+
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let path_clone = path.clone();
+    let engine_clone = test_engine();
+    let probe_clone = probe.clone();
+    let download_handle = tokio::spawn(async move {
+        engine_clone
+            .download(&probe_clone, &path_clone, &[], None, cancel_rx)
+            .await
+    });
+
+    // Let at least one chunk complete and trigger sidecar persister
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    cancel_tx.send_replace(true);
+    let _ = download_handle.await;
+
+    let sidecar_path = resume_sidecar_path(&path);
+    assert!(
+        sidecar_path.exists(),
+        "paused download must leave a sidecar"
+    );
+    let content = std::fs::read_to_string(&sidecar_path).unwrap();
+    assert!(
+        !content.contains("ultra_secret_cookie_token"),
+        "cookies must NEVER be written to the sidecar JSON"
+    );
+    assert!(
+        content.contains("https://auth.example.com/vault"),
+        "non-sensitive headers (referer) may be retained"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn probe_records_final_url_and_chunks_target_final_endpoint() {
+    let data = payload(PAYLOAD_LEN, 68);
+    let target_server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let target_url = target_server.url("/data.bin");
+
+    let mut redirect_cfg = ServerConfig::new(Arc::clone(&data));
+    redirect_cfg.redirect_to = Some(target_url.clone());
+    let redirect_server = TestServer::start(redirect_cfg).await;
+
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("final_url_test.bin");
+
+    let custom_headers = RequestHeaders {
+        cookie: Some("origin_secret_cookie".into()),
+        referer: Some("https://example.com/landing".into()),
+        user_agent: Some("ConfluxTest/1.0".into()),
+    };
+
+    let probe = engine
+        .probe_with_headers(
+            &redirect_server.url("/start_download"),
+            Some(custom_headers),
+        )
+        .await
+        .expect("probe following redirect must succeed");
+
+    // Probe URL must be the final redirected target, not the initial redirector URL
+    assert_eq!(probe.url, target_url);
+
+    // Cross-origin redirect must strip cookies to prevent leaking credentials to foreign targets
+    assert_eq!(
+        probe.headers.as_ref().and_then(|h| h.cookie.as_ref()),
+        None,
+        "cookies must be stripped on cross-origin redirects"
+    );
+
+    let (_tx, cancel_rx) = watch::channel(false);
+    let sha = engine
+        .download(&probe, &path, &[], None, cancel_rx)
+        .await
+        .expect("download directly from target must succeed");
+    assert_eq!(sha, sha256_hex(&data));
+
+    // Target server must have served all chunks
+    assert_eq!(
+        target_server.stats.chunk_requests.load(Ordering::SeqCst),
+        17
+    );
+    // Redirector server must NOT have been re-queried for chunks
+    assert_eq!(
+        redirect_server.stats.chunk_requests.load(Ordering::SeqCst),
+        0
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn content_range_total_size_mismatch_fails_via_resource_changed() {
+    let data = payload(PAYLOAD_LEN, 88);
+    let mut cfg = ServerConfig::new(Arc::clone(&data));
+    // Chunk responses report a different total than the probe saw
+    cfg.chunk_total_override = Some(PAYLOAD_LEN as u64 + 5000);
+    let server = TestServer::start(cfg).await;
+
+    let out = run_download(&test_engine(), &server, &[]).await;
+    let msg = format!(
+        "{:#}",
+        out.result
+            .expect_err("must fail immediately when Content-Range total size changes")
+    );
+    assert!(
+        msg.contains("the file changed on the server during the download"),
+        "error message should indicate resource changed: {}",
+        msg
+    );
+    assert!(
+        msg.contains("remote size changed"),
+        "error message should explain size mismatch: {}",
+        msg
+    );
+    // Must fail promptly on first detection without burning 5 retries per worker
+    let requests = server.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(
+        requests <= 4,
+        "must abort immediately rather than retrying mismatched chunks: {}",
+        requests
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dropped_adapter_retire_cancels_sibling_workers_promptly() {
+    let data = payload(PAYLOAD_LEN, 89);
+    let mut cfg = ServerConfig::new(Arc::clone(&data));
+    cfg.fail_peer_ip = Some("127.0.0.2".parse().unwrap());
+    // 127.0.0.2 stalls on its first chunk request, while subsequent requests fail with 503
+    cfg.stall_peer_first_n_chunks = 1;
+    let server = TestServer::start(cfg).await;
+
+    // Use a long 15-second stall timeout: if sibling workers were NOT retired promptly,
+    // the stalled chunk would take >= 15 seconds to time out before another adapter could finish it.
+    let engine = DownloadEngine::new(CHUNK, 4)
+        .unwrap()
+        .with_retry_backoff(Duration::from_millis(10))
+        .with_stall_timeout(Duration::from_secs(15));
+    let adapters = [fake_adapter("127.0.0.2"), fake_adapter("127.0.0.1")];
+
+    let start = std::time::Instant::now();
+    let out = run_download(&engine, &server, &adapters).await;
+    let elapsed = start.elapsed();
+
+    assert_file_matches(&out, &data);
+    // Sibling worker on 127.0.0.2 must be cancelled promptly via retire_tx,
+    // so the stalled chunk is claimed and finished by 127.0.0.1 well under 15s.
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "download should complete quickly via retire_tx without waiting for 15s stall timeout (took {:?})",
+        elapsed
+    );
 }
