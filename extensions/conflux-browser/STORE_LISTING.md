@@ -83,3 +83,14 @@ Single-purpose statement:
 * **Store Icon:** 128x128 PNG (already available at `icons/icon-128.png`).
 * **Promo Tile (Small):** 440x280 PNG (optional for CWS, recommended).
 * **Screenshots:** At least one screenshot (1280x800 or 640x400 PNG) showing the extension popup and context menu in action.
+
+---
+
+## 6. Store Package Targets
+
+Run `node scripts/package-extension.mjs` to generate store-compliant archives under `target/extension-dist/`:
+
+* **`conflux-browser-firefox.zip`**: Optimized for Mozilla Firefox Add-ons (AMO). Manifest uses `background.scripts`, sets `strict_min_version: "142.0"`, and specifies `data_collection_permissions: { required: ["none"] }`. Passes AMO validator with 0 errors and 0 warnings.
+* **`conflux-browser-chrome.zip`**: Optimized for Chrome Web Store and Microsoft Edge Add-ons. Manifest uses `background.service_worker` and strips Gecko-specific configuration.
+* **`conflux-browser-store.zip`**: Universal cross-browser package with dual background declarations.
+

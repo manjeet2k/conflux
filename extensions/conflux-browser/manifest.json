@@ -5,23 +5,26 @@
   "description": "Multi-interface download accelerator integration for Conflux.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAiQF/B9sMrS+zxoa6iiKiIlOXK/1l3pFzc6SVrXZCOAHOm1offia4tY9wWEPDPR1PrPPN7CKuGZ02ESWBUSWLIH+NuRbqk+4ctoG/0LKeOKNJZURh5p5Q7ECmZYN1en5ObraeUqqeU1hxNSnHGMWq7pFdNY4E0IJHdWSntNAOp+Np9ArJz/E0OuVTcYg/EcVQFwAdrUi8Q0/SOSGApw+OsJUlv7fsFo0tpAWoCEvhZ87DSYvP0O8xzALtjfl0BnkJxSe7vUAT7YpCDLEYX+y9I1z3XtyImlWis62cZYpev1kI2UQWubI4pd4X0HInReBhqAUVyoiwJwHuttcFLlxrNQIDAQAB",
   "icons": {
-    "16": "icons/icon-32.png",
+    "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
-    "48": "icons/icon-128.png",
+    "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
   "action": {
     "default_popup": "popup/popup.html",
     "default_title": "Conflux Download Manager",
     "default_icon": {
-      "16": "icons/icon-32.png",
+      "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
-      "48": "icons/icon-128.png",
+      "48": "icons/icon-48.png",
       "128": "icons/icon-128.png"
     }
   },
   "background": {
     "service_worker": "background.js",
+    "scripts": [
+      "background.js"
+    ],
     "type": "module"
   },
   "permissions": [
@@ -38,7 +41,12 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "conflux@conflux.app",
-      "strict_min_version": "109.0"
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
     }
   }
 }
