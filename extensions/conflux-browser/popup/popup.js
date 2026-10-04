@@ -31,9 +31,38 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Open App Button
   openAppBtn.addEventListener("click", () => {
-    chrome.runtime.sendMessage({ action: "openConflux" }, () => {
-      // Fallback: try opening protocol URL directly
-      window.location.href = "conflux://open";
+    let closed = false;
+    const closePopup = () => {
+      if (!closed) {
+        closed = true;
+        window.close();
+      }
+    };
+
+    // Route protocol navigation through the active tab so Chrome displays the
+    // confirmation prompt in the center of the browser window (under the Omnibox),
+    // rather than anchoring to the extension icon in the toolbar where it overflows.
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const activeTab = tabs && tabs[0];
+      if (activeTab && activeTab.id) {
+        chrome.tabs.update(activeTab.id, { url: "conflux://open" }, () => {
+          if (chrome.runtime.lastError) {
+            console.warn(
+              "[Conflux] tabs.update error, falling back to tabs.create:",
+              chrome.runtime.lastError.message
+            );
+            chrome.tabs.create({ url: "conflux://open" }, () => {
+              closePopup();
+            });
+          } else {
+            closePopup();
+          }
+        });
+      } else {
+        chrome.tabs.create({ url: "conflux://open" }, () => {
+          closePopup();
+        });
+      }
     });
   });
 

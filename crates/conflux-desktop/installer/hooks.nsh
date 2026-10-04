@@ -20,9 +20,10 @@
   WriteRegStr HKCU "Software\Classes\conflux\DefaultIcon" "" "$INSTDIR\conflux-desktop.exe,0"
   WriteRegStr HKCU "Software\Classes\conflux\shell\open\command" "" '"$INSTDIR\conflux-desktop.exe" "%1"'
 
-  ; Register Native Messaging Host for Chrome, Edge, and Firefox
+  ; Register Native Messaging Host for Chrome, Edge, Brave, and Firefox
   WriteRegStr HKCU "Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop" "" "$INSTDIR\com.conflux.desktop.json"
   WriteRegStr HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.conflux.desktop" "" "$INSTDIR\com.conflux.desktop.json"
+  WriteRegStr HKCU "Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.conflux.desktop" "" "$INSTDIR\com.conflux.desktop.json"
   WriteRegStr HKCU "Software\Mozilla\NativeMessagingHosts\com.conflux.desktop" "" "$INSTDIR\com.conflux.desktop.firefox.json"
 !macroend
 
@@ -31,6 +32,7 @@
   DeleteRegKey HKCU "Software\Classes\conflux"
   DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop"
   DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.conflux.desktop"
+  DeleteRegKey HKCU "Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.conflux.desktop"
   DeleteRegKey HKCU "Software\Mozilla\NativeMessagingHosts\com.conflux.desktop"
 
   ${If} $DeleteAppDataCheckboxState <> 1

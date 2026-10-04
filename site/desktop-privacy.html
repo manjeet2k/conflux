@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="google-site-verification" content="IUUpKxs-2itEsFla7Whts8JxNbtuxmS21A5Fg9v2HiM">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="theme-color" content="#0d0628">
+  <meta name="color-scheme" content="dark">
+  <title>Privacy Policy - Conflux Desktop App</title>
+  <meta name="description" content="Privacy policy for the Conflux desktop download manager: no telemetry, no analytics, no accounts.">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{SITE_URL}}favicon-32.png">
+  <link rel="stylesheet" href="{{SITE_URL}}styles.css">
+</head>
+<body>
+  <div class="glow" aria-hidden="true"><i class="g-violet"></i><i class="g-pink"></i><i class="noise"></i></div>
+  <header class="nav">
+    <div class="container nav-in">
+      <a class="logo" href="{{SITE_URL}}" aria-label="Conflux home"><img src="{{SITE_URL}}icon-256.png" alt="" width="26" height="26"><span>Conflux</span></a>
+      <nav aria-label="Main">
+        <a class="nav-link" href="{{SITE_URL}}"><span>Home</span></a>
+        <a class="nav-link" href="{{REPO_URL}}"><span>GitHub</span></a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="doc-intro">
+      <div class="container">
+        <p class="eyebrow">Privacy policy</p>
+        <h1>Desktop<br>app</h1>
+        <p class="lede">No telemetry, no analytics, no accounts. Conflux talks to the servers you download from, and to GitHub for updates.</p>
+        <p class="meta">Last verified against the code: 2026-10-01</p>
+      </div>
+    </section>
+
+    <section class="light doc">
+      <div class="container">
+        <div class="doc-row">
+          <h3>Overview</h3>
+          <div class="doc-text">
+          <p>Conflux is a free, open-source Windows download manager. <strong>It has no telemetry, no analytics, no crash reporting and no accounts.</strong> It talks to the servers you tell it to download from, and checks GitHub for updates. Everything else stays on your PC.</p>
+          </div>
+        </div>
+        <div class="doc-row">
+          <h3>What the app contacts</h3>
+          <div class="doc-text">
+          <ul>
+            <li><strong>The URLs you add.</strong> For each download the engine sends HTTP requests (a probe, then ranged <code>GET</code>s) to that URL and any redirect targets, from each network adapter you enabled. The server you download from can see your IP address for each adapter. That is how bonding works.</li>
+            <li><strong>GitHub Releases, for update checks.</strong> With <em>Settings &gt; Check for updates on start</em> on (the default), the app fetches a small <code>latest.json</code> from the project's GitHub releases about 10 seconds after launch, and again when you click <em>Check for updates</em>. Turn the setting off to stop the automatic check. Installing an update always needs your click. GitHub sees your IP address and the request, as with any download from GitHub. The app adds no identifier or usage data.</li>
+            <li><strong>A link you paste into the Add dialog.</strong> The dialog probes the URL after a paste or edit, to show the file name and size, before you press Download. The server sees that request.</li>
+          </ul>
+          <p>That is all. There are no other outbound connections.</p>
+          </div>
+        </div>
+        <div class="doc-row">
+          <h3>How this was verified</h3>
+          <div class="doc-text">
+          <p>This is checked against the code, not assumed. On 2026-10-01 we searched the Rust crates and the UI for network use and for analytics or crash-reporting dependencies.</p>
+          <ul>
+            <li>The only HTTP client is <code>reqwest</code> in <code>conflux-core</code>, used for probes and downloads of URLs you supply.</li>
+            <li>The updater is configured with a single GitHub Releases endpoint. It is the only call beyond the download engine.</li>
+            <li>The UI makes no network calls. Its Content Security Policy only allows local IPC, so even a bug could not make the page contact the internet.</li>
+          </ul>
+          <p>The full audit is in <a href="{{REPO_URL}}/blob/main/PRIVACY.md">PRIVACY.md</a>. If you find any other call, please report it as a bug.</p>
+          </div>
+        </div>
+        <div class="doc-row">
+          <h3>What is stored on your PC</h3>
+          <div class="doc-text">
+          <ul>
+            <li><strong>Settings:</strong> theme, chunk size, adapter toggles and folders, in <code>%APPDATA%\com.conflux.desktop</code>.</li>
+            <li><strong>Download history:</strong> the URLs, file names and paths of your downloads, in the same folder.</li>
+            <li><strong>Update resume list:</strong> downloads paused for an update, in <code>resume_after_update.json</code>. It is deleted once read.</li>
+            <li><strong>Resume files:</strong> <code>&lt;file&gt;.conflux.json</code> next to a partial download, recording which pieces are done and the server's validators.</li>
+            <li><strong>Logs:</strong> typically in <code>%LOCALAPPDATA%\com.conflux.desktop\logs</code>. URL credentials and query strings are redacted. URL paths are not.</li>
+          </ul>
+          <p>Nothing here is uploaded. Delete the folders to remove it, and use <em>Settings &gt; Open logs folder</em> to see the logs. Uninstalling never deletes your downloaded files.</p>
+          </div>
+        </div>
+        <div class="doc-row">
+          <h3>Diagnostics</h3>
+          <div class="doc-text">
+          <p><em>Copy diagnostics</em> puts a text report on your clipboard <strong>only when you click it</strong>. It is never sent anywhere. You decide whether to paste it into a bug report.</p>
+          <p>It is built from an allow-list: app, OS and WebView versions, settings values, adapter names, types and state, the subnet of each adapter address with the host part masked (for example <code>192.168.1.x</code>), and the last warning and error log lines with URLs, file paths and IP addresses scrubbed. Adapter names appear as Windows reports them, so glance at the text before posting it.</p>
+          </div>
+        </div>
+        <div class="doc-row">
+          <h3>Downloaded files</h3>
+          <div class="doc-text">
+          <p>Downloaded files get the standard Windows "downloaded from the internet" marker (<code>Zone.Identifier</code>), containing the source URL without credentials, so Windows can warn you before you open an executable. The marker lives with the file on your disk.</p>
+          </div>
+        </div>
+        <div class="doc-row">
+          <h3>Browser extension</h3>
+          <div class="doc-text">
+          <p>The optional browser extension has its own, shorter policy: <a href="{{SITE_URL}}privacy.html">browser extension privacy policy</a>.</p>
+          </div>
+        </div>
+        <div class="doc-row">
+          <h3>Contact</h3>
+          <div class="doc-text">
+          <p>Questions? Open an issue on our <a href="{{REPO_URL}}/issues">GitHub Issues page</a>, or email Manjeet Singh at <a href="mailto:manjeetsgh11@gmail.com">manjeetsgh11@gmail.com</a>.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="light footer slim">
+    <div class="container">
+      <div class="foot-row">
+        <a class="button violet back" href="{{SITE_URL}}"><span class="b-icon"><svg class="arrow" viewBox="0 0 40 16" aria-hidden="true"><path d="M40 8H3M10 1L3 8l7 7" fill="none" stroke="currentColor" stroke-width="2"/></svg></span><span class="b-text">Back to Conflux</span><span class="b-fill"></span></a>
+        <nav aria-label="Footer">
+          <a href="{{REPO_URL}}/releases">Releases</a>
+          <a href="{{SITE_URL}}privacy.html">Extension privacy</a>
+          <a href="{{REPO_URL}}/blob/main/SECURITY.md">Security</a>
+          <a href="{{REPO_URL}}/blob/main/LICENSE-MIT">MIT</a>
+          <a href="{{REPO_URL}}/blob/main/LICENSE-APACHE">Apache-2.0</a>
+        </nav>
+      </div>
+      <p class="fine">© Manjeet Singh</p>
+    </div>
+  </footer>
+</body>
+</html>

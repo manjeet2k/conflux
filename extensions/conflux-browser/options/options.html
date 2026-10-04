@@ -108,7 +108,7 @@
       margin-bottom: 6px;
     }
 
-    input[type="text"], textarea {
+    input[type="text"], input[type="number"], textarea {
       width: 100%;
       padding: 8px 12px;
       border: 1px solid var(--border);
@@ -121,7 +121,7 @@
       transition: border-color 0.15s;
     }
 
-    input[type="text"]:focus, textarea:focus {
+    input[type="text"]:focus, input[type="number"]:focus, textarea:focus {
       border-color: var(--accent);
     }
 
@@ -268,6 +268,12 @@
       <label for="fileExtensions">File Extensions (comma-separated)</label>
       <input type="text" id="fileExtensions" placeholder=".zip, .iso, .exe, .tar.gz, .mp4">
       <p class="hint">Downloads ending with any of these extensions will be intercepted.</p>
+    </div>
+
+    <div class="form-group">
+      <label for="minSizeMb">Minimum File Size (MB)</label>
+      <input type="number" id="minSizeMb" min="0" step="1" placeholder="10">
+      <p class="hint">Only files larger than this size will be auto-intercepted. Set to 0 to intercept all matching files.</p>
     </div>
 
     <div class="form-group">

@@ -25,8 +25,10 @@ struct ExtensionMessage {
     pub action: String,
     #[serde(default)]
     pub url: Option<String>,
-    #[serde(default, alias = "suggested_filename")]
+    #[serde(default)]
     pub filename: Option<String>,
+    #[serde(default)]
+    pub suggested_filename: Option<String>,
     #[serde(default)]
     pub cookies: Option<String>,
     #[serde(default)]
@@ -190,12 +192,18 @@ pub fn run_native_host() {
                     }),
                 );
             }
+            "open" => {
+                if let Ok(exe_path) = std::env::current_exe() {
+                    let _ = std::process::Command::new(exe_path).spawn();
+                }
+                let _ = send_response(&mut stdout, serde_json::json!({ "status": "ok" }));
+            }
             "download" | "start_download" => {
                 if let Some(raw_url) = msg.url {
                     if is_valid_url(&raw_url) {
                         let payload = ExternalDownloadPayload {
                             url: raw_url,
-                            filename: msg.filename,
+                            filename: msg.filename.or(msg.suggested_filename),
                             headers: Some(RequestHeaders {
                                 cookie: msg.cookies.filter(|c| !c.trim().is_empty()),
                                 referer: msg.referer.filter(|r| !r.trim().is_empty()),
@@ -276,7 +284,8 @@ pub fn register_browser_integration() -> std::io::Result<()> {
             "path": exe_str,
             "type": "stdio",
             "allowed_origins": [
-                "chrome-extension://ddnnilfjdnicfekflgpibapcoakighmf/"
+                "chrome-extension://ddnnilfjdnicfekflgpibapcoakighmf/",
+                "chrome-extension://ncapjgooomipdohlolfbbknhbjcfdjml/"
             ]
         });
         let _ = std::fs::write(
@@ -371,6 +380,16 @@ pub fn register_browser_integration() -> std::io::Result<()> {
         ],
         vec![
             "add",
+            r"HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.conflux.desktop",
+            "/ve",
+            "/t",
+            "REG_SZ",
+            "/d",
+            &chrome_manifest_str,
+            "/f",
+        ],
+        vec![
+            "add",
             r"HKCU\Software\Mozilla\NativeMessagingHosts\com.conflux.desktop",
             "/ve",
             "/t",
@@ -398,6 +417,7 @@ pub fn unregister_browser_integration() -> std::io::Result<()> {
         r"HKCU\Software\Classes\conflux",
         r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop",
         r"HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.conflux.desktop",
+        r"HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.conflux.desktop",
         r"HKCU\Software\Mozilla\NativeMessagingHosts\com.conflux.desktop",
     ];
 
@@ -577,9 +597,23 @@ mod tests {
         let raw_json = serde_json::json!({
             "action": "download",
             "url": "https://example.com/test.bin",
+            "filename": "test.bin",
             "suggested_filename": "test.bin"
         });
         let msg: ExtensionMessage = serde_json::from_value(raw_json).unwrap();
-        assert_eq!(msg.filename, Some("test.bin".into()));
+        assert_eq!(
+            msg.filename.or(msg.suggested_filename),
+            Some("test.bin".into())
+        );
+    }
+
+    #[test]
+    fn test_extension_message_open_action() {
+        let raw_json = serde_json::json!({
+            "action": "open"
+        });
+        let msg: ExtensionMessage = serde_json::from_value(raw_json).unwrap();
+        assert_eq!(msg.action, "open");
+        assert_eq!(msg.url, None);
     }
 }
