@@ -11,8 +11,6 @@
 | [BENCHMARKS.md](BENCHMARKS.md) | see or reproduce the bonding benchmark method and results (kit in `../scripts/bench/`) |
 | [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | see the honest list of current limitations |
 | [guides/windows-cross-compilation.md](guides/windows-cross-compilation.md) | build a Windows binary from Linux/WSL2 |
-| [CODE_REVIEW_2026-10-04-agy.md](CODE_REVIEW_2026-10-04-agy.md) | full codebase review (v0.2.0-beta.2): gates, decisions, and ranked findings |
-| [archive/PLAN.md](archive/PLAN.md) | read the original design plan (historical; no longer tracks the code) |
 
 Elsewhere in the repo: [`../README.md`](../README.md) (overview and quickstart),
 [`../AGENTS.md`](../AGENTS.md) (binding engineering rules for contributors and agents),

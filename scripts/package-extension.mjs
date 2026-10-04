@@ -35,11 +35,11 @@ targets = [
     os.path.join(dist_dir, f"conflux-browser-v{${JSON.stringify(manifest.version)}}.zip"),
 ]
 
-# If Windows Downloads exists in WSL2, copy there too
-win_downloads = "/mnt/c/Users/pc/Downloads"
-if os.path.isdir(win_downloads):
-    targets.append(os.path.join(win_downloads, "conflux-browser.zip"))
-    targets.append(os.path.join(win_downloads, "conflux-browser-store-upload.zip"))
+# Optional extra destination directory (e.g. CONFLUX_DEV_DIST=/mnt/c/Users/.../Downloads)
+extra_dist = os.environ.get("CONFLUX_DEV_DIST")
+if extra_dist and os.path.isdir(extra_dist):
+    targets.append(os.path.join(extra_dist, "conflux-browser.zip"))
+    targets.append(os.path.join(extra_dist, "conflux-browser-store-upload.zip"))
 
 for target in targets:
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:

@@ -52,11 +52,15 @@ conflux_panic*.txt
 *.key
 updater*.key*
 
-# Claude Code agent worktrees (local scratch checkouts)
-.claude/worktrees/
+# Local development scratchpad, notes, and developer-only tools
+/dev/
+
+# Claude Code agent local settings, skills, and worktrees
+.claude/
 
 # GitHub Pages build output (scripts/build-site.mjs)
 _site/
 
 # Local design reference files
 LOGO_VARIANTS.md
+

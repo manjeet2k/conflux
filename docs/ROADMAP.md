@@ -17,7 +17,7 @@ This file is the single source of truth for that work. It is written so that **a
 open it, pick the next unblocked task, finish it, and leave the file accurate for the next
 agent.** Read [How to use this roadmap](#how-to-use-this-roadmap) first.
 
-Last reviewed against the repo: version `0.2.0-beta.1`, branch `main`.
+Last reviewed against the repo: version `0.2.0-beta.2`, branch `main`.
 
 ---
 
@@ -81,7 +81,7 @@ gates** live in [DEVELOPMENT.md](DEVELOPMENT.md). Run every gate there before re
 done, and run `cargo test -p conflux-core` three times when you touched engine/watcher code.
 
 Project state that matters for picking tasks:
-- **Unit/integration tests now run as real Windows executables** from WSL2 (`scripts/test-windows.sh`: core 72+45, cli 4, desktop 65 pass). That covers the Windows-only code paths in the test suites (NTFS sparse, adapter enumeration, watcher, Zone.Identifier).
+- **Unit/integration tests now run as real Windows executables** from WSL2 (`scripts/test-windows.sh`: core 76+52, cli 4, desktop 65 pass). That covers the Windows-only code paths in the test suites (NTFS sparse, adapter enumeration, watcher, Zone.Identifier).
 - **Still unverified on real Windows:** the running app and webview (strict CSP, trimmed capabilities, the manifest with long-path support), tray, installer/uninstaller, the updater, real multi-adapter bonding. That is what V-1, V-2, V-4 and V-5 cover.
 
 ---

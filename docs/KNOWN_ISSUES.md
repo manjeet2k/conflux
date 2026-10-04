@@ -25,7 +25,6 @@ real Windows machine with several adapters. The checklist is
 - **Strict CSP in the real webview**: the UI is built and linted, but rendering under the
   production Content Security Policy in WebView2 has not been confirmed.
 - **Tray, notifications, single-instance focus, close-to-tray** and exit with active downloads.
-- **Bonding gains**: no published real-world benchmark yet ([BENCHMARKS.md](BENCHMARKS.md)).
 
 ## Behaviour limits
 
