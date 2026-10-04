@@ -1,5 +1,40 @@
 # Conflux: Architecture & Channel Bonding Deep Dive
 
+## System Overview
+
+```mermaid
+flowchart TD
+    subgraph UI ["Desktop UI (Microsoft Fluent Design)"]
+        Dashboard["Download Queue & Status Filters"]
+        SpeedGauges["Real-Time Per-Adapter Speed Gauges (Wi-Fi / Ethernet / 4G)"]
+        ChunkMap["Visual Chunk Progress Grid (Color-Coded by Adapter)"]
+    end
+
+    subgraph Core ["conflux-core (Pure Rust Engine)"]
+        IM["Network Discovery (Active Adapters & IP Bindings)"]
+        CS["Dynamic Work-Stealing Chunk Scheduler"]
+        FW["Direct Sparse File Writer (Zero-Copy Offset I/O)"]
+        ST["EMA Throughput Tracker"]
+    end
+
+    subgraph Adapters ["Physical Media / Network Adapters"]
+        ETH["Ethernet Adapter (e.g. 192.168.1.100)"]
+        WIFI["Wi-Fi 6 Adapter (e.g. 192.168.0.50)"]
+        CELL["4G/5G USB Tether (e.g. 192.168.42.10)"]
+    end
+
+    UI <--> Core
+    Core --> IM
+    IM --> Adapters
+    CS -->|Binds socket to Ethernet IP| ETH
+    CS -->|Binds socket to Wi-Fi IP| WIFI
+    CS -->|Binds socket to 4G Cellular IP| CELL
+    ETH & WIFI & CELL -->|Concurrent Range Byte Streams| FW
+    FW -->|Direct Offset Write| Disk[("Target File (Sparse Storage)")]
+```
+
+---
+
 ## 1. The Single-Gateway Bottleneck in Standard Operating Systems
 
 In Windows (and most other operating systems), when an application initiates an outgoing TCP connection using a default socket (`INADDR_ANY`), the OS kernel consults the system IP routing table:

@@ -8,314 +8,143 @@
   <a href="https://manjeet2k.github.io/conflux/"><img alt="Download for Windows" src="https://img.shields.io/badge/Download_for_Windows-10%2F11_x64-0078D4?style=for-the-badge"></a>
   <a href="https://github.com/manjeet2k/conflux/releases"><img alt="Latest beta" src="https://img.shields.io/github/v/release/manjeet2k/conflux?include_prereleases&label=latest&style=for-the-badge&color=8b5cf6"></a>
   <a href="https://github.com/manjeet2k/conflux/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/manjeet2k/conflux/total?style=for-the-badge&color=34d399"></a>
+  <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/Rust-2021_Edition-orange.svg?style=for-the-badge"></a>
+  <a href="LICENSE-MIT"><img alt="License" src="https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-green.svg?style=for-the-badge"></a>
 </p>
 
-> **Next-Generation Multi-Source & Multi-Interface Download Accelerator**  
-> *Channel bonding across Wi-Fi, Ethernet, and 4G/5G mobile tethering built in Rust & Microsoft Fluent Design.*  
-> **Windows 10/11 (64-bit) only · public beta** · [Website](https://manjeet2k.github.io/conflux/)
-
-[![Rust](https://img.shields.io/badge/Rust-2021_Edition-orange.svg)](https://www.rust-lang.org/)
-[![UI](https://img.shields.io/badge/UI-Fluent_Design_System-blue.svg)](https://learn.microsoft.com/en-us/windows/apps/design/)
-[![Platform](https://img.shields.io/badge/Platform-Windows_10%2F11_x64-0078D4.svg)](#-platform-support)
-[![License](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-green.svg)](#-license)
-
-
-> [!WARNING]
-> **BETA SOFTWARE.** Conflux is in public beta. Expect rough edges, report bugs, and do not rely on
-> it for anything critical yet. The Windows installer is **not code-signed**, so Windows will warn
-> you before running it (see [Windows protected your PC](#windows-protected-your-pc--unknown-publisher)).
-> Releases are published on GitHub as pre-releases named `0.N.0-beta.K`.
+> **Next-Generation Channel-Bonding Download Accelerator for Windows**  
+> Combine Wi-Fi, Ethernet, and 4G/5G mobile tethering into a single, faster download.  
+> **Windows 10/11 (64-bit) only · Public Beta** · [Website](https://manjeet2k.github.io/conflux/) · [Releases](https://github.com/manjeet2k/conflux/releases) · [Documentation](docs/README.md)
 
 <p align="center">
   <img src="docs/images/app-main.png" alt="Conflux desktop application interface running on Windows 11" width="85%">
 </p>
 
+> [!NOTE]
+> **Public Beta:** Conflux is actively developed. The beta Windows installer is currently unsigned, so Windows SmartScreen will display an "unknown publisher" prompt on first run (see [Installation](#-installation) below).
+
 ---
 
-## 📥 Install
+## ⚡ What is Conflux?
 
-1. Open the [Releases page](https://github.com/manjeet2k/conflux/releases) and pick the newest
-   `0.N.0-beta.K` pre-release.
-2. Download the installer (`Conflux_..._x64-setup.exe`) **and** `SHA256SUMS.txt` from the same release.
-3. [Verify the download](#verify-the-download-sha256) (recommended, takes 10 seconds).
-4. Run the installer. It installs per user (no administrator rights needed). If Windows shows
-   "Windows protected your PC", follow the next section.
-5. If the Microsoft WebView2 runtime is missing (rare on current Windows 10/11), the installer
-   downloads it, which needs an internet connection.
+Normally, Windows routes all your download traffic through a single network adapter (usually Ethernet), leaving active Wi-Fi or phone tethering completely idle. 
 
+**Conflux breaks this limitation.** It requests files in small, concurrent chunks and explicitly binds each connection to a specific network adapter. The result: multiple internet connections download the same file together in parallel.
+
+### Key Features
+
+- ⚡ **Multi-Interface Channel Bonding**: Download simultaneously over wired Ethernet, Wi-Fi, and 4G/5G USB mobile tethering.
+- 🔄 **Dynamic Work-Stealing**: Automatically assigns more chunks to faster connections, and seamlessly reassigns chunks if an adapter disconnects.
+- 💾 **Instant Sparse File Pre-Allocation**: Chunks are written straight to their exact byte positions on disk—no slow, post-download file merging.
+- ⏯️ **Reliable Pause & Resume**: Safely pause and resume interrupted downloads with HTTP `If-Range` validation and streaming SHA-256 verification.
+- 🪟 **Modern Windows 11 Fluent UI**: Real-time per-adapter speed gauges, toggle switches, and a live color-coded chunk map showing which adapter downloaded each byte.
+- 🔒 **Privacy First**: Zero telemetry, zero analytics, no user accounts, and 100% open source.
+
+---
+
+## 📥 Installation
+
+1. Go to the [Releases page](https://github.com/manjeet2k/conflux/releases) and download the latest `0.N.0-beta.K` installer (`Conflux_*_x64-setup.exe`).
+2. Run the installer (installs per-user, no administrator rights needed).
+3. If Windows shows **"Windows protected your PC"**, follow the instructions below.
 
 ### Windows protected your PC / unknown publisher
 
-The beta installer is **unsigned**: code-signing certificates cost money and need identity
-verification, and the project deferred that until after the beta. Windows SmartScreen therefore
-shows a blue "Windows protected your PC" dialog saying the publisher is unknown. That is expected
-for any unsigned installer, and by itself it does not mean the file is malicious. To continue:
+The beta installer is currently **unsigned** (code-signing certificates are planned after the public beta). Windows SmartScreen will display a blue warning dialog. This is standard for new open-source software:
 
-1. In the blue dialog click **More info**.
+1. Click **More info** in the blue dialog.
 2. Click **Run anyway**.
 
-Because the warning cannot vouch for the file, verify it yourself against the checksum published
-with the release. Only run installers downloaded from the project's GitHub Releases page.
-
-### Verify the download (SHA256)
-
-Each release includes `SHA256SUMS.txt`. In PowerShell, from the folder with the installer:
-
+*(Optional)* You can verify the installer's integrity in PowerShell using the `SHA256SUMS.txt` published with the release:
 ```powershell
 Get-FileHash .\Conflux_*_x64-setup.exe -Algorithm SHA256
 Get-Content .\SHA256SUMS.txt
 ```
 
-The hash printed by the first command must match the line for the same file name in the second
-(case does not matter). If it differs, delete the file and download it again; if it still
-differs, do not run it and [report it](SECURITY.md).
-
-## ▶️ First run: your first bonded download
-
-1. Start Conflux from the Start menu. Open the **Network** page: every active adapter with a
-   usable IPv4 address is listed (Ethernet, Wi-Fi, USB tether). Leave the ones you want on.
-2. Click **Add download**, paste a direct `http://` or `https://` file URL, choose a folder, and start.
-3. Watch the per-adapter speeds and the chunk map: each coloured block was downloaded over the
-   adapter with that colour.
-4. When it finishes you get a notification (if enabled in Settings), and the file appears in the
-   list and in your history. Closing the window sends Conflux to the tray by default.
-
-To see a real gain you need at least two adapters that are connected to the internet at the same
-time (for example Ethernet and Wi-Fi, or Wi-Fi and a phone tethered over USB) and a server that
-supports HTTP Range requests (most do).
-
-## 🔀 How bonding works, in plain words
-
-Normally Windows sends all your traffic out of one network connection, the one it ranks best,
-and the others sit idle. Conflux asks the server for a file in many small pieces ("give me bytes
-0 to 8 MB", "now 8 to 16 MB", ...) and deliberately sends each request out of a **specific**
-adapter by binding the connection to that adapter's own address. Fast adapters finish pieces
-sooner and so take more of them; if an adapter drops out, its unfinished pieces are handed to the
-others. The pieces are written straight to their place in the file, so there is no merge step at
-the end.
-
-### How much gain to expect (honest version)
-
-- Gains add up only when the links are **independent physical connections that each have their
-  own route to the internet** (their own router or gateway), such as wired Ethernet plus a phone
-  tether, or two different ISPs. Ethernet plus Wi-Fi on the **same** router share one internet
-  line, so the total is capped by that line and you may see little or no gain.
-- The server must be fast enough, and must allow range requests; otherwise Conflux falls back to
-  a single stream.
-- An adapter that has no gateway of its own may connect but move no data. See
-  [known issues](docs/KNOWN_ISSUES.md).
-- **Real-hardware benchmark results** (measured on Windows 11 Pro with independent gateways: wired broadband at 100+ Mbit/s + 4G/5G phone cellular at ~36 Mbit/s):
-  - Ethernet only: **118.9 Mbit/s** (6.88 s)
-  - Cellular Wi-Fi only: **46.3 Mbit/s** (29.07 s)
-  - **Bonded both**: **138.0 Mbit/s** (5.73 s) — **89.5% multi-adapter scaling efficiency**, reducing download time by **20%** over broadband alone with zero 0-byte adapters.
-  - Full methodology and raw logs: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
-- Windows 10/11 x64 only. **Linux and macOS are not supported.**
-
-## 💻 System requirements
-
-- Windows 10 (version 1809 or newer) or Windows 11, 64-bit.
-- Microsoft Edge WebView2 runtime (preinstalled on current Windows; the installer fetches it if absent).
-- Two or more active network adapters to benefit from bonding (one works, as a normal download manager).
-
-## ❓ FAQ
-
-**Why does Windows show "Windows protected your PC"?** The beta installer is not code-signed, so
-SmartScreen does not know the publisher. See [the section above](#windows-protected-your-pc--unknown-publisher).
-
-**How do updates work?** Conflux checks the project's GitHub Releases for a newer beta and can
-update itself in the app. The update check is **not** the only request the app makes on its own: it
-runs about 10 seconds after launch while *Check for updates on start* is on (default; switch it off
-in Settings), and pasting a link (or typing in the Add dialog) makes the app probe that URL
-automatically to show the file name and size, before you press Download. Installing an update
-always needs your click. You can
-always download the new installer from the Releases page instead and verify it with `SHA256SUMS.txt`.
-
-**Where is my data stored?** Settings are in the app config folder and the download history in the
-app data folder, both under `%APPDATA%\com.conflux.desktop` (exact paths as given by Windows). Logs
-are in the app log folder (typically under `%LOCALAPPDATA%\com.conflux.desktop\logs`);
-**Settings > Open logs folder** opens it. Unfinished downloads keep a small `<file>.conflux.json`
-resume file next to the partial file. Your downloaded files are never touched by uninstalling.
-
-**Does Conflux send telemetry?** No. No analytics, no crash reporting, no accounts. See
-[PRIVACY.md](PRIVACY.md).
-
-**How do I report a bug?** Use **Copy diagnostics** in Settings and paste it into a
-[new issue](https://github.com/manjeet2k/conflux/issues/new/choose). It is built from an allow-list and
-masks paths, URLs and the host part of IP addresses (adapter names are included as-is). Review it before posting.
-
-**Does it work on Linux or macOS?** No. Windows 10/11 x64 only.
-
-**Is it safe?** The code is open; the installer is unsigned. Verify checksums, download only from
-the Releases page, and report vulnerabilities as described in [SECURITY.md](SECURITY.md).
-
----
 ---
 
-## 🚀 The Core Problem & The Conflux Solution
+## ▶️ Quick Start
 
-Standard download managers (including traditional FDM and IDM) accelerate downloads by opening concurrent TCP streams. However, Windows routes **all** outgoing packets through a single default network adapter chosen by the routing metric (typically prioritizing wired Ethernet and leaving active Wi-Fi or USB cellular tethering completely idle).
-
-**Conflux breaks this limitation**:
-1. **Physical Network Channel Bonding**: Explicitly binds each outgoing TCP socket to the designated local IP address of each physical network card (`local_address(Some(ip))`). This forces the OS kernel to route separate byte-range requests across different physical media simultaneously (e.g. 100 Mbps Ethernet + 50 Mbps Wi-Fi + 40 Mbps 4G = **~190 Mbps aggregate throughput**).
-2. **Work-Stealing Dynamic Chunk Scheduler**: Distributes file byte-ranges dynamically based on each adapter's real-time throughput. Faster connections claim more chunks; slower connections take fewer.
-3. **Zero-Copy Sparse File Pre-allocation**: Pre-allocates file length instantly (`set_len` / `SetEndOfFile`) and writes chunks non-sequentially at exact byte offsets, eliminating post-download file merging overhead.
-4. **Resilient Failover**: If an adapter disconnects mid-download (e.g. Wi-Fi drops or USB phone tether unplugged), pending chunks are automatically released and re-allocated to surviving adapters without corrupting the file or interrupting the transfer.
-5. **Modern Microsoft Fluent UI**: Inspired by FDM and Windows 11 Fluent guidelines, featuring real-time adapter speed cards with toggle switches, and a live, segmented visual chunk progress map color-coded by the adapter that downloaded each block.
+1. Launch Conflux from the Start menu.
+2. Open the **Network** tab to see your active adapters (Ethernet, Wi-Fi, USB tether). Toggle off any connection you don't want to use.
+3. Click **Add download**, paste any direct file URL (`http://` or `https://`), select your destination folder, and click **Download**.
+4. Watch the per-adapter speed gauges and the live chunk map aggregate your bandwidth in real time!
 
 ---
 
-## 🪟 Platform Support
+## 📶 Performance Expectations
 
-Conflux is built for **Windows 10 and 11 (64-bit)** and is the only platform supported and
-shipped. The installer is a per-user NSIS package (it needs the Microsoft WebView2 runtime,
-which is present on current Windows). There are no Linux or macOS builds and none are planned.
-
-The engine crate also compiles on Linux. That is a development convenience, not a supported
-target: it lets the core test suite run on the WSL2 dev host. CI runs on Windows only. See
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#platform-policy).
-
----
-
-## 📐 System Architecture
-
-```mermaid
-flowchart TD
-    subgraph UI ["Desktop UI (Microsoft Fluent Design)"]
-        Dashboard["Download Queue & Status Filters"]
-        SpeedGauges["Real-Time Per-Adapter Speed Gauges (Wi-Fi / Ethernet / 4G)"]
-        ChunkMap["Visual Chunk Progress Grid (Color-Coded by Adapter)"]
-    end
-
-    subgraph Core ["conflux-core (Pure Rust Engine)"]
-        IM["Network Discovery (Active Adapters & IP Bindings)"]
-        CS["Dynamic Work-Stealing Chunk Scheduler"]
-        FW["Direct Sparse File Writer (Zero-Copy Offset I/O)"]
-        ST["EMA Throughput Tracker"]
-    end
-
-    subgraph Adapters ["Physical Media / Network Adapters"]
-        ETH["Ethernet Adapter (e.g. 192.168.1.100)"]
-        WIFI["Wi-Fi 6 Adapter (e.g. 192.168.0.50)"]
-        CELL["4G/5G USB Tether (e.g. 192.168.42.10)"]
-    end
-
-    UI <--> Core
-    Core --> IM
-    IM --> Adapters
-    CS -->|Binds socket to Ethernet IP| ETH
-    CS -->|Binds socket to Wi-Fi IP| WIFI
-    CS -->|Binds socket to 4G Cellular IP| CELL
-    ETH & WIFI & CELL -->|Concurrent Range Byte Streams| FW
-    FW -->|Direct Offset Write| Disk[("Target File (Sparse Storage)")]
-```
+- **Independent routes required**: Speed aggregation works when your adapters connect through **different physical internet connections** (e.g., Home Broadband on Ethernet + Mobile 4G/5G on USB tethering). Connecting Ethernet and Wi-Fi to the same home router will not double your bandwidth because both share the same ISP line.
+- **Server support**: The remote server must support HTTP Range requests (most file hosts and CDNs do). If a server does not support ranges, Conflux downloads safely through a single stream.
+- **Real-hardware benchmarks** (Windows 11 Pro, broadband + 4G/5G cellular):
+  - Ethernet only: **118.9 Mbit/s**
+  - Cellular Wi-Fi only: **46.3 Mbit/s**
+  - **Bonded both**: **138.0 Mbit/s** (89.5% multi-adapter scaling efficiency, ~20% faster download).
+  - Full benchmark data and methodology: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ---
 
-## 🛠️ Repository Layout
+## 💻 System Requirements
 
-```
-conflux/
-├── AGENTS.md                          # Binding engineering rules for contributors and agents
-├── CHANGELOG.md                       # What changed per release
-├── Cargo.toml                         # Cargo workspace (conflux-core, conflux-cli, conflux-desktop)
-├── crates/
-│   ├── conflux-core/                  # Pure Rust download engine (no UI, testable on Linux)
-│   │   ├── src/
-│   │   │   ├── adapter.rs             # Adapter discovery, link-state filtering, bound HTTP clients
-│   │   │   ├── watcher.rs             # OS network-change watcher (hot-join / hot-remove adapters)
-│   │   │   ├── chunk.rs               # Non-overlapping byte-range chunk scheduler
-│   │   │   ├── engine.rs              # Multi-adapter coordinator: probe, workers, retries, If-Range
-│   │   │   ├── writer.rs              # Sparse file writer (exact-offset positional writes)
-│   │   │   ├── resume.rs              # Resume sidecar (completed-chunk bitmap + validators)
-│   │   │   ├── filename.rs            # Filename sanitising and atomic unique-name claiming
-│   │   │   └── checksum.rs            # Streaming SHA-256
-│   │   └── tests/                     # Integration tests against a fault-injecting test server
-│   ├── conflux-cli/                   # Terminal client (adapters, probe, download)
-│   └── conflux-desktop/               # Tauri v2 Windows app
-│       ├── src/                       # commands, task state, settings, history, tray, logging,
-│       │                              #   diagnostics, adapter overrides
-│       ├── capabilities/              # Webview permissions (kept minimal)
-│       └── tauri.conf.json            # Window, CSP and NSIS bundle config
-├── ui/                                # React + Fluent UI frontend
-│   └── src/
-│       ├── App.tsx                    # App shell, event wiring, dialogs
-│       ├── components/                # Title bar, download table, details pane, dialogs, ...
-│       ├── pages/                     # Network and Settings pages
-│       ├── hooks/                     # Downloads, settings, speed history, window theme
-│       └── dev/mockBackend.ts         # Mock Tauri backend for browser-only development
-├── SECURITY.md  PRIVACY.md            # Vulnerability reporting; what the app does with your data
-├── CONTRIBUTING.md  CODE_OF_CONDUCT.md
-├── scripts/                           # Version bump/check, docs link check, roadmap status
-│   └── bench/                         # Benchmark kit: range-capable test server + adapter counters
-├── .github/workflows/                 # CI, security scans, monthly dependency report
-└── docs/                              # See docs/README.md for the index
-    ├── ARCHITECTURE.md                # How it works (kept in step with the code)
-    ├── DEVELOPMENT.md                 # Setup, quality gates, CI cost
-    ├── ROADMAP.md                     # Path to the public beta (task list for agents)
-    ├── WINDOWS_TEST_PLAN.md           # PASS/FAIL checklists for real Windows machines
-    ├── BENCHMARKS.md                  # Bonding benchmark method and results
-    ├── KNOWN_ISSUES.md                # Honest list of current limitations
-    ├── guides/                        # How-tos (Windows cross-compilation)
-    └── archive/                       # Historical docs (original plan)
-```
+- **Operating System**: Windows 10 (version 1809 or newer) or Windows 11, 64-bit.
+- **Runtime**: Microsoft Edge WebView2 (preinstalled on modern Windows 10/11; installer will fetch it if missing).
+- **Network**: Two or more active network connections with independent internet access to benefit from channel bonding (works as a standard download manager on a single connection).
 
 ---
 
-## ⚡ Developer quickstart (command line)
+## ❓ Frequently Asked Questions
 
-### 1. Inspect Available Network Adapters
-Inspect all physical network interfaces detected on your machine:
-```bash
-cargo run --bin conflux -- adapters
-```
+<details>
+<summary><strong>Does Conflux work on macOS or Linux?</strong></summary>
 
-### 2. Probe a Remote Endpoint
-Inspect file size and Range header support on a remote target:
-```bash
-cargo run --bin conflux -- probe http://archive.ubuntu.com/ubuntu/dists/noble/main/binary-amd64/Packages.xz
-```
+No. Conflux is engineered specifically for Windows 10 and 11 (64-bit). The Linux code paths in the repository exist solely to run unit tests in CI and local WSL2 environments.
+</details>
 
-### 3. Run a Multi-Interface Download
-Download a file with dynamic chunking, sparse allocation, and SHA-256 verification:
-```bash
-cargo run --bin conflux -- download http://archive.ubuntu.com/ubuntu/dists/noble/main/binary-amd64/Packages.xz -o Packages.xz -s 1
-```
+<details>
+<summary><strong>Does Conflux collect telemetry or personal data?</strong></summary>
 
-### 4. Launch the Fluent UI Dashboard
-Run the hot-reloading development server:
-```bash
-cd ui
-npm install
-npm run dev
-```
-Open `http://localhost:5173` to explore the interactive dashboard, adapter toggles, and live color-coded chunk map.
+No. Conflux includes zero telemetry, crash reporting, analytics, or user accounts. See [PRIVACY.md](PRIVACY.md) for full details.
+</details>
 
----
+<details>
+<summary><strong>How do application updates work?</strong></summary>
 
-## 🧪 Testing & Verification
+Conflux checks GitHub Releases for new beta versions. When an update is available, you will receive a notification and can update directly in the app, or manually download the new installer from the Releases page.
+</details>
 
-Conflux follows strict **Karpathy Rules** and **Superpowers (TDD)** quality gates (see
-[`AGENTS.md`](AGENTS.md)). On Linux/WSL2, never run a bare `cargo test` — the desktop crate
-targets Windows. The short version:
-```bash
-cargo fmt --check
-cargo clippy -p conflux-core --tests -- -D warnings
-cargo test -p conflux-core
-npm --prefix ui run lint && npm --prefix ui run build
-```
-The full gate list (Windows clippy for the desktop crate, CLI, version check) is in
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+<details>
+<summary><strong>Where are my files and settings saved?</strong></summary>
+
+Settings and download history are saved in `%APPDATA%\com.conflux.desktop`. In-progress downloads keep a lightweight `<file>.conflux.json` resume sidecar alongside the target file. Your completed downloads are never altered or removed when uninstalling.
+</details>
+
+<details>
+<summary><strong>How do I report a bug or request a feature?</strong></summary>
+
+Navigate to **Settings > Copy diagnostics** in the app and paste the output into a [new GitHub issue](https://github.com/manjeet2k/conflux/issues/new/choose). Diagnostics are sanitized automatically to redact personal file paths and URLs.
+</details>
 
 ---
 
-## 📚 Documentation
+## 🛠️ Want to Tinker More?
 
-Start at the [docs index](docs/README.md): [architecture](docs/ARCHITECTURE.md),
-[development guide](docs/DEVELOPMENT.md), [known issues](docs/KNOWN_ISSUES.md), and the
-[roadmap](docs/ROADMAP.md) to the public beta. Policies: [security](SECURITY.md),
-[privacy](PRIVACY.md), [contributing](CONTRIBUTING.md), [code of conduct](CODE_OF_CONDUCT.md).
+For developers, contributors, and curious users who want to inspect the internals, run benchmarks, or build from source:
+
+| Document | Description |
+|---|---|
+| 📐 **[Architecture Deep Dive](docs/ARCHITECTURE.md)** | Socket binding mechanics, work-stealing scheduling, sparse file I/O, and sequence diagrams |
+| 🛠️ **[Development Guide](docs/DEVELOPMENT.md)** | Environment setup, quality gates, CLI tools (`conflux adapters/probe/download`), and UI dev server |
+| 📊 **[Hardware Benchmarks](docs/BENCHMARKS.md)** | Real-world multi-adapter throughput tests, methodology, and raw test logs |
+| 📋 **[Windows Test Plan](docs/WINDOWS_TEST_PLAN.md)** | Step-by-step verification checklists for physical Windows hardware |
+| ⚠️ **[Known Issues](docs/KNOWN_ISSUES.md)** | Transparent list of current limitations and edge cases |
+| 🗺️ **[Roadmap](docs/ROADMAP.md)** | Milestones and tasks on the path to the stable 1.0 release |
+| 📜 **[Engineering Guidelines](AGENTS.md)** | Karpathy engineering rules, mathematical invariants, and code standards |
 
 ---
 
-## 📜 License
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT License](LICENSE-MIT) at your option.
+## 📜 Policies & License
+
+- **Security**: [SECURITY.md](SECURITY.md) (Coordinated vulnerability disclosure)
+- **Privacy**: [PRIVACY.md](PRIVACY.md) (No telemetry or tracking policy)
+- **Contributing**: [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- **License**: Dual-licensed under [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE).
