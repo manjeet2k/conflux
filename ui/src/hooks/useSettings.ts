@@ -6,7 +6,6 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
   default_save_dir: null,
   connections_per_adapter: 4,
-  chunk_size_mb: 4,
   notify_on_complete: true,
   close_to_tray: true,
   auto_aggregate_adapters: true,

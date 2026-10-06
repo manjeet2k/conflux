@@ -22,8 +22,6 @@ const speeds = [9.5 * MB, 6.2 * MB, 3.1 * MB];
 // Mirrors crates/conflux-desktop/src/settings.rs.
 const MIN_CONNECTIONS = 1;
 const MAX_CONNECTIONS = 16;
-const MIN_CHUNK_MB = 1;
-const MAX_CHUNK_MB = 64;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v)));
 const NO_ADAPTERS_ERROR = 'No network adapters are enabled. Enable one on the Network page.';
 // Discovery defaults, before user overrides.
@@ -35,7 +33,6 @@ let settings: Settings = {
   theme: 'system',
   default_save_dir: null,
   connections_per_adapter: 4,
-  chunk_size_mb: 4,
   notify_on_complete: true,
   close_to_tray: true,
   auto_aggregate_adapters: true,
@@ -166,7 +163,6 @@ export function installMockBackend() {
           settings = {
             ...next,
             connections_per_adapter: clamp(next.connections_per_adapter, MIN_CONNECTIONS, MAX_CONNECTIONS),
-            chunk_size_mb: clamp(next.chunk_size_mb, MIN_CHUNK_MB, MAX_CHUNK_MB),
             default_save_dir: dir ? dir : null,
             adapter_overrides: settings.adapter_overrides,
           };
@@ -213,7 +209,6 @@ export function installMockBackend() {
               schema_version: 1,
               theme: settings.theme,
               connections_per_adapter: settings.connections_per_adapter,
-              chunk_size_mb: settings.chunk_size_mb,
               notify_on_complete: settings.notify_on_complete,
               close_to_tray: settings.close_to_tray,
               auto_aggregate_adapters: settings.auto_aggregate_adapters,

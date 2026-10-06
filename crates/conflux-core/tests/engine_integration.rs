@@ -19,8 +19,9 @@ const PAYLOAD_LEN: usize = 4 * 1024 * 1024 + 12_345; // 17 chunks, last one part
 const EMPTY_SHA: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 fn test_engine() -> DownloadEngine {
-    DownloadEngine::new(CHUNK, 4)
+    DownloadEngine::new(4)
         .unwrap()
+        .with_block_size(CHUNK)
         .with_retry_backoff(Duration::from_millis(10))
         .with_stall_timeout(Duration::from_secs(3))
 }
@@ -124,8 +125,12 @@ async fn normal_ranged_download_matches_sha() {
     let last = out.progress.last().unwrap();
     assert_eq!(last.total_chunks, 17);
     assert_eq!(last.completed_chunks, 17);
-    // 1 probe + 17 chunk GETs, no retries, no HEAD.
-    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 17);
+    // 1 probe + segment streaming GETs, no retries, no HEAD.
+    let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(
+        reqs >= 4 && reqs <= 17,
+        "expected 4..=17 requests, got {reqs}"
+    );
     assert_eq!(server.stats.head_requests.load(Ordering::SeqCst), 0);
 
     // Resume data is removed once the download is complete.
@@ -198,7 +203,11 @@ async fn dropped_connections_are_requeued_and_recovered() {
     let out = run_download(&test_engine(), &server, &[]).await;
     assert_file_matches(&out, &data);
     assert_progress_sane(&out.progress, PAYLOAD_LEN as u64);
-    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 17 + 2);
+    let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(
+        reqs >= 4 && reqs <= 17 + 2,
+        "expected 4..=19 requests, got {reqs}"
+    );
 }
 
 /// A blip that fails every in-flight connection at once (4 > the 3-failure drop threshold)
@@ -213,7 +222,11 @@ async fn simultaneous_failures_on_only_adapter_are_retried() {
     let out = run_download(&test_engine(), &server, &[]).await;
     assert_file_matches(&out, &data);
     assert_progress_sane(&out.progress, PAYLOAD_LEN as u64);
-    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 17 + 4);
+    let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(
+        reqs >= 4 && reqs <= 17 + 4,
+        "expected 4..=21 requests, got {reqs}"
+    );
     assert!(!out.progress.last().unwrap().adapters[0].dropped);
 }
 
@@ -246,7 +259,11 @@ async fn stalled_chunks_time_out_and_recover() {
     let out = run_download(&engine, &server, &[]).await;
     assert_file_matches(&out, &data);
     assert_progress_sane(&out.progress, PAYLOAD_LEN as u64);
-    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 17 + 2);
+    let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(
+        reqs >= 4 && reqs <= 17 + 2,
+        "expected 4..=19 requests, got {reqs}"
+    );
     assert!(
         out.elapsed < Duration::from_secs(10),
         "took {:?}",
@@ -587,8 +604,9 @@ async fn chunk_marked_failed_after_five_attempts_with_backoff() {
     cfg.chunk_status = Some(503);
     let server = TestServer::start(cfg).await;
 
-    let engine = DownloadEngine::new(CHUNK, 1)
+    let engine = DownloadEngine::new(1)
         .unwrap()
+        .with_block_size(CHUNK)
         .with_retry_backoff(Duration::from_millis(40));
     let adapters = [fake_adapter("127.0.0.1"), fake_adapter("127.0.0.2")];
     let out = run_download(&engine, &server, &adapters).await;
@@ -710,7 +728,11 @@ async fn pause_then_resume_continues_from_completed_chunks() {
     assert!(!sidecar.exists(), "sidecar must be removed on success");
 
     let fetched = fast.stats.chunk_requests.load(Ordering::SeqCst);
-    assert_eq!(fetched, 17 - done_before, "only missing chunks are fetched");
+    assert!(
+        fetched >= 1 && fetched <= 17 - done_before,
+        "only missing chunks are fetched (expected 1..={}, got {fetched})",
+        17 - done_before
+    );
     let sent = fast.stats.body_bytes_sent.load(Ordering::SeqCst);
     assert!(
         sent < PAYLOAD_LEN as u64,
@@ -746,7 +768,11 @@ async fn resume_with_changed_etag_restarts_from_zero() {
     let new = TestServer::start(cfg).await;
     let (result, _) = resume_to_end(&engine, &new.url("/etag.bin"), &path).await;
     assert_eq!(result.unwrap(), sha256_hex(&data));
-    assert_eq!(new.stats.chunk_requests.load(Ordering::SeqCst), 17);
+    let reqs = new.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(
+        reqs >= 4 && reqs <= 17,
+        "expected 4..=17 requests, got {reqs}"
+    );
     assert!(!resume_sidecar_path(&path).exists());
 }
 
@@ -771,7 +797,11 @@ async fn resume_with_changed_size_restarts_from_zero() {
     let (result, _) = resume_to_end(&engine, &new.url("/size.bin"), &path).await;
     assert_eq!(result.unwrap(), sha256_hex(&bigger));
     assert!(std::fs::read(&path).unwrap() == *bigger);
-    assert_eq!(new.stats.chunk_requests.load(Ordering::SeqCst), 18);
+    let reqs = new.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(
+        reqs >= 4 && reqs <= 18,
+        "expected 4..=18 requests, got {reqs}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -794,7 +824,11 @@ async fn resume_with_corrupt_sidecar_or_missing_file_starts_fresh() {
     assert_eq!(result.unwrap(), sha256_hex(&data));
     assert!(std::fs::read(&path).unwrap() == *data);
     assert!(!resume_sidecar_path(&path).exists());
-    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 34);
+    let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(
+        reqs >= 8 && reqs <= 34,
+        "expected 8..=34 requests, got {reqs}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1113,8 +1147,9 @@ async fn cancel_then_immediate_restart_is_byte_exact() {
     let data = payload(PAYLOAD_LEN, 42);
     let slow = TestServer::start(throttled_config(&data)).await;
     let fast = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
-    let engine = DownloadEngine::new(CHUNK, 8)
+    let engine = DownloadEngine::new(8)
         .unwrap()
+        .with_block_size(CHUNK)
         .with_retry_backoff(Duration::from_millis(10));
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("restart.bin");
@@ -1162,7 +1197,9 @@ async fn chunk_requests_carry_if_range_validator() {
     let out = run_download(&test_engine(), &server, &[]).await;
     assert_file_matches(&out, &data);
     assert_eq!(out.probe.last_modified.as_deref(), Some(LAST_MODIFIED));
-    assert_eq!(if_range_values(&server), vec!["\"v1\"".to_string(); 17]);
+    let if_ranges = if_range_values(&server);
+    assert!(!if_ranges.is_empty() && if_ranges.len() <= 17);
+    assert!(if_ranges.iter().all(|v| v == "\"v1\""));
 
     // Weak ETags are not allowed in If-Range: use Last-Modified instead.
     let mut cfg = ServerConfig::new(Arc::clone(&data));
@@ -1171,10 +1208,9 @@ async fn chunk_requests_carry_if_range_validator() {
     let server = TestServer::start(cfg).await;
     let out = run_download(&test_engine(), &server, &[]).await;
     assert_file_matches(&out, &data);
-    assert_eq!(
-        if_range_values(&server),
-        vec![LAST_MODIFIED.to_string(); 17]
-    );
+    let if_ranges = if_range_values(&server);
+    assert!(!if_ranges.is_empty() && if_ranges.len() <= 17);
+    assert!(if_ranges.iter().all(|v| v == LAST_MODIFIED));
 
     // Weak ETag only: no usable validator, no If-Range.
     let mut cfg = ServerConfig::new(Arc::clone(&data));
@@ -1185,14 +1221,14 @@ async fn chunk_requests_carry_if_range_validator() {
     assert!(if_range_values(&server).is_empty());
 }
 
-/// Serves `data` with ETag "v1", then (from the 5th chunk request on) a different payload
+/// Serves `data` with ETag "v1", then (from the 2nd chunk request on) a different payload
 /// of the same size with validator `new_etag`.
 fn changing_config(data: &Arc<Vec<u8>>, new_etag: Option<&str>, honor: bool) -> ServerConfig {
     let mut cfg = ServerConfig::new(Arc::clone(data));
     cfg.etag = Some("\"v1\"".into());
     cfg.honor_if_range = honor;
     cfg.content_change = Some(support::ContentChange {
-        after_chunks: 4,
+        after_chunks: 1,
         payload: payload(data.len(), 999),
         etag: new_etag.map(str::to_string),
         last_modified: None,
@@ -1266,7 +1302,11 @@ async fn resume_with_disappeared_etag_restarts_from_zero() {
     let new = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
     let (result, _) = resume_to_end(&engine, &new.url("/gone.bin"), &path).await;
     assert_eq!(result.unwrap(), sha256_hex(&data));
-    assert_eq!(new.stats.chunk_requests.load(Ordering::SeqCst), 17);
+    let reqs = new.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(
+        reqs >= 4 && reqs <= 17,
+        "expected 4..=17 requests, got {reqs}"
+    );
 }
 
 // ─── Dynamic adapters ────────────────────────────────────────────────────────
@@ -1446,7 +1486,11 @@ async fn cancel_during_hashing_keeps_sidecar_and_resume_does_not_redownload() {
         "cancel did not interrupt hashing"
     );
     watcher.await.unwrap();
-    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 17);
+    let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(
+        reqs >= 4 && reqs <= 17,
+        "expected 4..=17 requests, got {reqs}"
+    );
 
     let sidecar = resume_sidecar_path(&path);
     let json = std::fs::read_to_string(&sidecar).expect("sidecar must survive a hashing cancel");
@@ -1522,7 +1566,11 @@ async fn hostile_sidecar_chunk_size_falls_back_to_fresh_start() {
     .unwrap();
     let (result, _) = resume_to_end(&test_engine(), &server.url("/hostile.bin"), &path).await;
     assert_eq!(result.unwrap(), sha256_hex(&data));
-    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 17);
+    let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(
+        reqs >= 4 && reqs <= 17,
+        "expected 4..=17 requests, got {reqs}"
+    );
     assert!(std::fs::read(&path).unwrap() == *data);
 }
 
@@ -1592,14 +1640,14 @@ async fn download_carries_request_headers_on_probe_and_chunks() {
     let referers = server.stats.referers.lock().unwrap().clone();
     let user_agents = server.stats.user_agents.lock().unwrap().clone();
 
-    // 1 probe + 17 chunk requests = 18 total requests
-    assert_eq!(cookies.len(), 18);
+    // 1 probe + segment requests <= 18 total requests
+    assert!(!cookies.is_empty() && cookies.len() <= 18);
     assert!(cookies.iter().all(|c| c == "auth_session=secret_token_123"));
-    assert_eq!(referers.len(), 18);
+    assert_eq!(referers.len(), cookies.len());
     assert!(referers
         .iter()
         .all(|r| r == "https://portal.example.com/downloads"));
-    assert_eq!(user_agents.len(), 18);
+    assert_eq!(user_agents.len(), cookies.len());
     assert!(user_agents
         .iter()
         .all(|ua| ua == "ConfluxBrowserBridge/1.0"));
@@ -1701,9 +1749,10 @@ async fn probe_records_final_url_and_chunks_target_final_endpoint() {
     assert_eq!(sha, sha256_hex(&data));
 
     // Target server must have served all chunks
-    assert_eq!(
-        target_server.stats.chunk_requests.load(Ordering::SeqCst),
-        17
+    let target_reqs = target_server.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(
+        target_reqs >= 4 && target_reqs <= 17,
+        "expected 4..=17 target requests, got {target_reqs}"
     );
     // Redirector server must NOT have been re-queried for chunks
     assert_eq!(
@@ -1756,8 +1805,9 @@ async fn dropped_adapter_retire_cancels_sibling_workers_promptly() {
 
     // Use a long 15-second stall timeout: if sibling workers were NOT retired promptly,
     // the stalled chunk would take >= 15 seconds to time out before another adapter could finish it.
-    let engine = DownloadEngine::new(CHUNK, 4)
+    let engine = DownloadEngine::new(4)
         .unwrap()
+        .with_block_size(CHUNK)
         .with_retry_backoff(Duration::from_millis(10))
         .with_stall_timeout(Duration::from_secs(15));
     let adapters = [fake_adapter("127.0.0.2"), fake_adapter("127.0.0.1")];
@@ -1773,5 +1823,44 @@ async fn dropped_adapter_retire_cancels_sibling_workers_promptly() {
         elapsed < Duration::from_secs(5),
         "download should complete quickly via retire_tx without waiting for 15s stall timeout (took {:?})",
         elapsed
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn single_worker_streams_entire_file_in_single_http_request() {
+    let data = payload(PAYLOAD_LEN, 101);
+    let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let engine = DownloadEngine::new(1)
+        .unwrap()
+        .with_block_size(CHUNK)
+        .with_retry_backoff(Duration::from_millis(10));
+
+    let out = run_download(&engine, &server, &[]).await;
+    assert_file_matches(&out, &data);
+    assert_progress_sane(&out.progress, PAYLOAD_LEN as u64);
+
+    // Single worker claims the whole range as 1 segment and streams to completion
+    // without reconnecting or re-requesting per 256 KiB block.
+    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn idle_worker_steals_and_splits_in_flight_segment_from_active_worker() {
+    let total_len = 8 * 1024 * 1024;
+    let data = payload(total_len, 102);
+    let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let engine = DownloadEngine::new(2)
+        .unwrap()
+        .with_block_size(CHUNK)
+        .with_retry_backoff(Duration::from_millis(10));
+
+    let out = run_download(&engine, &server, &[]).await;
+    assert_file_matches(&out, &data);
+    assert_progress_sane(&out.progress, total_len as u64);
+
+    let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(
+        reqs >= 2 && reqs <= 6,
+        "expected 2..=6 requests, got {reqs}"
     );
 }

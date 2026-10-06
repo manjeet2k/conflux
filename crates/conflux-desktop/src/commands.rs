@@ -1197,11 +1197,8 @@ fn set_override(overrides: &mut HashMap<String, bool>, key: &str, enabled: bool)
 }
 
 fn engine_from_settings(settings: &Settings) -> Result<DownloadEngine, String> {
-    DownloadEngine::new(
-        settings.chunk_size_bytes(),
-        settings.connections_per_adapter as usize,
-    )
-    .map_err(|e| format!("Invalid engine settings: {e:#}"))
+    DownloadEngine::new(settings.connections_per_adapter as usize)
+        .map_err(|e| format!("Invalid engine settings: {e:#}"))
 }
 
 pub const NO_ADAPTERS_ENABLED: &str =

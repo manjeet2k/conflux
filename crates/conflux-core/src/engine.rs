@@ -1,13 +1,12 @@
 use crate::adapter::{build_bound_http_client, NetworkAdapter, DEFAULT_STALL_TIMEOUT};
 use crate::checksum::compute_sha256_cancellable;
-use crate::chunk::{
-    chunk_count, try_plan_chunks, Chunk, ChunkScheduler, ChunkStatus, Claim, FailOutcome,
-};
+use crate::chunk::{chunk_count, try_plan_chunks, Chunk, ChunkStatus};
 use crate::filename::derive_filename;
 use crate::resume::{
     decode_ranges, encode_ranges, read_sidecar, remove_resume_sidecar, resume_sidecar_path,
     validate, write_sidecar, ResumeState, SIDECAR_VERSION,
 };
+use crate::segment::{block_size_for, Claim, FailOutcome, SegmentLease, SegmentScheduler};
 use crate::writer::SparseFileWriter;
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::StreamExt;
@@ -136,7 +135,7 @@ pub struct ProgressUpdate {
 }
 
 pub struct DownloadEngine {
-    chunk_size: u64,
+    block_size_override: Option<u64>,
     connections_per_adapter: usize,
     retry_backoff: Duration,
     stall_timeout: Duration,
@@ -147,7 +146,7 @@ pub struct DownloadEngine {
 impl Default for DownloadEngine {
     fn default() -> Self {
         Self {
-            chunk_size: 4 * 1024 * 1024, // 4 MB default chunk size
+            block_size_override: None,
             connections_per_adapter: 4,
             retry_backoff: DEFAULT_RETRY_BACKOFF,
             stall_timeout: DEFAULT_STALL_TIMEOUT,
@@ -453,7 +452,7 @@ struct ChunkedShared {
     last_modified: Option<String>,
     headers: Option<RequestHeaders>,
     writer: SparseFileWriter,
-    scheduler: Mutex<ChunkScheduler>,
+    scheduler: Mutex<SegmentScheduler>,
     counters: Arc<Counters>,
     stop_tx: watch::Sender<bool>,
     last_error: Mutex<Option<String>>,
@@ -464,7 +463,7 @@ struct ChunkedShared {
 }
 
 impl ChunkedShared {
-    fn scheduler(&self) -> std::sync::MutexGuard<'_, ChunkScheduler> {
+    fn scheduler(&self) -> std::sync::MutexGuard<'_, SegmentScheduler> {
         // A poisoned lock means a worker panicked mid-update; the state is still plain data.
         self.scheduler.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -502,19 +501,27 @@ fn if_range_validator(probe: &DownloadProbe) -> Option<String> {
 }
 
 impl DownloadEngine {
-    /// Creates an engine. `chunk_size` and `connections_per_adapter` must be non-zero.
-    pub fn new(chunk_size: u64, connections_per_adapter: usize) -> Result<Self> {
-        if chunk_size == 0 {
-            bail!("chunk_size must be greater than 0");
-        }
+    /// Creates an engine. `connections_per_adapter` must be non-zero.
+    pub fn new(connections_per_adapter: usize) -> Result<Self> {
         if connections_per_adapter == 0 {
             bail!("connections_per_adapter must be greater than 0");
         }
         Ok(Self {
-            chunk_size,
             connections_per_adapter,
             ..Self::default()
         })
+    }
+
+    /// Sets an explicit block size override (used by tests and diagnostics).
+    pub fn with_block_size(mut self, block_size: u64) -> Self {
+        self.block_size_override = Some(block_size);
+        self
+    }
+
+    /// Resolves the block size for the given total byte count.
+    pub fn block_size_for(&self, total_bytes: u64) -> u64 {
+        self.block_size_override
+            .unwrap_or_else(|| block_size_for(total_bytes))
     }
 
     /// Sets the base of the exponential retry backoff (default 500ms → 0.5s,1s,2s,4s,8s).
@@ -535,10 +542,6 @@ impl DownloadEngine {
     pub fn with_stall_timeout(mut self, timeout: Duration) -> Self {
         self.stall_timeout = timeout;
         self
-    }
-
-    pub fn chunk_size(&self) -> u64 {
-        self.chunk_size
     }
 
     pub fn connections_per_adapter(&self) -> usize {
@@ -666,7 +669,8 @@ impl DownloadEngine {
         };
 
         if supports_ranges {
-            Self::check_chunk_plan(total_bytes, self.chunk_size)?;
+            let block_size = self.block_size_for(total_bytes);
+            Self::check_chunk_plan(total_bytes, block_size)?;
         }
 
         // On cross-origin redirects (e.g. example.com -> s3.amazonaws.com), reqwest strips
@@ -1008,7 +1012,7 @@ impl DownloadEngine {
         } else {
             None
         };
-        let (chunks, chunk_size, writer, resumed_headers) = match resumed {
+        let (chunks, block_size, writer, resumed_headers) = match resumed {
             Some(r) => r,
             None => {
                 // Remove any stale sidecar *before* truncating, so it can never describe
@@ -1016,16 +1020,17 @@ impl DownloadEngine {
                 remove_resume_sidecar(output_path).with_context(|| {
                     format!("Failed to remove stale resume data for {:?}", output_path)
                 })?;
-                let chunks = try_plan_chunks(probe.total_bytes, self.chunk_size)?;
+                let block_size = self.block_size_for(probe.total_bytes);
+                let chunks = try_plan_chunks(probe.total_bytes, block_size)?;
                 if chunks.is_empty() {
                     bail!(
-                        "Refusing to download: planned zero chunks for {} bytes (chunk size {})",
+                        "Refusing to download: planned zero chunks for {} bytes (block size {})",
                         probe.total_bytes,
-                        self.chunk_size
+                        block_size
                     );
                 }
                 let writer = SparseFileWriter::create(output_path, probe.total_bytes).await?;
-                (chunks, self.chunk_size, writer, None)
+                (chunks, block_size, writer, None)
             }
         };
         let effective_headers = probe.headers.clone().or(resumed_headers);
@@ -1036,9 +1041,9 @@ impl DownloadEngine {
             .collect();
         let resumed_bytes: u64 = resumed_chunks.iter().map(|c| c.size).sum();
         info!(
-            "Planned {} chunks of up to {} bytes each; {} chunks ({} bytes) already on disk",
+            "Planned {} blocks of up to {} bytes each; {} blocks ({} bytes) already on disk",
             total_chunks,
-            chunk_size,
+            block_size,
             resumed_chunks.len(),
             resumed_bytes
         );
@@ -1057,7 +1062,7 @@ impl DownloadEngine {
             last_modified: probe.last_modified.clone(),
             headers: effective_headers.clone(),
             writer: writer.clone(),
-            scheduler: Mutex::new(ChunkScheduler::new(
+            scheduler: Mutex::new(SegmentScheduler::new(
                 chunks,
                 MAX_CHUNK_ATTEMPTS,
                 self.retry_backoff,
@@ -1080,7 +1085,7 @@ impl DownloadEngine {
             template: ResumeState {
                 version: SIDECAR_VERSION,
                 total_bytes: probe.total_bytes,
-                chunk_size,
+                chunk_size: block_size,
                 etag: probe.etag.clone(),
                 last_modified: probe.last_modified.clone(),
                 headers: sidecar_headers,
@@ -1110,7 +1115,7 @@ impl DownloadEngine {
             let states = adapter_states.read().unwrap();
             for adapter in states.iter() {
                 for worker_idx in 0..self.connections_per_adapter {
-                    worker_set.spawn(run_chunk_worker(
+                    worker_set.spawn(run_segment_worker(
                         Arc::clone(&shared),
                         Arc::clone(&adapter_states),
                         Arc::clone(adapter),
@@ -1161,7 +1166,7 @@ impl DownloadEngine {
                                         Ok(new_state) => {
                                             adapter_states.write().unwrap().push(Arc::clone(&new_state));
                                             for worker_idx in 0..self.connections_per_adapter {
-                                                worker_set.spawn(run_chunk_worker(
+                                                worker_set.spawn(run_segment_worker(
                                                     Arc::clone(&shared),
                                                     Arc::clone(&adapter_states),
                                                     Arc::clone(&new_state),
@@ -1193,7 +1198,7 @@ impl DownloadEngine {
                                         drop(states);
                                         adapter_states.write().unwrap().push(Arc::clone(&fallback_state));
                                         for worker_idx in 0..self.connections_per_adapter {
-                                            worker_set.spawn(run_chunk_worker(
+                                            worker_set.spawn(run_segment_worker(
                                                 Arc::clone(&shared),
                                                 Arc::clone(&adapter_states),
                                                 Arc::clone(&fallback_state),
@@ -1421,6 +1426,7 @@ impl DownloadEngine {
         let result: Result<u64> = async {
             let mut stream = resp.bytes_stream();
             let mut received = 0u64;
+            let mut buffer = Vec::with_capacity(WRITE_BUFFER_SIZE);
             loop {
                 let next = tokio::select! {
                     biased;
@@ -1436,12 +1442,23 @@ impl DownloadEngine {
                         bail!("Server sent more than Content-Length {} bytes", expected);
                     }
                 }
-                file.write_all(&bytes)
-                    .await
-                    .with_context(|| format!("Failed writing to {:?}", output_path))?;
+                buffer.extend_from_slice(&bytes);
                 received += len;
                 counters.downloaded.fetch_add(len, Ordering::SeqCst);
                 adapter.received.fetch_add(len, Ordering::SeqCst);
+
+                if buffer.len() >= WRITE_BUFFER_SIZE {
+                    file.write_all(&buffer)
+                        .await
+                        .with_context(|| format!("Failed writing to {:?}", output_path))?;
+                    buffer.clear();
+                }
+            }
+            if !buffer.is_empty() {
+                file.write_all(&buffer)
+                    .await
+                    .with_context(|| format!("Failed writing to {:?}", output_path))?;
+                buffer.clear();
             }
             if let Some(expected) = expected {
                 if received != expected {
@@ -1479,8 +1496,10 @@ impl DownloadEngine {
     }
 }
 
-/// One worker: repeatedly claims a chunk, downloads it on `adapter`, and reports the result.
-async fn run_chunk_worker(
+const WRITE_BUFFER_SIZE: usize = 256 * 1024;
+
+/// One worker: repeatedly claims a segment lease, streams it on `adapter`, and reports the result.
+async fn run_segment_worker(
     shared: Arc<ChunkedShared>,
     adapter_states: Arc<RwLock<Vec<Arc<AdapterWorkerState>>>>,
     adapter: Arc<AdapterWorkerState>,
@@ -1496,7 +1515,7 @@ async fn run_chunk_worker(
         let claim = shared
             .scheduler()
             .claim(Instant::now(), Some(adapter.label.clone()));
-        let chunk = match claim {
+        let lease = match claim {
             Claim::Finished => return,
             Claim::Wait(delay) => {
                 tokio::select! {
@@ -1506,24 +1525,25 @@ async fn run_chunk_worker(
                 }
                 continue;
             }
-            Claim::Chunk(chunk) => chunk,
+            Claim::Segment(lease) => lease,
         };
 
         debug!(
-            "Worker {} via {} starting chunk {} range [{}, {}] (attempt {})",
-            worker_idx, adapter.label, chunk.id, chunk.start, chunk.end, chunk.attempts
+            "Worker {} via {} starting segment {} range [{}, {}) (attempt {})",
+            worker_idx, adapter.label, lease.id, lease.start, lease.end_at_request, lease.attempts
         );
 
         shared.counters.active.fetch_add(1, Ordering::SeqCst);
         adapter.active.fetch_add(1, Ordering::SeqCst);
-        let mut counted = 0u64;
-        let result = fetch_chunk(
+        let mut uncommitted = 0u64;
+        let result = fetch_segment(
             &adapter,
             &shared,
-            &chunk,
-            &mut counted,
+            &lease,
+            &mut uncommitted,
             &mut stop,
             &mut retire,
+            &adapter_states,
         )
         .await;
         adapter.active.fetch_sub(1, Ordering::SeqCst);
@@ -1531,35 +1551,31 @@ async fn run_chunk_worker(
 
         match result {
             Ok(()) => {
-                shared.scheduler().complete(chunk.id);
-                shared.counters.completed.fetch_add(1, Ordering::SeqCst);
+                shared.scheduler().finish(lease.id);
                 adapter.consecutive_failures.store(0, Ordering::SeqCst);
                 adapter.set_last_error(None);
-                if adapter.ip.is_some() {
-                    retire_default_route(&adapter_states, &adapter);
-                }
                 debug!(
-                    "Worker {} via {} completed chunk {} ({} bytes)",
-                    worker_idx, adapter.label, chunk.id, counted
+                    "Worker {} via {} completed segment {}",
+                    worker_idx, adapter.label, lease.id
                 );
             }
             Err(AttemptError::Stopped) => {
                 shared
                     .counters
                     .downloaded
-                    .fetch_sub(counted, Ordering::SeqCst);
-                shared.scheduler().release(chunk.id);
+                    .fetch_sub(uncommitted, Ordering::SeqCst);
+                shared.scheduler().release(lease.id);
                 return;
             }
             Err(AttemptError::ResourceChanged(e)) => {
                 shared
                     .counters
                     .downloaded
-                    .fetch_sub(counted, Ordering::SeqCst);
-                shared.scheduler().release(chunk.id);
+                    .fetch_sub(uncommitted, Ordering::SeqCst);
+                shared.scheduler().release(lease.id);
                 let msg = format!(
-                    "chunk {} range [{}, {}] via {}: {:#}",
-                    chunk.id, chunk.start, chunk.end, adapter.label, e
+                    "segment {} range [{}, {}) via {}: {:#}",
+                    lease.id, lease.start, lease.end_at_request, adapter.label, e
                 );
                 error!("Remote resource changed; stopping download: {}", msg);
                 shared.record_error(msg.clone());
@@ -1574,11 +1590,11 @@ async fn run_chunk_worker(
                 shared
                     .counters
                     .downloaded
-                    .fetch_sub(counted, Ordering::SeqCst);
-                shared.scheduler().release(chunk.id);
+                    .fetch_sub(uncommitted, Ordering::SeqCst);
+                shared.scheduler().release(lease.id);
                 let msg = format!(
-                    "disk write error for chunk {} at offset {}: {:#}",
-                    chunk.id, chunk.start, e
+                    "disk write error for segment {} at offset {}: {:#}",
+                    lease.id, lease.start, e
                 );
                 error!("Disk write failure; stopping download: {}", msg);
                 shared.record_error(msg.clone());
@@ -1587,28 +1603,33 @@ async fn run_chunk_worker(
                 return;
             }
             Err(AttemptError::Failed(e)) => {
-                // Only this attempt's own bytes are subtracted: no underflow possible.
+                // Only this attempt's uncommitted bytes are subtracted.
                 shared
                     .counters
                     .downloaded
-                    .fetch_sub(counted, Ordering::SeqCst);
+                    .fetch_sub(uncommitted, Ordering::SeqCst);
                 let msg = format!(
-                    "chunk {} range [{}, {}] via {}: {:#} (received {} of {} bytes)",
-                    chunk.id, chunk.start, chunk.end, adapter.label, e, counted, chunk.size
+                    "segment {} range [{}, {}) via {}: {:#}",
+                    lease.id, lease.start, lease.end_at_request, adapter.label, e
                 );
                 shared.record_error(msg.clone());
                 adapter.set_last_error(Some(describe_failure(&e)));
 
-                let outcome = shared.scheduler().fail(chunk.id, Instant::now());
+                let outcome = shared.scheduler().fail(lease.id, Instant::now());
                 match outcome {
                     FailOutcome::Retry { after } => warn!(
                         "Attempt {}/{} failed: {}; retry after {:?}",
-                        chunk.attempts, MAX_CHUNK_ATTEMPTS, msg, after
+                        lease.attempts + 1,
+                        MAX_CHUNK_ATTEMPTS,
+                        msg,
+                        after
                     ),
                     FailOutcome::Failed => {
                         error!(
-                            "Chunk {} permanently failed after {} attempts: {}",
-                            chunk.id, chunk.attempts, msg
+                            "Segment {} permanently failed after {} attempts: {}",
+                            lease.id,
+                            lease.attempts + 1,
+                            msg
                         );
                         shared.stop_tx.send_replace(true);
                     }
@@ -1616,9 +1637,6 @@ async fn run_chunk_worker(
 
                 let failures = adapter.consecutive_failures.fetch_add(1, Ordering::SeqCst) + 1;
                 if failures >= MAX_CONSECUTIVE_ADAPTER_FAILURES {
-                    // Dropping the last usable adapter would end the download while its chunks
-                    // still have retries left, so keep it and let the per-chunk attempt budget
-                    // decide. The write lock makes concurrent drop decisions take turns.
                     let states = adapter_states.write().unwrap();
                     let others_alive = states
                         .iter()
@@ -1649,7 +1667,7 @@ async fn run_chunk_worker(
 }
 
 /// Retires every live default-route fallback once `proven` (an explicit adapter) has
-/// completed a chunk. Retiring earlier could leave the download with only an adapter that
+/// committed a block. Retiring earlier could leave the download with only an adapter that
 /// never works.
 fn retire_default_route(
     adapter_states: &RwLock<Vec<Arc<AdapterWorkerState>>>,
@@ -1664,7 +1682,7 @@ fn retire_default_route(
         .filter(|s| s.ip.is_none() && !s.dropped.load(Ordering::SeqCst))
     {
         info!(
-            "Retiring default-route fallback workers now that adapter {} completed a chunk",
+            "Retiring default-route fallback workers now that adapter {} committed a block",
             proven.label
         );
         fallback.drop_with_reason("retired: another adapter took over".to_string());
@@ -1672,20 +1690,58 @@ fn retire_default_route(
     }
 }
 
-/// Downloads one chunk with strict validation. `counted` tracks bytes this attempt added to
-/// the shared counter so the caller can subtract exactly that on failure.
-///
-/// Stop is only observed while waiting on the network, never during a disk write, so when
-/// this returns no write issued by it is still in flight.
-async fn fetch_chunk(
+/// Flushes buffered segment bytes to disk and commits whole blocks to the scheduler.
+#[allow(clippy::too_many_arguments)]
+async fn flush_segment_buffer(
+    shared: &ChunkedShared,
+    segment_id: usize,
+    adapter: &AdapterWorkerState,
+    adapter_states: &RwLock<Vec<Arc<AdapterWorkerState>>>,
+    buffer: &mut Vec<u8>,
+    buffer_start_offset: &mut u64,
+    current_offset: u64,
+    uncommitted: &mut u64,
+) -> Result<(), AttemptError> {
+    if buffer.is_empty() {
+        return Ok(());
+    }
+    if let Err(e) = shared
+        .writer
+        .write_at(*buffer_start_offset, buffer.as_slice())
+        .await
+    {
+        let io_err = e
+            .downcast::<std::io::Error>()
+            .unwrap_or_else(|e| std::io::Error::other(e.to_string()));
+        return Err(AttemptError::Disk(io_err));
+    }
+    let newly_committed = shared.scheduler().commit(segment_id, current_offset);
+    *uncommitted = uncommitted.saturating_sub(newly_committed);
+    if newly_committed > 0 {
+        shared
+            .counters
+            .completed
+            .store(shared.scheduler().completed_count(), Ordering::SeqCst);
+        if adapter.ip.is_some() {
+            retire_default_route(adapter_states, adapter);
+        }
+    }
+    buffer.clear();
+    *buffer_start_offset = current_offset;
+    Ok(())
+}
+
+/// Streams one byte-range segment with strict validation and 256 KiB write buffering.
+async fn fetch_segment(
     adapter: &AdapterWorkerState,
     shared: &ChunkedShared,
-    chunk: &Chunk,
-    counted: &mut u64,
+    lease: &SegmentLease,
+    uncommitted: &mut u64,
     stop: &mut watch::Receiver<bool>,
     retire: &mut watch::Receiver<bool>,
+    adapter_states: &RwLock<Vec<Arc<AdapterWorkerState>>>,
 ) -> Result<(), AttemptError> {
-    let range = chunk.to_range_header();
+    let range = lease.to_range_header();
     let mut request = adapter
         .client
         .get(&shared.url)
@@ -1716,8 +1772,8 @@ async fn fetch_chunk(
     let status = resp.status();
     let content_range = header_str(resp.headers(), header::CONTENT_RANGE).map(str::to_string);
     debug!(
-        "Chunk {} via {} (remote {:?}) {} -> {} Content-Range {:?}",
-        chunk.id,
+        "Segment {} via {} (remote {:?}) {} -> {} Content-Range {:?}",
+        lease.id,
         adapter.label,
         resp.remote_addr(),
         range,
@@ -1726,7 +1782,6 @@ async fn fetch_chunk(
     );
 
     if status == StatusCode::OK && shared.if_range.is_some() {
-        // With If-Range, a 200 means the validator no longer matches.
         return Err(AttemptError::ResourceChanged(anyhow!(
             "server answered {} with 200 instead of 206: If-Range {:?} no longer matches",
             range,
@@ -1739,8 +1794,6 @@ async fn fetch_chunk(
             status,
         })));
     }
-    // RFC 9110: a 206 carries the same validators a 200 would, so any difference
-    // (including one appearing or disappearing) means a different representation.
     for (name, expected) in [
         (header::ETAG, &shared.etag),
         (header::LAST_MODIFIED, &shared.last_modified),
@@ -1766,7 +1819,8 @@ async fn fetch_chunk(
                 range
             )
         })?;
-    if parsed.start != chunk.start || parsed.end != chunk.end {
+    let expected_end = lease.end_at_request.saturating_sub(1);
+    if parsed.start != lease.start || parsed.end != expected_end {
         return Err(AttemptError::Failed(anyhow!(
             "Content-Range {:?} does not match requested {}",
             content_range,
@@ -1784,44 +1838,117 @@ async fn fetch_chunk(
     }
 
     let mut stream = resp.bytes_stream();
-    let mut offset = chunk.start;
+    let mut buffer = Vec::with_capacity(WRITE_BUFFER_SIZE);
+    let mut buffer_start_offset = lease.start;
+    let mut current_offset = lease.start;
+
     loop {
         let next = tokio::select! {
             biased;
-            _ = wait_for_true(stop) => return Err(AttemptError::Stopped),
-            _ = wait_for_true(retire) => return Err(AttemptError::Stopped),
+            _ = wait_for_true(stop) => {
+                flush_segment_buffer(
+                    shared,
+                    lease.id,
+                    adapter,
+                    adapter_states,
+                    &mut buffer,
+                    &mut buffer_start_offset,
+                    current_offset,
+                    uncommitted,
+                ).await?;
+                return Err(AttemptError::Stopped);
+            }
+            _ = wait_for_true(retire) => {
+                flush_segment_buffer(
+                    shared,
+                    lease.id,
+                    adapter,
+                    adapter_states,
+                    &mut buffer,
+                    &mut buffer_start_offset,
+                    current_offset,
+                    uncommitted,
+                ).await?;
+                return Err(AttemptError::Stopped);
+            }
             n = stream.next() => n,
         };
+
         let Some(item) = next else { break };
-        let bytes = item.context("error reading chunk body (stall timeout or disconnect)")?;
+        let bytes = item.context("error reading segment body (stall timeout or disconnect)")?;
         let len = bytes.len() as u64;
-        if *counted + len > chunk.size {
+
+        if current_offset + len > lease.end_at_request {
             return Err(AttemptError::Failed(anyhow!(
                 "server sent more than the {} bytes requested by {}",
-                chunk.size,
+                lease.end_at_request - lease.start,
                 range
             )));
         }
-        if let Err(e) = shared.writer.write_at(offset, bytes).await {
-            let io_err = e
-                .downcast::<std::io::Error>()
-                .unwrap_or_else(|e| std::io::Error::other(e.to_string()));
-            return Err(AttemptError::Disk(io_err));
+
+        let was_split = lease.bounds.lock().unwrap().end < lease.end_at_request;
+
+        let (take, reached_end) = {
+            let mut bounds = lease.bounds.lock().unwrap();
+            bounds.take(len)
+        };
+
+        if take > 0 {
+            buffer.extend_from_slice(&bytes[..take as usize]);
+            current_offset += take;
+            *uncommitted += take;
+            shared.counters.downloaded.fetch_add(take, Ordering::SeqCst);
+            adapter.received.fetch_add(take, Ordering::SeqCst);
         }
-        offset += len;
-        *counted += len;
-        shared.counters.downloaded.fetch_add(len, Ordering::SeqCst);
-        adapter.received.fetch_add(len, Ordering::SeqCst);
+
+        if buffer.len() >= WRITE_BUFFER_SIZE || reached_end {
+            flush_segment_buffer(
+                shared,
+                lease.id,
+                adapter,
+                adapter_states,
+                &mut buffer,
+                &mut buffer_start_offset,
+                current_offset,
+                uncommitted,
+            )
+            .await?;
+        }
+
+        if reached_end && was_split {
+            debug!(
+                "Segment {} via {} reached bound end at offset {}",
+                lease.id, adapter.label, current_offset
+            );
+            return Ok(());
+        }
     }
 
-    if *counted != chunk.size {
+    // Flush any remaining buffered bytes
+    flush_segment_buffer(
+        shared,
+        lease.id,
+        adapter,
+        adapter_states,
+        &mut buffer,
+        &mut buffer_start_offset,
+        current_offset,
+        uncommitted,
+    )
+    .await?;
+
+    let current_end = lease.bounds.lock().unwrap().end;
+    if current_offset < current_end {
         return Err(AttemptError::Failed(anyhow!(
-            "body ended short: received {} of {} bytes for {}",
-            counted,
-            chunk.size,
-            range
+            "body ended short: received {} of {} bytes for segment {} [{}, {})",
+            current_offset - lease.start,
+            current_end - lease.start,
+            lease.id,
+            lease.start,
+            current_end
         )));
     }
+
     Ok(())
 }
 
@@ -2106,11 +2233,12 @@ mod tests {
 
     #[test]
     fn test_new_rejects_zero_config() {
-        assert!(DownloadEngine::new(0, 4).is_err());
-        assert!(DownloadEngine::new(1024, 0).is_err());
-        let e = DownloadEngine::new(1024, 2).unwrap();
-        assert_eq!(e.chunk_size(), 1024);
+        assert!(DownloadEngine::new(0).is_err());
+        let e = DownloadEngine::new(2).unwrap();
         assert_eq!(e.connections_per_adapter(), 2);
+        assert_eq!(e.block_size_for(100 * 1024 * 1024), 1024 * 1024);
+        let e_custom = DownloadEngine::new(2).unwrap().with_block_size(2048);
+        assert_eq!(e_custom.block_size_for(100 * 1024 * 1024), 2048);
     }
 
     #[test]

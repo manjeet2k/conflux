@@ -39,10 +39,6 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Chunk size in megabytes (1-1024, default: 4 MB)
-        #[arg(short = 's', long, default_value_t = 4, value_parser = clap::value_parser!(u64).range(1..=1024))]
-        chunk_size_mb: u64,
-
         /// Number of concurrent connection workers per network adapter (1-64)
         #[arg(short, long, default_value_t = 4, value_parser = clap::value_parser!(u16).range(1..=64))]
         connections: u16,
@@ -115,15 +111,11 @@ async fn main() -> Result<()> {
         Commands::Download {
             url,
             output,
-            chunk_size_mb,
             connections,
             adapter,
         } => {
             validate_url(&url)?;
-            let chunk_size = chunk_size_mb
-                .checked_mul(1024 * 1024)
-                .context("chunk size overflow")?;
-            let engine = DownloadEngine::new(chunk_size, usize::from(connections))?;
+            let engine = DownloadEngine::new(usize::from(connections))?;
             let probe = engine.probe(&url).await?;
 
             // Fallible setup first: resolve_output_path leaves an empty placeholder file.
