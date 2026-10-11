@@ -1426,9 +1426,14 @@ mod tests {
 
         // A claimed path from an inactive/paused task (missing on disk) is skipped.
         let paused_path = dir.join("paused.bin");
-        let f = reserve_output_path(&reserved, &[paused_path.clone()], &dir, "paused.bin")
-            .await
-            .unwrap();
+        let f = reserve_output_path(
+            &reserved,
+            std::slice::from_ref(&paused_path),
+            &dir,
+            "paused.bin",
+        )
+        .await
+        .unwrap();
         assert_eq!(f, dir.join("paused (1).bin"));
 
         // A candidate with an existing resume sidecar is skipped.
