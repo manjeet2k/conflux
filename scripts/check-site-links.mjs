@@ -15,7 +15,9 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SITE = join(ROOT, "_site");
 const REPO = process.env.GITHUB_REPOSITORY || "manjeet2k/conflux";
 const [OWNER, NAME] = REPO.split("/");
-const SITE_URL = process.env.SITE_URL || `https://${OWNER}.github.io/${NAME}/`;
+const CNAME_FILE = join(ROOT, "site", "CNAME");
+const CNAME = existsSync(CNAME_FILE) ? readFileSync(CNAME_FILE, "utf8").trim() : null;
+const SITE_URL = process.env.SITE_URL || (CNAME ? `https://${CNAME}/` : `https://${OWNER}.github.io/${NAME}/`);
 const external = !process.argv.includes("--no-external");
 
 if (!existsSync(SITE)) { console.error("No _site/: run node scripts/build-site.mjs first"); process.exit(2); }

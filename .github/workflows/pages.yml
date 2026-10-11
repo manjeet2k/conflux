@@ -1,7 +1,7 @@
 name: Pages
 
 # Builds and deploys the landing page (site/) to GitHub Pages at
-# https://manjeet2k.github.io/conflux/. scripts/build-site.mjs bakes the newest release's
+# https://confluxdownload.tech/. scripts/build-site.mjs bakes the newest release's
 # download links into the page; site/app.js refreshes them in the browser.
 on:
   push:

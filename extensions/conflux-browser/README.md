@@ -57,4 +57,4 @@ conflux-desktop.exe --unregister-browser
 - **No Remote Telemetry**: The extension contains no analytics, ads, or external scripts.
 - **Localhost Only**: Communication occurs strictly over OS-level stdio pipes directly with the local `conflux-desktop.exe` binary.
 - **Minimal Permissions**: No host permissions, no cookie access, and no tab access. Only the download URL, referrer, and User-Agent are handed to Conflux.
-- **Privacy Policy**: Read our complete [Browser Extension Privacy Policy](https://manjeet2k.github.io/conflux/privacy.html).
+- **Privacy Policy**: Read our complete [Browser Extension Privacy Policy](https://confluxdownload.tech/privacy.html).

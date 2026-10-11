@@ -71,7 +71,7 @@ When submitting to the Chrome Web Store Developer Dashboard, you will be asked t
 ## 4. Privacy Policy URL
 
 Submit this URL in the developer dashboard:
-`https://manjeet2k.github.io/conflux/privacy.html`
+`https://confluxdownload.tech/privacy.html`
 
 Single-purpose statement:
 *"The single purpose of this extension is to forward user-selected download links and their referrer and User-Agent from the browser to the locally installed Conflux Desktop download manager."*

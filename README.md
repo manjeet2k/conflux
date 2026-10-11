@@ -1,11 +1,11 @@
 # Conflux ⚡
 
 <p align="center">
-  <a href="https://manjeet2k.github.io/conflux/"><img src="site/og.png" alt="Conflux: one download, every connection. Bond Wi-Fi, Ethernet and phone tethering into one faster download on Windows." width="100%"></a>
+  <a href="https://confluxdownload.tech/"><img src="site/og.png" alt="Conflux: one download, every connection. Bond Wi-Fi, Ethernet and phone tethering into one faster download on Windows." width="100%"></a>
 </p>
 
 <p align="center">
-  <a href="https://manjeet2k.github.io/conflux/"><img alt="Download for Windows" src="https://img.shields.io/badge/Download_for_Windows-10%2F11_x64-0078D4?style=for-the-badge"></a>
+  <a href="https://confluxdownload.tech/"><img alt="Download for Windows" src="https://img.shields.io/badge/Download_for_Windows-10%2F11_x64-0078D4?style=for-the-badge"></a>
   <a href="https://github.com/manjeet2k/conflux/releases"><img alt="Latest beta" src="https://img.shields.io/github/v/release/manjeet2k/conflux?include_prereleases&label=latest&style=for-the-badge&color=8b5cf6"></a>
   <a href="https://github.com/manjeet2k/conflux/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/manjeet2k/conflux/total?style=for-the-badge&color=34d399"></a>
   <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/Rust-2021_Edition-orange.svg?style=for-the-badge"></a>
@@ -14,7 +14,7 @@
 
 > **Next-Generation Channel-Bonding Download Accelerator for Windows**  
 > Combine Wi-Fi, Ethernet, and 4G/5G mobile tethering into a single, faster download.  
-> **Windows 10/11 (64-bit) only · Public Beta** · [Website](https://manjeet2k.github.io/conflux/) · [Releases](https://github.com/manjeet2k/conflux/releases) · [Documentation](docs/README.md)
+> **Windows 10/11 (64-bit) only · Public Beta** · [Website](https://confluxdownload.tech/) · [Releases](https://github.com/manjeet2k/conflux/releases) · [Documentation](docs/README.md)
 
 <p align="center">
   <img src="docs/images/app-main.png" alt="Conflux desktop application interface running on Windows 11" width="85%">

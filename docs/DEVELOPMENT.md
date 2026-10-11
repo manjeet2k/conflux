@@ -174,7 +174,7 @@ Open `http://localhost:5173` to explore the dashboard, adapter toggles, and live
 ## Website (GitHub Pages)
 
 The landing page lives in `site/` (plain HTML, CSS and one small script, no build tooling) and is
-deployed to https://manjeet2k.github.io/conflux/ by `.github/workflows/pages.yml` on pushes that
+deployed to https://confluxdownload.tech/ by `.github/workflows/pages.yml` on pushes that
 touch it, after every Release run, and by hand (`gh workflow run pages.yml`).
 
 - `node scripts/build-site.mjs` writes `_site/`, filling `{{PLACEHOLDERS}}` with the newest
