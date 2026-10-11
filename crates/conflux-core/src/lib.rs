@@ -4,6 +4,7 @@ pub mod chunk;
 pub mod engine;
 pub mod filename;
 pub mod resume;
+pub mod segment;
 pub mod watcher;
 pub mod writer;
 
@@ -18,5 +19,8 @@ pub use engine::{
 };
 pub use filename::{claim_unique_path, sanitize_filename};
 pub use resume::{remove_resume_sidecar, resume_sidecar_path};
+pub use segment::{
+    block_size_for, Claim, FailOutcome, SegmentBounds, SegmentLease, SegmentScheduler,
+};
 pub use watcher::{diff_adapters, NetworkWatcher, DEFAULT_DEBOUNCE};
 pub use writer::SparseFileWriter;

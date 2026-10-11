@@ -75,12 +75,16 @@ Before any commit:
 
 *(Note: Do not run bare `cargo test` without `-p conflux-core` on Linux/WSL2, as `conflux-desktop` targets Windows and requires cross-compilation).*
 
-### Superpower 6: Version Incrementation on Release
-- When packaging an installer or preparing a release, increment the version across:
+### Superpower 6: Version Incrementation on Changes, Fixes, and Releases
+- Bump the version sequentially (e.g. `0.2.1`, `0.2.2`, `0.2.3`, ...) with every change, fix, or feature update.
+- Always use `node scripts/bump-version.mjs <new-version>` (or `npm --prefix ui run version:bump -- <new-version>`) to synchronously update all version sources:
   - `Cargo.toml` (`[workspace.package.version]`)
+  - `Cargo.lock` (workspace crates: `conflux-core`, `conflux-cli`, `conflux-desktop`)
   - `crates/conflux-desktop/tauri.conf.json` (`version`)
   - `ui/package.json` (`version`)
-- Ensure the installer bundle reflects the newly incremented version.
+  - `ui/package-lock.json`
+- Verify using `node scripts/check-version.mjs`.
+- When packaging an installer or preparing a release, ensure the installer bundle reflects the newly incremented version.
 
 ### Superpower 7: On-Demand Installer & Binary Bundling
 - **DO NOT build the release `.exe` or NSIS installer bundle automatically on every change or commit.**

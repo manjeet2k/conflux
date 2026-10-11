@@ -7,8 +7,6 @@ use tracing::warn;
 pub const SCHEMA_VERSION: u32 = 1;
 pub const MIN_CONNECTIONS: u32 = 1;
 pub const MAX_CONNECTIONS: u32 = 16;
-pub const MIN_CHUNK_MB: u32 = 1;
-pub const MAX_CHUNK_MB: u32 = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -30,7 +28,6 @@ pub struct Settings {
     /// `None` = the OS Downloads folder.
     pub default_save_dir: Option<String>,
     pub connections_per_adapter: u32,
-    pub chunk_size_mb: u32,
     pub notify_on_complete: bool,
     pub close_to_tray: bool,
     pub auto_aggregate_adapters: bool,
@@ -55,7 +52,6 @@ impl Default for Settings {
             theme: ThemePreference::System,
             default_save_dir: None,
             connections_per_adapter: 4,
-            chunk_size_mb: 4,
             notify_on_complete: true,
             close_to_tray: true,
             auto_aggregate_adapters: true,
@@ -75,7 +71,6 @@ impl Settings {
         self.connections_per_adapter = self
             .connections_per_adapter
             .clamp(MIN_CONNECTIONS, MAX_CONNECTIONS);
-        self.chunk_size_mb = self.chunk_size_mb.clamp(MIN_CHUNK_MB, MAX_CHUNK_MB);
         self.default_save_dir = self
             .default_save_dir
             .map(|d| d.trim().to_string())
@@ -114,10 +109,6 @@ impl Settings {
         }
         next.adapter_overrides = self.adapter_overrides.clone();
         Ok(next)
-    }
-
-    pub fn chunk_size_bytes(&self) -> u64 {
-        u64::from(self.chunk_size_mb) * 1024 * 1024
     }
 }
 
@@ -171,15 +162,12 @@ mod tests {
     fn defaults_and_clamping() {
         let s = Settings {
             connections_per_adapter: 0,
-            chunk_size_mb: 1000,
             default_save_dir: Some("   ".into()),
             ..Settings::default()
         }
         .normalized();
         assert_eq!(s.connections_per_adapter, 1);
-        assert_eq!(s.chunk_size_mb, 64);
         assert_eq!(s.default_save_dir, None);
-        assert_eq!(Settings::default().chunk_size_bytes(), 4 * 1024 * 1024);
     }
 
     #[test]
@@ -187,7 +175,6 @@ mod tests {
         let json = serde_json::to_value(Settings::default()).unwrap();
         assert_eq!(json["theme"], "system");
         assert_eq!(json["connections_per_adapter"], 4);
-        assert_eq!(json["chunk_size_mb"], 4);
         assert_eq!(json["notify_on_complete"], true);
         assert_eq!(json["close_to_tray"], true);
         assert_eq!(json["auto_aggregate_adapters"], true);
@@ -264,7 +251,6 @@ mod tests {
         overrides.insert("wlan0".into(), true);
         let s = Settings {
             theme: ThemePreference::Light,
-            chunk_size_mb: 8,
             adapter_overrides: overrides,
             ..Settings::default()
         };

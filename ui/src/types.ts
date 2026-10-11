@@ -87,7 +87,6 @@ export interface Settings {
   /** null = the OS Downloads folder. */
   default_save_dir: string | null;
   connections_per_adapter: number;
-  chunk_size_mb: number;
   notify_on_complete: boolean;
   close_to_tray: boolean;
   auto_aggregate_adapters: boolean;
@@ -132,7 +131,6 @@ export interface Diagnostics {
     schema_version: number;
     theme: ThemePreference;
     connections_per_adapter: number;
-    chunk_size_mb: number;
     notify_on_complete: boolean;
     close_to_tray: boolean;
     auto_aggregate_adapters: boolean;

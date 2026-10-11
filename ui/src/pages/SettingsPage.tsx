@@ -5,7 +5,6 @@ import {
   DarkTheme20Regular,
   Folder20Regular,
   PlugConnected20Regular,
-  PuzzlePiece20Regular,
   Info20Regular,
   Navigation20Regular,
   Warning20Regular,
@@ -53,7 +52,6 @@ const useStyles = makeStyles({
 });
 
 const themeLabels: Record<ThemePreference, string> = { system: 'Use system setting', light: 'Light', dark: 'Dark' };
-const chunkSizes = [1, 2, 4, 8, 16, 32, 64];
 
 interface SettingsPageProps {
   settings: Settings;
@@ -238,27 +236,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
             }}
           />
         </SettingsCard>
-        <SettingsCard
-          icon={<PuzzlePiece20Regular />}
-          title="Chunk size"
-          description="Size of each byte-range request. Smaller chunks balance slow adapters better; larger ones mean fewer requests."
-        >
-          <Dropdown
-            className={styles.dropdown}
-            value={`${settings.chunk_size_mb} MB`}
-            selectedOptions={[String(settings.chunk_size_mb)]}
-            onOptionSelect={(_, d) => onChange({ chunk_size_mb: Number(d.optionValue) })}
-          >
-            {chunkSizes.map((mb) => (
-              <Option key={mb} value={String(mb)}>
-                {`${mb} MB`}
-              </Option>
-            ))}
-          </Dropdown>
-        </SettingsCard>
         <Text size={200} style={{ color: tokens.colorNeutralForeground3, padding: '4px 2px' }}>
-          Connection and chunk settings apply to downloads started or resumed afterwards. A resumed download keeps
-          its original chunk size.
+          Connection settings apply to downloads started or resumed afterwards. Bandwidth is dynamically balanced
+          across active connections with work-stealing range splitting.
         </Text>
       </div>
 
