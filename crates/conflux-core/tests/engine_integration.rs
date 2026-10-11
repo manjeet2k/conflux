@@ -128,7 +128,7 @@ async fn normal_ranged_download_matches_sha() {
     // 1 probe + segment streaming GETs, no retries, no HEAD.
     let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
     assert!(
-        reqs >= 4 && reqs <= 17,
+        (4..=17).contains(&reqs),
         "expected 4..=17 requests, got {reqs}"
     );
     assert_eq!(server.stats.head_requests.load(Ordering::SeqCst), 0);
@@ -205,7 +205,7 @@ async fn dropped_connections_are_requeued_and_recovered() {
     assert_progress_sane(&out.progress, PAYLOAD_LEN as u64);
     let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
     assert!(
-        reqs >= 4 && reqs <= 17 + 2,
+        (4..=17 + 2).contains(&reqs),
         "expected 4..=19 requests, got {reqs}"
     );
 }
@@ -224,7 +224,7 @@ async fn simultaneous_failures_on_only_adapter_are_retried() {
     assert_progress_sane(&out.progress, PAYLOAD_LEN as u64);
     let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
     assert!(
-        reqs >= 4 && reqs <= 17 + 4,
+        (4..=17 + 4).contains(&reqs),
         "expected 4..=21 requests, got {reqs}"
     );
     assert!(!out.progress.last().unwrap().adapters[0].dropped);
@@ -261,7 +261,7 @@ async fn stalled_chunks_time_out_and_recover() {
     assert_progress_sane(&out.progress, PAYLOAD_LEN as u64);
     let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
     assert!(
-        reqs >= 4 && reqs <= 17 + 2,
+        (4..=17 + 2).contains(&reqs),
         "expected 4..=19 requests, got {reqs}"
     );
     assert!(
@@ -770,7 +770,7 @@ async fn resume_with_changed_etag_restarts_from_zero() {
     assert_eq!(result.unwrap(), sha256_hex(&data));
     let reqs = new.stats.chunk_requests.load(Ordering::SeqCst);
     assert!(
-        reqs >= 4 && reqs <= 17,
+        (4..=17).contains(&reqs),
         "expected 4..=17 requests, got {reqs}"
     );
     assert!(!resume_sidecar_path(&path).exists());
@@ -799,7 +799,7 @@ async fn resume_with_changed_size_restarts_from_zero() {
     assert!(std::fs::read(&path).unwrap() == *bigger);
     let reqs = new.stats.chunk_requests.load(Ordering::SeqCst);
     assert!(
-        reqs >= 4 && reqs <= 18,
+        (4..=18).contains(&reqs),
         "expected 4..=18 requests, got {reqs}"
     );
 }
@@ -826,7 +826,7 @@ async fn resume_with_corrupt_sidecar_or_missing_file_starts_fresh() {
     assert!(!resume_sidecar_path(&path).exists());
     let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
     assert!(
-        reqs >= 8 && reqs <= 34,
+        (8..=34).contains(&reqs),
         "expected 8..=34 requests, got {reqs}"
     );
 }
@@ -1304,7 +1304,7 @@ async fn resume_with_disappeared_etag_restarts_from_zero() {
     assert_eq!(result.unwrap(), sha256_hex(&data));
     let reqs = new.stats.chunk_requests.load(Ordering::SeqCst);
     assert!(
-        reqs >= 4 && reqs <= 17,
+        (4..=17).contains(&reqs),
         "expected 4..=17 requests, got {reqs}"
     );
 }
@@ -1488,7 +1488,7 @@ async fn cancel_during_hashing_keeps_sidecar_and_resume_does_not_redownload() {
     watcher.await.unwrap();
     let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
     assert!(
-        reqs >= 4 && reqs <= 17,
+        (4..=17).contains(&reqs),
         "expected 4..=17 requests, got {reqs}"
     );
 
@@ -1568,7 +1568,7 @@ async fn hostile_sidecar_chunk_size_falls_back_to_fresh_start() {
     assert_eq!(result.unwrap(), sha256_hex(&data));
     let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
     assert!(
-        reqs >= 4 && reqs <= 17,
+        (4..=17).contains(&reqs),
         "expected 4..=17 requests, got {reqs}"
     );
     assert!(std::fs::read(&path).unwrap() == *data);
@@ -1751,7 +1751,7 @@ async fn probe_records_final_url_and_chunks_target_final_endpoint() {
     // Target server must have served all chunks
     let target_reqs = target_server.stats.chunk_requests.load(Ordering::SeqCst);
     assert!(
-        target_reqs >= 4 && target_reqs <= 17,
+        (4..=17).contains(&target_reqs),
         "expected 4..=17 target requests, got {target_reqs}"
     );
     // Redirector server must NOT have been re-queried for chunks
@@ -1860,7 +1860,7 @@ async fn idle_worker_steals_and_splits_in_flight_segment_from_active_worker() {
 
     let reqs = server.stats.chunk_requests.load(Ordering::SeqCst);
     assert!(
-        reqs >= 2 && reqs <= 6,
+        (2..=6).contains(&reqs),
         "expected 2..=6 requests, got {reqs}"
     );
 }

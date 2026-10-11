@@ -1,0 +1,140 @@
+/* Scoped to the onboarding portal; use Fluent tokens available inside the portal. */
+.cfx-welcome.fui-DialogSurface {
+  box-sizing: border-box;
+  width: min(1000px, calc(100vw - 40px));
+  max-width: none;
+  max-height: calc(100dvh - 40px);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 20px;
+  background: var(--colorNeutralBackground1);
+  color: var(--colorNeutralForeground1);
+}
+.cfx-welcome *, .cfx-welcome *::before, .cfx-welcome *::after { box-sizing: border-box; }
+.cfx-welcome-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 28px; flex-shrink: 0; }
+.cfx-welcome-brand { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 650; }
+.cfx-welcome-logo { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; color: white; background: linear-gradient(135deg, #437cf6, #8b4de5); box-shadow: 0 4px 12px #7153d526; }
+.cfx-welcome-count { font-size: 12px; color: var(--colorNeutralForeground3); }
+.cfx-welcome-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.cfx-welcome-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: stretch; gap: 34px; padding: 0 28px 28px; }
+.cfx-welcome-visual { position: relative; isolation: isolate; overflow: hidden; min-width: 0; border-radius: 16px; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 28px 12px 22px; color: var(--colorBrandForeground1); background: linear-gradient(145deg, #687cff16, #bd71e61c 55%, #2fcdb515); border: 1px solid #828bd51c; animation: cfx-setup-enter 420ms cubic-bezier(.22, 1, .36, 1) both; }
+.cfx-welcome-orb { position: absolute; z-index: -1; border-radius: 50%; filter: blur(25px); opacity: .18; pointer-events: none; }
+.cfx-welcome-orb-one { width: 180px; height: 180px; top: -60px; right: -50px; background: #bb85fa; }
+.cfx-welcome-orb-two { width: 140px; height: 140px; bottom: -50px; left: -35px; background: #38c9c1; }
+.cfx-welcome-visual-label, .cfx-welcome-eyebrow { font-size: 10px; letter-spacing: 1.5px; font-weight: 650; }
+.cfx-welcome-visual-label { color: var(--colorNeutralForeground2); margin-bottom: 10px; }
+.cfx-welcome-caption { color: var(--colorNeutralForeground2); margin: 8px 0 12px; font-size: 13px; text-align: center; }
+.cfx-welcome-animation-control { margin-top: 4px; }
+.cfx-welcome-copy { align-self: center; min-width: 0; padding: 18px 0; }
+.cfx-welcome-eyebrow { color: var(--colorBrandForeground1); }
+.cfx-welcome-title.fui-DialogTitle { display: block; margin: 14px 0 0; padding: 0; font-size: clamp(25px, 2.7vw, 34px); line-height: 1.18; font-weight: 650; letter-spacing: -.8px; white-space: pre-line; overflow-wrap: anywhere; }
+.cfx-welcome-title:focus-visible { outline: 2px solid var(--colorStrokeFocus2); outline-offset: 5px; border-radius: 3px; }
+.cfx-welcome-details { animation: cfx-setup-enter 300ms cubic-bezier(.22, 1, .36, 1) both; }
+.cfx-welcome-details-back { animation-name: cfx-setup-enter-back; }
+.cfx-welcome-description { color: var(--colorNeutralForeground2); line-height: 1.65; margin: 18px 0 24px; font-size: 14px; }
+.cfx-welcome-features { display: flex; flex-direction: column; gap: 18px; padding: 0; margin: 0; list-style: none; }
+.cfx-welcome-features li, .cfx-welcome-first-download { display: flex; align-items: center; gap: 12px; }
+.cfx-welcome strong { display: block; font-size: 13px; font-weight: 600; line-height: 1.45; }
+.cfx-welcome small { display: block; margin-top: 3px; font-size: 12px; line-height: 1.5; color: var(--colorNeutralForeground2); }
+.cfx-welcome-icon { width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0; display: grid; place-items: center; }
+.cfx-welcome-icon-blue { background: #448cff1c; color: #4384ef; }
+.cfx-welcome-icon-purple { background: #a16cf21c; color: #a076e3; }
+.cfx-welcome-icon-green { background: #28b59e1c; color: #24a48d; }
+.cfx-welcome-icon-orange { background: #f690381c; color: #eb8a34; }
+.cfx-welcome-browsers { display: flex; flex-direction: column; gap: 10px; }
+.cfx-welcome-browser.fui-Button { width: 100%; min-width: 0; justify-content: flex-start; gap: 12px; padding: 12px; border-radius: 12px; text-align: left; transition: border-color 160ms, background-color 160ms, transform 160ms; }
+.cfx-welcome-browser.fui-Button:hover { transform: translateY(-2px); }
+.cfx-welcome-browser > span:not(.fui-Button__icon) { flex: 1; min-width: 0; }
+.cfx-welcome-browser > .fui-Button__icon { width: auto; height: auto; margin: 0; }
+.cfx-welcome-browser > svg { flex-shrink: 0; color: var(--colorNeutralForeground3); }
+.cfx-welcome-note { font-size: 12px; color: var(--colorNeutralForeground3); line-height: 1.65; margin: 18px 0 0; }
+.cfx-welcome-first-download { padding: 16px; border: 1px solid var(--colorNeutralStroke2); border-radius: 12px; background: var(--colorNeutralBackground2); }
+.cfx-welcome-footer { flex-shrink: 0; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 20px; padding: 20px 28px; border-top: 1px solid var(--colorNeutralStroke2); background: var(--colorNeutralBackground1); }
+.cfx-welcome-steps { display: flex; align-items: center; gap: 16px; padding: 0; margin: 0; list-style: none; }
+.cfx-welcome-steps li { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--colorNeutralForeground3); }
+.cfx-welcome-steps li > span:first-child { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--colorNeutralStroke2); }
+.cfx-welcome-steps .is-reached { color: var(--colorBrandForeground1); }
+.cfx-welcome-steps .is-reached > span:first-child { background: var(--colorBrandBackground2); border-color: var(--colorBrandStroke2); }
+.cfx-welcome-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.cfx-welcome-actions .fui-Button { min-height: 38px; border-radius: 8px; }
+.cfx-setup-illustration { display: block; width: 100%; max-width: 400px; height: auto; filter: drop-shadow(0 10px 12px #3333660a); }
+.cfx-setup-card { fill: var(--colorNeutralBackground1); stroke: currentColor; stroke-width: 1.2; }
+.cfx-setup-source-0, .cfx-setup-packet-0 { color: #488bf3; }
+.cfx-setup-source-1, .cfx-setup-packet-1 { color: #9764e9; }
+.cfx-setup-source-2, .cfx-setup-packet-2 { color: #22a995; }
+.cfx-setup-source .cfx-setup-card { stroke-width: 2; }
+.cfx-welcome-step-1 .cfx-setup-illustration { color: #9e6cde; }
+.cfx-welcome-step-2 .cfx-setup-illustration { color: #258fa4; }
+/* Each scene loops independently; the shared handoff timeline keeps its story in order. */
+.cfx-setup-path { stroke-dasharray: 8 5; animation: cfx-setup-flow 1.8s linear infinite; }
+.cfx-setup-source { transform-box: fill-box; transform-origin: center; animation: cfx-setup-source-pulse 3s ease-in-out infinite; }
+.cfx-setup-source-1 { animation-delay: 200ms; }
+.cfx-setup-source-2 { animation-delay: 400ms; }
+.cfx-setup-packet { stroke-dasharray: 8 92; animation: cfx-setup-packet-travel 2s linear infinite; }
+.cfx-setup-packet-1 { animation-delay: -650ms; }
+.cfx-setup-packet-2 { animation-delay: -1300ms; }
+.cfx-setup-progress { transform-origin: 115px 142px; animation: cfx-setup-fill 5s ease-in-out infinite; }
+.cfx-setup-check { stroke-dasharray: 1; animation: cfx-setup-check-loop 5s ease-in-out infinite; }
+.cfx-setup-chart { stroke-dasharray: 1; animation: cfx-setup-chart-loop 5s ease-in-out infinite; }
+.cfx-handoff-click { animation: cfx-handoff-click 5s ease-in-out infinite; }
+.cfx-handoff-cursor { animation: cfx-handoff-cursor 5s ease-in-out infinite; }
+.cfx-handoff-file { opacity: 0; animation: cfx-handoff-file 5s cubic-bezier(.4, 0, .2, 1) infinite; }
+.cfx-handoff-arrival { animation: cfx-handoff-arrival 5s ease-in-out infinite; }
+.cfx-handoff-progress { transform-origin: 250px 242px; animation: cfx-handoff-progress 5s ease-in-out infinite; }
+.cfx-animation-paused .cfx-setup-illustration * { animation-play-state: paused; }
+@keyframes cfx-setup-source-pulse { 0%, 60%, 100% { transform: scale(1); } 30% { transform: scale(1.035); } }
+@keyframes cfx-setup-packet-travel { 0% { stroke-dashoffset: 8; opacity: 0; } 12%, 80% { opacity: 1; } 100% { stroke-dashoffset: -100; opacity: 0; } }
+@keyframes cfx-handoff-cursor { 0%, 8% { opacity: 0; transform: translate(26px, 20px); } 18%, 30% { opacity: 1; transform: translate(0, 0); } 40%, 100% { opacity: 0; transform: translate(0, 0); } }
+@keyframes cfx-handoff-click { 0%, 18%, 38%, 100% { opacity: 0; } 25% { opacity: .35; } }
+@keyframes cfx-handoff-file { 0%, 28% { opacity: 0; transform: translate(0, 0) scale(1); } 34% { opacity: 1; transform: translate(0, 0) scale(1); } 57% { opacity: 1; transform: translate(131px, 108px) scale(1); } 64%, 100% { opacity: 0; transform: translate(131px, 108px) scale(1); } }
+@keyframes cfx-handoff-arrival { 0%, 55% { opacity: 0; } 65%, 92% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes cfx-handoff-progress { 0%, 62% { transform: scaleX(.05); } 88%, 100% { transform: scaleX(1); } }
+@keyframes cfx-setup-chart-loop { 0%, 8% { stroke-dashoffset: 1; opacity: 1; } 60%, 88% { stroke-dashoffset: 0; opacity: 1; } 96%, 100% { stroke-dashoffset: 0; opacity: 0; } }
+@keyframes cfx-setup-check-loop { 0%, 60% { stroke-dashoffset: 1; opacity: 1; } 74%, 88% { stroke-dashoffset: 0; opacity: 1; } 96%, 100% { stroke-dashoffset: 0; opacity: 0; } }
+@keyframes cfx-setup-enter { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes cfx-setup-enter-back { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes cfx-setup-flow { to { stroke-dashoffset: -26; } }
+@keyframes cfx-setup-fill { 0%, 8% { transform: scaleX(.08); opacity: 1; } 60%, 88% { transform: scaleX(1); opacity: 1; } 96%, 100% { transform: scaleX(1); opacity: 0; } }
+@media (max-width: 800px) {
+  .cfx-welcome-layout { gap: 24px; padding: 0 22px 22px; }
+  .cfx-welcome-footer { padding: 16px 22px; gap: 12px; }
+  .cfx-welcome-step-label { display: none; }
+  .cfx-welcome-steps { gap: 8px; }
+}
+@media (max-width: 620px) {
+  .cfx-welcome.fui-DialogSurface { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); border-radius: 16px; }
+  .cfx-welcome-header { padding: 16px 20px; }
+  .cfx-welcome-layout { grid-template-columns: minmax(0, 1fr); gap: 22px; padding: 0 20px 22px; }
+  .cfx-welcome-visual { padding: 12px; }
+  .cfx-setup-illustration { max-width: 240px; }
+  .cfx-welcome-visual-label { display: none; }
+  .cfx-welcome-caption { margin: 0 0 4px; font-size: 12px; }
+  .cfx-welcome-copy { padding: 0; }
+  .cfx-welcome-title.fui-DialogTitle { font-size: 27px; }
+  .cfx-welcome-footer { padding: 14px 20px; }
+  .cfx-welcome-steps { width: 100%; justify-content: center; }
+  .cfx-welcome-step-label { display: inline; }
+  .cfx-welcome-actions { width: 100%; }
+}
+@media (max-height: 650px) and (min-width: 621px) {
+  .cfx-welcome-header { padding-top: 12px; padding-bottom: 12px; }
+  .cfx-welcome-footer { padding-top: 12px; padding-bottom: 12px; }
+  .cfx-welcome-copy { padding: 4px 0; }
+  .cfx-welcome-visual { padding: 16px 8px; }
+  .cfx-setup-illustration { max-width: 300px; }
+}
+@media (max-width: 620px) and (max-height: 740px) {
+  .cfx-welcome-visual { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 0 8px; padding: 10px; }
+  .cfx-setup-illustration { grid-column: 1; grid-row: 1 / 3; }
+  .cfx-welcome-caption { align-self: end; font-size: 11px; }
+  .cfx-welcome-animation-control { align-self: start; justify-self: center; font-size: 11px; padding: 4px; }
+  .cfx-welcome-title.fui-DialogTitle { font-size: 24px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cfx-welcome *, .cfx-welcome *::before, .cfx-welcome *::after { animation: none !important; transition: none !important; }
+  .cfx-setup-packet, .cfx-handoff-cursor, .cfx-handoff-file, .cfx-welcome-animation-control { display: none; }
+  .cfx-welcome-browser.fui-Button:hover { transform: none; }
+}
+

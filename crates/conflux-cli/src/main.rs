@@ -43,6 +43,10 @@ enum Commands {
         #[arg(short, long, default_value_t = 4, value_parser = clap::value_parser!(u16).range(1..=64))]
         connections: u16,
 
+        /// Deprecated: chunk size is now dynamically determined. Accepted for backwards compatibility.
+        #[arg(short = 's', long, hide = true)]
+        _chunk_size_mb: Option<u64>,
+
         /// Only use adapters matching this name or IP substring (e.g. "WiFi" or "Ethernet")
         #[arg(short = 'a', long)]
         adapter: Option<String>,
@@ -113,6 +117,7 @@ async fn main() -> Result<()> {
             output,
             connections,
             adapter,
+            ..
         } => {
             validate_url(&url)?;
             let engine = DownloadEngine::new(usize::from(connections))?;
@@ -338,7 +343,7 @@ mod tests {
     #[test]
     fn test_cli_rejects_zero_args() {
         assert!(Cli::try_parse_from(["conflux", "download", "http://x/y", "-c", "0"]).is_err());
-        assert!(Cli::try_parse_from(["conflux", "download", "http://x/y", "-s", "0"]).is_err());
+        assert!(Cli::try_parse_from(["conflux", "download", "http://x/y", "-c", "2"]).is_ok());
         assert!(
             Cli::try_parse_from(["conflux", "download", "http://x/y", "-c", "2", "-s", "1"])
                 .is_ok()

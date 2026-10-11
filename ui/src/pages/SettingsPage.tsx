@@ -59,9 +59,10 @@ interface SettingsPageProps {
   loaded: boolean;
   onChange: (patch: Partial<Settings>) => void;
   onError: (message: string) => void;
+  availableUpdate?: UpdateInfo | null;
 }
 
-export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, onChange, onError }) => {
+export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, onChange, onError, availableUpdate }) => {
   const styles = useStyles();
   const [osDownloads, setOsDownloads] = useState('');
   const [version, setVersion] = useState('');
@@ -70,8 +71,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
   const [copied, setCopied] = useState(false);
   const [updateBusy, setUpdateBusy] = useState<'idle' | 'checking' | 'installing'>('idle');
   // Result of the last check: `update` when a newer version exists, `upToDate` when it does not.
-  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [checkedUpdate, setCheckedUpdate] = useState<UpdateInfo | null>(null);
   const [upToDate, setUpToDate] = useState(false);
+  const update = upToDate ? null : checkedUpdate ?? availableUpdate;
   const [browserHostRegistered, setBrowserHostRegistered] = useState<boolean | null>(null);
   const [registeringHost, setRegisteringHost] = useState(false);
 
@@ -104,7 +106,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
     setUpToDate(false);
     try {
       const found = await api.checkForUpdate();
-      setUpdate(found);
+      setCheckedUpdate(found);
       setUpToDate(found === null);
     } catch (e) {
       onError(errorText(e));
@@ -125,7 +127,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
     }
   };
 
-  const openAbout = (target: 'licenses' | 'repo' | 'releases') => {
+  const openAbout = (target: 'licenses' | 'repo' | 'releases' | 'extension-chrome' | 'extension-firefox') => {
     api.openAboutLink(target).catch((e) => onError(errorText(e)));
   };
 
@@ -318,10 +320,10 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
                 {browserHostRegistered ? 'Host Registered' : 'Not Registered'}
               </Badge>
             )}
-            <Button appearance="secondary" onClick={() => api.openAboutLink('extension-chrome')}>
+            <Button appearance="secondary" onClick={() => openAbout('extension-chrome')}>
               Chrome / Edge / Brave
             </Button>
-            <Button appearance="secondary" onClick={() => api.openAboutLink('extension-firefox')}>
+            <Button appearance="secondary" onClick={() => openAbout('extension-firefox')}>
               Firefox
             </Button>
             <Button onClick={handleRegisterHost} disabled={registeringHost}>

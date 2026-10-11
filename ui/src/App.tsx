@@ -5,6 +5,7 @@ import {
   Toast,
   ToastBody,
   ToastTitle,
+  ToastTrigger,
   Toaster,
   makeStyles,
   tokens,
@@ -18,6 +19,7 @@ import {
   ErrorCircle48Regular,
   PauseCircle48Regular,
   Search48Regular,
+  Dismiss16Regular,
 } from '@fluentui/react-icons';
 import { listen } from '@tauri-apps/api/event';
 import { api, errorText } from './api';
@@ -101,7 +103,7 @@ export const App: React.FC = () => {
     (intent: ToastIntent, title: string) =>
       dispatchToast(
         <Toast>
-          <ToastTitle>{title}</ToastTitle>
+          <ToastTitle action={<ToastTrigger><Button appearance="transparent" size="small" icon={<Dismiss16Regular />} aria-label="Dismiss notification" /></ToastTrigger>}>{title}</ToastTitle>
         </Toast>,
         { intent, timeout: intent === 'error' || intent === 'warning' ? 8000 : 3000 }
       ),
@@ -131,11 +133,16 @@ export const App: React.FC = () => {
   const [sort, setSort] = useState<SortState>({ key: 'added', direction: 'descending' });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [welcomeOpen, setWelcomeOpen] = useState(() => !readPref('cfx.onboarding.complete', false));
+  const [pendingUpdate, setPendingUpdate] = useState<UpdateInfo | null>(null);
+  const announcedUpdate = useRef<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [addRequestId, setAddRequestId] = useState(0);
+  const activeDownloadRequest = useRef(0);
   const [addUrl, setAddUrl] = useState('');
   const [addFilename, setAddFilename] = useState<string | null>(null);
   const [addHeaders, setAddHeaders] = useState<RequestHeaders | null>(null);
   const [downloadQueue, setDownloadQueue] = useState<ExternalDownloadPayload[]>([]);
+  const downloadQueueRef = useRef<ExternalDownloadPayload[]>([]);
   const [removeIds, setRemoveIds] = useState<string[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -173,6 +180,8 @@ export const App: React.FC = () => {
   const openAdd = useCallback(
     (url = '', filename: string | null = null, headers: RequestHeaders | null = null) => {
       if (dialogOpenRef.current) return;
+      dialogOpenRef.current = true;
+      setAddRequestId(++activeDownloadRequest.current);
       refreshAdapters();
       setAddUrl(url);
       setAddFilename(filename);
@@ -186,9 +195,12 @@ export const App: React.FC = () => {
     (payload: ExternalDownloadPayload) => {
       refreshAdapters();
       if (dialogOpenRef.current) {
-        setDownloadQueue((prev) => [...prev, payload]);
-        notify('info', `Queued link: ${payload.filename || payload.url}`);
+        downloadQueueRef.current = [...downloadQueueRef.current, payload];
+        setDownloadQueue(downloadQueueRef.current);
+        notify('info', 'Browser download added to the queue');
       } else {
+        dialogOpenRef.current = true;
+        setAddRequestId(++activeDownloadRequest.current);
         setAddUrl(payload.url);
         setAddFilename(payload.filename ?? null);
         setAddHeaders(payload.headers ?? null);
@@ -198,27 +210,33 @@ export const App: React.FC = () => {
     [refreshAdapters, notify]
   );
 
-  const handleAdvanceOrClose = useCallback(() => {
-    setDownloadQueue((prev) => {
-      if (prev.length > 0) {
-        const [next, ...rest] = prev;
+  const handleAdvanceOrClose = useCallback((requestId: number) => {
+    // A cancelled request may finish after another dialog has opened.
+    if (requestId !== activeDownloadRequest.current) return;
+      if (downloadQueueRef.current.length > 0) {
+        const [next, ...rest] = downloadQueueRef.current;
+        downloadQueueRef.current = rest;
+        setDownloadQueue(rest);
+        setAddRequestId(++activeDownloadRequest.current);
         setAddUrl(next.url);
         setAddFilename(next.filename ?? null);
         setAddHeaders(next.headers ?? null);
         setAddOpen(true);
-        return rest;
       } else {
+        activeDownloadRequest.current++;
+        dialogOpenRef.current = false;
         setAddOpen(false);
         setAddUrl('');
         setAddFilename(null);
         setAddHeaders(null);
         document.getElementById(GRID_ID)?.focus();
-        return [];
       }
-    });
   }, []);
 
   const handleCancelAll = useCallback(() => {
+    activeDownloadRequest.current++;
+    downloadQueueRef.current = [];
+    dialogOpenRef.current = false;
     setDownloadQueue([]);
     setAddOpen(false);
     setAddUrl('');
@@ -256,29 +274,37 @@ export const App: React.FC = () => {
   // The quiet startup check found a newer version: tell the user, don't interrupt them.
   useEffect(() => {
     const unlisten = listen<UpdateInfo>(UPDATE_AVAILABLE_EVENT, (event) => {
-      dispatchToast(
-        <Toast>
-          <ToastTitle
-            action={
-              <Button appearance="transparent" size="small" onClick={openAbout}>
-                View
-              </Button>
-            }
-          >
-            Update available
-          </ToastTitle>
-          <ToastBody subtitle="Open Settings → About & Updates to install it.">
-            Conflux {event.payload.version} is ready to download.
-          </ToastBody>
-        </Toast>,
-        { intent: 'info', timeout: 15000 }
-      );
+      setPendingUpdate(event.payload);
     });
     unlisten.catch((e) => console.error('Failed to listen for updates:', e));
     return () => {
       unlisten.then((fn) => fn()).catch(() => undefined);
     };
-  }, [dispatchToast, openAbout]);
+  }, []);
+
+  // Keep first-launch navigation clear; deliver the update notice after setup.
+  useEffect(() => {
+    if (welcomeOpen || !pendingUpdate || announcedUpdate.current === pendingUpdate.version) return;
+    announcedUpdate.current = pendingUpdate.version;
+      dispatchToast(
+        <Toast>
+          <ToastTitle
+            action={
+              <span style={{ display: 'flex', gap: 4 }}>
+                <ToastTrigger><Button appearance="transparent" size="small" onClick={openAbout}>View</Button></ToastTrigger>
+                <ToastTrigger><Button appearance="transparent" size="small" icon={<Dismiss16Regular />} aria-label="Dismiss update notification" /></ToastTrigger>
+              </span>
+            }
+          >
+            Update available
+          </ToastTitle>
+          <ToastBody subtitle="Open Settings → About & Updates to install it.">
+            Conflux {pendingUpdate.version} is ready to download.
+          </ToastBody>
+        </Toast>,
+        { intent: 'info', timeout: 15000 }
+      );
+  }, [dispatchToast, openAbout, pendingUpdate, welcomeOpen]);
 
   // ─── Derived lists ───
   const counts = useMemo(
@@ -322,17 +348,17 @@ export const App: React.FC = () => {
     onCopyLink: (list) =>
       copyText(list.map((t) => t.url).join('\n')).then(() =>
         notify('success', list.length === 1 ? 'Link copied' : `${list.length} links copied`)
-      ),
+      ).catch((e) => onError(`Couldn't copy the link: ${errorText(e)}`)),
     onAdd: () => openAdd(),
   };
 
-  const copy = (text: string, what: string) => copyText(text).then(() => notify('success', `${what} copied`));
+  const copy = (text: string, what: string) => copyText(text).then(() => notify('success', `${what} copied`)).catch((e) => onError(`Couldn't copy ${what.toLowerCase()}: ${errorText(e)}`));
 
   // ─── Global keyboard shortcuts & paste-to-add ───
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
-      const dialogOpen = addOpen || removeIds.length > 0;
+      const dialogOpen = welcomeOpen || addOpen || removeIds.length > 0;
       if (dialogOpen && e.ctrlKey && (key === 'n' || key === 'f')) {
         // A dialog owns the keyboard; don't reset its form or move focus behind it.
         e.preventDefault();
@@ -350,7 +376,7 @@ export const App: React.FC = () => {
       }
     };
     const onPaste = (e: ClipboardEvent) => {
-      if (dialogOpenRef.current || isEditable(e.target)) return;
+      if (welcomeOpen || dialogOpenRef.current || isEditable(e.target)) return;
       const url = extractUrl(e.clipboardData?.getData('text') ?? '');
       if (url) {
         e.preventDefault();
@@ -371,7 +397,7 @@ export const App: React.FC = () => {
       document.removeEventListener('paste', onPaste);
       document.removeEventListener('contextmenu', onContext);
     };
-  }, [addOpen, removeIds, openAdd, refreshAdapters, notify]);
+  }, [welcomeOpen, addOpen, removeIds, openAdd, refreshAdapters, notify]);
 
   // ─── System tray context menu events ───
   useEffect(() => {
@@ -520,6 +546,7 @@ export const App: React.FC = () => {
                 loaded={settingsLoaded}
                 onChange={updateSettings}
                 onError={onError}
+                availableUpdate={pendingUpdate}
               />
             )}
           </main>
@@ -536,14 +563,15 @@ export const App: React.FC = () => {
         }}
       />
       <AddDownloadDialog
-        open={addOpen}
+        open={addOpen && settingsLoaded}
+        requestId={addRequestId}
         initialUrl={addUrl}
         initialFilename={addFilename}
         initialHeaders={addHeaders}
         defaultSaveDir={settings.default_save_dir}
         queueCount={downloadQueue.length}
         onStart={handleStart}
-        onClose={handleAdvanceOrClose}
+        onClose={() => handleAdvanceOrClose(addRequestId)}
         onCancelAll={handleCancelAll}
       />
       <RemoveDialog

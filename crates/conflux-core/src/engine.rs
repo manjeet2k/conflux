@@ -1886,11 +1886,11 @@ async fn fetch_segment(
             )));
         }
 
-        let was_split = lease.bounds.lock().unwrap().end < lease.end_at_request;
-
-        let (take, reached_end) = {
+        let (take, reached_end, was_split) = {
             let mut bounds = lease.bounds.lock().unwrap();
-            bounds.take(len)
+            let (take, reached_end) = bounds.take(len);
+            let was_split = bounds.end < lease.end_at_request;
+            (take, reached_end, was_split)
         };
 
         if take > 0 {
@@ -1915,11 +1915,13 @@ async fn fetch_segment(
             .await?;
         }
 
-        if reached_end && was_split {
-            debug!(
-                "Segment {} via {} reached bound end at offset {}",
-                lease.id, adapter.label, current_offset
-            );
+        if reached_end {
+            if was_split {
+                debug!(
+                    "Segment {} via {} reached split cutoff at offset {}",
+                    lease.id, adapter.label, current_offset
+                );
+            }
             return Ok(());
         }
     }
