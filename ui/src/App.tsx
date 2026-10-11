@@ -37,6 +37,7 @@ import { sortTasks } from './utils/sort';
 import type { SortState } from './utils/sort';
 import { DetailsPane } from './components/DetailsPane';
 import { AddDownloadDialog } from './components/AddDownloadDialog';
+import { WelcomeDialog } from './components/WelcomeDialog';
 import { RemoveDialog } from './components/RemoveDialog';
 import { StatusBar } from './components/StatusBar';
 import { EmptyState } from './components/EmptyState';
@@ -129,6 +130,7 @@ export const App: React.FC = () => {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortState>({ key: 'added', direction: 'descending' });
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [welcomeOpen, setWelcomeOpen] = useState(() => !readPref('cfx.onboarding.complete', false));
   const [addOpen, setAddOpen] = useState(false);
   const [addUrl, setAddUrl] = useState('');
   const [addFilename, setAddFilename] = useState<string | null>(null);
@@ -139,34 +141,6 @@ export const App: React.FC = () => {
 
   useEffect(() => localStorage.setItem('cfx.compactNav', compactNav ? '1' : '0'), [compactNav]);
   useEffect(() => localStorage.setItem('cfx.details', detailsOpen ? '1' : '0'), [detailsOpen]);
-
-  // One-time announcement for browser integration in 0.2.0
-  useEffect(() => {
-    const key = 'cfx.announced.browser-0.2.0';
-    if (!localStorage.getItem(key)) {
-      localStorage.setItem(key, '1');
-      const timer = window.setTimeout(() => {
-        dispatchToast(
-          <Toast>
-            <ToastTitle
-              action={
-                <Button appearance="transparent" size="small" onClick={() => setView('settings')}>
-                  View
-                </Button>
-              }
-            >
-              Browser integration available
-            </ToastTitle>
-            <ToastBody subtitle="Open Settings → Browser Integration to get the extension.">
-              Capture downloads directly from Chrome, Edge, and Firefox.
-            </ToastBody>
-          </Toast>,
-          { intent: 'info', timeout: 12000 }
-        );
-      }, 1500);
-      return () => window.clearTimeout(timer);
-    }
-  }, [dispatchToast]);
 
   const refreshAdapters = useCallback(() => {
     api
@@ -552,6 +526,15 @@ export const App: React.FC = () => {
         </div>
       </div>
 
+      <WelcomeDialog
+        open={welcomeOpen && settingsLoaded && !addOpen}
+        onError={onError}
+        onFinish={(addDownload) => {
+          localStorage.setItem('cfx.onboarding.complete', '1');
+          setWelcomeOpen(false);
+          if (addDownload) openAdd();
+        }}
+      />
       <AddDownloadDialog
         open={addOpen}
         initialUrl={addUrl}
