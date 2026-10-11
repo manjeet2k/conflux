@@ -630,6 +630,8 @@ mod tests {
                 MAX_BLOCKS
             );
         }
+
+        assert_eq!(block_size_for(u64::MAX), 1 << 51);
     }
 
     #[test]
@@ -904,6 +906,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_scheduler_random_sequence_consistency() {
         let n_blocks = 32;
         let block_size = 1024 * 1024;
