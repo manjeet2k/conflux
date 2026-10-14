@@ -10,6 +10,7 @@ export const P = {
   tauri: join(ROOT, "crates/conflux-desktop/tauri.conf.json"),
   pkg: join(ROOT, "ui/package.json"),
   pkgLock: join(ROOT, "ui/package-lock.json"),
+  extension: join(ROOT, "extensions/conflux-browser/manifest.json"),
 };
 export const LOCK_CRATES = ["conflux-core", "conflux-cli", "conflux-desktop"];
 

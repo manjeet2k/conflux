@@ -75,6 +75,14 @@ impl SparseFileWriter {
     /// Fails if the file does not exist or its length is not exactly `total_bytes`
     /// (a different length means it is not the pre-allocated file of this download).
     pub async fn open_existing<P: AsRef<Path>>(path: P, total_bytes: u64) -> Result<Self> {
+        Self::open_existing_verified(path, total_bytes, None).await
+    }
+
+    pub async fn open_existing_verified<P: AsRef<Path>>(
+        path: P,
+        total_bytes: u64,
+        expected: Option<crate::FileIdentity>,
+    ) -> Result<Self> {
         let path_buf = path.as_ref().to_path_buf();
         let open_path = path_buf.clone();
         let file = tokio::task::spawn_blocking(move || -> Result<File> {
@@ -83,6 +91,13 @@ impl SparseFileWriter {
                 .write(true)
                 .open(&open_path)
                 .with_context(|| format!("Failed to open existing file {:?}", open_path))?;
+            if let Some(expected) = expected {
+                if crate::FileIdentity::of(&file)? != expected {
+                    return Err(anyhow::Error::new(
+                        crate::file_identity::FileOwnershipChanged,
+                    ));
+                }
+            }
             let len = file
                 .metadata()
                 .with_context(|| format!("Failed to read metadata of {:?}", open_path))?
@@ -143,6 +158,10 @@ impl SparseFileWriter {
             .await
             .context("Sync task panicked")?
             .context("Failed to sync file to disk")
+    }
+
+    pub fn identity(&self) -> io::Result<crate::FileIdentity> {
+        crate::FileIdentity::of(&self.file)
     }
 
     pub fn total_bytes(&self) -> u64 {

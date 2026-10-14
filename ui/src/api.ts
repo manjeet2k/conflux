@@ -26,7 +26,10 @@ export const api = {
     saveDir: string;
     filename: string | null;
     headers?: RequestHeaders | null;
-  }) => invoke<DownloadTask>('start_download', { ...args, headers: args.headers ?? null }),
+    handoffId?: string | null;
+  }) => invoke<DownloadTask>('start_download', {
+    ...args, headers: args.headers ?? null, handoffId: args.handoffId ?? null,
+  }),
   pauseDownload: (taskId: string) => invoke<DownloadTask>('pause_download', { taskId }),
   resumeDownload: (taskId: string) => invoke<DownloadTask>('resume_download', { taskId }),
   pauseAll: () => invoke<void>('pause_all'),
@@ -40,6 +43,7 @@ export const api = {
   updateSettings: (settings: Settings) => invoke<Settings>('update_settings', { settings }),
   takeStartupNotices: () => invoke<string[]>('take_startup_notices'),
   takePendingDownload: () => invoke<ExternalDownloadPayload | null>('take_pending_download'),
+  dismissExternalDownload: (handoffId: string) => invoke<void>('dismiss_external_download', { handoffId }),
   folderExists: (path: string) => invoke<boolean>('folder_exists', { path }),
   getDiagnostics: () => invoke<Diagnostics>('get_diagnostics'),
   openLogsFolder: () => invoke<void>('open_logs_folder'),

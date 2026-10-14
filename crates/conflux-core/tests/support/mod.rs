@@ -77,6 +77,11 @@ pub struct ServerConfig {
     pub chunk_total_override: Option<u64>,
     /// Respond 302 Redirect to this location.
     pub redirect_to: Option<String>,
+    pub full_status: u16,
+    pub omit_last_modified_on_chunks: bool,
+    pub overlong_tail_delay: Option<Duration>,
+    pub required_referer: Option<String>,
+    pub required_user_agent: Option<String>,
 }
 
 /// A new version of the resource, served from the `after_chunks`-th chunk request on
@@ -91,6 +96,7 @@ pub struct ContentChange {
 
 impl ServerConfig {
     pub fn new(payload: Arc<Vec<u8>>) -> Self {
+        let etag = Some(format!("\"{}\"", sha256_hex(&payload)));
         Self {
             payload,
             range_mode: RangeMode::Honor,
@@ -109,13 +115,18 @@ impl ServerConfig {
             content_disposition: None,
             all_status: None,
             get_status_405: false,
-            etag: None,
+            etag,
             last_modified: None,
             content_change: None,
             honor_if_range: true,
             probe_total_override: None,
             chunk_total_override: None,
             redirect_to: None,
+            full_status: 200,
+            omit_last_modified_on_chunks: false,
+            overlong_tail_delay: None,
+            required_referer: None,
+            required_user_agent: None,
         }
     }
 
@@ -182,6 +193,7 @@ pub struct Stats {
 pub struct TestServer {
     pub addr: SocketAddr,
     pub stats: Arc<Stats>,
+    config: Arc<Mutex<ServerConfig>>,
 }
 
 impl TestServer {
@@ -189,21 +201,30 @@ impl TestServer {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let stats = Arc::new(Stats::default());
-        let config = Arc::new(config);
+        let config = Arc::new(Mutex::new(config));
+        let config_bg = Arc::clone(&config);
         let stats_bg = Arc::clone(&stats);
         tokio::spawn(async move {
             loop {
                 let Ok((sock, peer)) = listener.accept().await else {
                     return;
                 };
-                let config = Arc::clone(&config);
+                let config = config_bg.lock().unwrap().clone();
                 let stats = Arc::clone(&stats_bg);
                 tokio::spawn(async move {
                     let _ = handle(sock, peer, &config, &stats).await;
                 });
             }
         });
-        Self { addr, stats }
+        Self {
+            addr,
+            stats,
+            config,
+        }
+    }
+
+    pub fn replace_config(&self, config: ServerConfig) {
+        *self.config.lock().unwrap() = config;
     }
 
     pub fn url(&self, path: &str) -> String {
@@ -378,7 +399,7 @@ async fn send_full(
         headers.push(("Content-Disposition".to_string(), cd.clone()));
     }
     version.validator_headers(&mut headers);
-    write_head(sock, 200, &headers).await?;
+    write_head(sock, config.full_status, &headers).await?;
     if with_body {
         write_body(sock, data, config, stats).await?;
     }
@@ -402,6 +423,18 @@ async fn handle(
     }
     if let Some(ua) = &req.user_agent {
         stats.user_agents.lock().unwrap().push(ua.clone());
+    }
+    if config
+        .required_referer
+        .as_ref()
+        .is_some_and(|expected| req.referer.as_ref() != Some(expected))
+        || config
+            .required_user_agent
+            .as_ref()
+            .is_some_and(|expected| req.user_agent.as_ref() != Some(expected))
+    {
+        send_simple(&mut sock, 403).await?;
+        return sock.shutdown().await;
     }
     stats.requests.fetch_add(1, Ordering::SeqCst);
     if peer.ip() == "127.0.0.2".parse::<IpAddr>().unwrap() {
@@ -478,18 +511,17 @@ async fn handle(
                     <= config.stall_peer_first_n_chunks
             {
                 if let Ok((start, end)) = parse_range(&range, len) {
-                    write_head(
-                        &mut sock,
-                        206,
-                        &[
+                    {
+                        let mut headers = vec![
                             ("Content-Length".into(), (end - start + 1).to_string()),
                             (
                                 "Content-Range".into(),
                                 format!("bytes {}-{}/{}", start, end, len),
                             ),
-                        ],
-                    )
-                    .await?;
+                        ];
+                        config.version(Some(n)).validator_headers(&mut headers);
+                        write_head(&mut sock, 206, &headers).await?;
+                    }
                 }
                 tokio::time::sleep(Duration::from_secs(120)).await;
                 return Ok(());
@@ -499,18 +531,17 @@ async fn handle(
         }
         if n < config.stall_first_n_chunks {
             if let Ok((start, end)) = parse_range(&range, len) {
-                write_head(
-                    &mut sock,
-                    206,
-                    &[
+                {
+                    let mut headers = vec![
                         ("Content-Length".into(), (end - start + 1).to_string()),
                         (
                             "Content-Range".into(),
                             format!("bytes {}-{}/{}", start, end, len),
                         ),
-                    ],
-                )
-                .await?;
+                    ];
+                    config.version(Some(n)).validator_headers(&mut headers);
+                    write_head(&mut sock, 206, &headers).await?;
+                }
             }
             tokio::time::sleep(Duration::from_secs(120)).await;
             return Ok(());
@@ -578,6 +609,9 @@ async fn handle(
         headers.push(("Content-Disposition".to_string(), cd.clone()));
     }
     version.validator_headers(&mut headers);
+    if !is_probe && config.omit_last_modified_on_chunks {
+        headers.retain(|(name, _)| name != "Last-Modified");
+    }
     let overlong = config.range_mode == RangeMode::Overlong && !is_probe;
     if !overlong {
         headers.push(("Content-Length".to_string(), body.len().to_string()));
@@ -593,6 +627,9 @@ async fn handle(
 
     write_body(&mut sock, body, config, stats).await?;
     if overlong {
+        if let Some(delay) = config.overlong_tail_delay {
+            tokio::time::sleep(delay).await;
+        }
         write_body(&mut sock, b"EXTRA-BYTES-BEYOND-RANGE", config, stats).await?;
     }
     sock.shutdown().await

@@ -249,6 +249,7 @@ pub fn run() {
             commands::get_diagnostics,
             commands::open_logs_folder,
             commands::take_pending_download,
+            commands::dismiss_external_download,
             commands::get_browser_integration_status,
             commands::register_browser_extension,
             updater::check_for_update,

@@ -5,9 +5,9 @@ use crate::redact::redact_error;
 use crate::settings::{self, Backdrop, Settings};
 use crate::state::{AppState, DownloadTaskState, TaskHandle, TaskStatus};
 use conflux_core::{
-    discover_adapters as core_discover, remove_resume_sidecar, resume_sidecar_path,
-    sanitize_filename, AdapterUpdate, DownloadCancelled, DownloadEngine, DownloadProbe,
-    NetworkAdapter, ProgressUpdate, RequestHeaders,
+    discover_adapters as core_discover, remove_resume_sidecar, sanitize_filename, AdapterUpdate,
+    DownloadCancelled, DownloadEngine, DownloadProbe, NetworkAdapter, ProgressUpdate,
+    RequestHeaders,
 };
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -40,10 +40,11 @@ struct Shared {
     app: AppHandle,
     tasks: Arc<RwLock<HashMap<String, DownloadTaskState>>>,
     handles: Arc<Mutex<HashMap<String, TaskHandle>>>,
-    stopping_tasks: Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
+    stopping_tasks: Arc<std::sync::Mutex<HashMap<String, watch::Receiver<bool>>>>,
     reserved_paths: Arc<Mutex<HashSet<PathBuf>>>,
     settings: Arc<RwLock<Settings>>,
     history: Arc<HistoryStore>,
+    last_adapters: Arc<RwLock<Vec<NetworkAdapter>>>,
 }
 
 impl Shared {
@@ -56,6 +57,7 @@ impl Shared {
             reserved_paths: state.reserved_paths.clone(),
             settings: state.settings.clone(),
             history: state.history.clone(),
+            last_adapters: state.last_adapters.clone(),
         }
     }
 
@@ -186,11 +188,12 @@ pub async fn probe_url(
         .probe_with_headers(&url, headers)
         .await
         .map_err(|e| redact_error(&format!("{e:#}")))?;
+    let supports_ranges = probe.supports_parallel();
     Ok(ProbeResult {
         url: probe.url,
         filename: probe.suggested_filename,
         total_bytes: probe.total_bytes,
-        supports_ranges: probe.supports_ranges,
+        supports_ranges,
     })
 }
 
@@ -203,6 +206,7 @@ pub async fn start_download(
     save_dir: String,
     filename: Option<String>,
     headers: Option<RequestHeaders>,
+    handoff_id: Option<String>,
 ) -> Result<DownloadTaskState, String> {
     let url = url.trim().to_string();
     if url.is_empty() {
@@ -230,7 +234,7 @@ pub async fn start_download(
         .values()
         .map(|t| PathBuf::from(&t.save_path))
         .collect();
-    let output_path =
+    let (output_path, file_identity) =
         reserve_output_path(&state.reserved_paths, &claimed_paths, &dir, &requested_name).await?;
     let save_path = output_path.to_string_lossy().to_string();
     let filename = output_path
@@ -255,9 +259,10 @@ pub async fn start_download(
         filename,
         save_dir: dir.to_string_lossy().to_string(),
         save_path,
+        file_identity,
         adapter_ids: vec![],
         total_bytes: probe.total_bytes,
-        supports_ranges: probe.supports_ranges,
+        supports_ranges: probe.supports_parallel(),
         downloaded_bytes: 0,
         status: TaskStatus::Downloading,
         speed_bytes_sec: 0.0,
@@ -283,7 +288,27 @@ pub async fn start_download(
 
     let shared = Shared::new(&app, &state);
     shared.save_history().await;
-    spawn_task(shared, task_id, engine, probe, output_path, adapters, false).await;
+    spawn_task(
+        shared,
+        task_id.clone(),
+        engine,
+        probe,
+        output_path,
+        task.file_identity.clone(),
+        false,
+    )
+    .await;
+    let running = state.handles.lock().await.contains_key(&task_id);
+    let accepted = state.tasks.read().await.get(&task_id).is_some_and(|task| {
+        task.status == TaskStatus::Completed || (running && task.status == TaskStatus::Downloading)
+    });
+    if !accepted {
+        return Err("Download was not started; the browser transfer was preserved".into());
+    }
+    if let Some(id) = handoff_id {
+        crate::browser_bridge::acknowledge_handoff(&id, true)
+            .map_err(|_| "Download started, but browser acknowledgement failed".to_string())?;
+    }
     Ok(task)
 }
 
@@ -315,8 +340,8 @@ pub async fn resume_task_internal(
             let stopping = state.stopping_tasks.lock().unwrap();
             stopping.get(task_id).cloned()
         };
-        if let Some(notify) = maybe_notify {
-            if tokio::time::timeout(STOP_TIMEOUT, notify.notified())
+        if let Some(mut finished) = maybe_notify {
+            if tokio::time::timeout(STOP_TIMEOUT, finished.wait_for(|done| *done))
                 .await
                 .is_err()
             {
@@ -345,14 +370,24 @@ pub async fn resume_task_internal(
 
     let dir = validate_save_dir(&task.save_dir)?;
     let settings = state.settings.read().await.clone();
-    let adapters = select_adapters(&settings)?;
+    select_adapters(&settings)?;
     let engine = engine_from_settings(&settings)?;
+    let output_path = PathBuf::from(&task.save_path);
+    if output_path.exists()
+        && task.file_identity.as_ref().is_none_or(|identity| {
+            conflux_core::FileIdentity::at(&output_path).as_ref().ok() != Some(identity)
+        })
+    {
+        return Err("The saved file's ownership cannot be verified. It was preserved; start a new download to a new filename.".into());
+    }
+    let headers = conflux_core::read_resume_headers(&output_path, &task.url)
+        .ok()
+        .flatten();
     let probe = engine
-        .probe(&task.url)
+        .probe_with_headers(&task.url, headers)
         .await
         .map_err(|e| format!("Probe failed: {}", redact_error(&format!("{e:#}"))))?;
 
-    let output_path = PathBuf::from(&task.save_path);
     if output_path.parent() != Some(dir.as_path()) {
         warn!(task_id = %task_id, "Saved path is outside the saved folder; resuming anyway");
     }
@@ -366,15 +401,24 @@ pub async fn resume_task_internal(
         }
     }
 
+    let (resume_existing, file_identity) =
+        match prepare_resume_output(&output_path, task.file_identity.as_ref()) {
+            Ok(output) => output,
+            Err(error) => {
+                state.reserved_paths.lock().await.remove(&output_path);
+                return Err(error);
+            }
+        };
     info!(task_id = %task_id, url = %probe.url, output = %task.save_path, "Resuming download");
     let shared = Shared::new(app, state);
     let total_bytes = probe.total_bytes;
-    let supports_ranges = probe.supports_ranges;
+    let supports_ranges = probe.supports_parallel();
     let snapshot = shared
         .update(task_id, |t| {
             t.status = TaskStatus::Downloading;
             t.total_bytes = total_bytes;
             t.supports_ranges = supports_ranges;
+            t.file_identity = file_identity.clone();
             t.error = None;
             t.sha256 = None;
             t.completed_at_ms = None;
@@ -383,6 +427,9 @@ pub async fn resume_task_internal(
         .await;
     let Some(snapshot) = snapshot else {
         // Removed while we were probing.
+        if !resume_existing {
+            remove_empty_placeholder(&output_path, file_identity).await;
+        }
         state.reserved_paths.lock().await.remove(&output_path);
         return Err(format!("Unknown task: {task_id}"));
     };
@@ -393,8 +440,8 @@ pub async fn resume_task_internal(
         engine,
         probe,
         output_path,
-        adapters,
-        true,
+        snapshot.file_identity.clone(),
+        resume_existing,
     )
     .await;
     Ok(snapshot)
@@ -469,8 +516,8 @@ pub async fn resume_all(app: AppHandle, state: State<'_, AppState>) -> Result<()
 
 // ─── 6. Remove ──────────────────────────────────────────────
 /// Stops the task if running and removes it from the list. An incomplete download's resume
-/// data is deleted, and its partial file too when it is evidently Conflux's (see
-/// `partial_file_is_ours`); a completed file is deleted only if `delete_file`.
+/// data and partial file are deleted only after verifying file identity. A completed
+/// file is deleted only if `delete_file`, with the same ownership check.
 #[tauri::command]
 pub async fn remove_download(
     app: AppHandle,
@@ -511,61 +558,31 @@ pub async fn remove_download(
         return Ok(());
     }
 
-    if !completed {
-        let sidecar_exists = tokio::fs::try_exists(resume_sidecar_path(&path))
-            .await
-            .unwrap_or(false);
-        let file_len = tokio::fs::metadata(&path).await.ok().map(|m| m.len());
-        let ours = partial_file_is_ours(&task, file_len, sidecar_exists);
-        if let Err(e) = remove_resume_sidecar(&path) {
-            warn!(task_id = %task_id, path = %task.save_path, "Failed to delete resume data: {e}");
-        }
-        if !ours {
-            if file_len.is_some() {
-                info!(
-                    task_id = %task_id,
-                    path = %task.save_path,
-                    ?file_len,
-                    total_bytes = task.total_bytes,
-                    "File does not look like this download's partial file; not deleting"
-                );
+    let Some(identity) = task.file_identity else {
+        info!(task_id = %task_id, "File ownership is unknown; preserving output and resume data");
+        return Ok(());
+    };
+    let delete_path = path.clone();
+    match tokio::task::spawn_blocking(move || {
+        conflux_core::remove_owned_file(&delete_path, &identity)
+    })
+    .await
+    {
+        Ok(Ok(true)) => {
+            if let Err(error) = remove_resume_sidecar(&path) {
+                warn!(task_id = %task_id, "Failed to delete resume data: {error}");
             }
-            return Ok(());
+            info!(task_id = %task_id, "Deleted the owned file");
         }
-    }
-    match tokio::fs::remove_file(&path).await {
-        Ok(()) => info!(task_id = %task_id, path = %task.save_path, "Deleted file"),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => {
-            warn!(task_id = %task_id, path = %task.save_path, "Failed to delete file: {e}");
-            if completed {
-                return Err(format!(
-                    "Removed from the list, but the file could not be deleted: {e}"
-                ));
-            }
+        Ok(Ok(false)) => {
+            info!(task_id = %task_id, "File identity changed or file is missing; preserving resume data")
+        }
+        result => {
+            warn!(task_id = %task_id, "Could not safely delete owned file: {result:?}");
+            return Err("Removed from the list, but the file could not safely be deleted".into());
         }
     }
     Ok(())
-}
-
-/// Whether the file at an incomplete task's `save_path` is evidently the one Conflux wrote,
-/// so removing the task may delete it. The path may since have been taken by something else
-/// (the user deleted the partial file and saved another file under the same name), so a
-/// file is only deleted with positive evidence:
-/// - its resume sidecar exists (written next to the file by the chunked engine), or
-/// - it is a chunked download and the file length equals the pre-allocated `total_bytes`, or
-/// - it is an incomplete single-stream download whose length matches the bytes written so far, or
-/// - it is empty (the placeholder claimed when the download started; nothing to lose).
-///
-/// `file_len` is `None` when there is no file.
-fn partial_file_is_ours(task: &DownloadTaskState, file_len: Option<u64>, sidecar: bool) -> bool {
-    let Some(len) = file_len else {
-        return false;
-    };
-    let chunked = task.supports_ranges && task.total_bytes > 0;
-    let single_stream_partial =
-        !task.supports_ranges && task.downloaded_bytes > 0 && len == task.downloaded_bytes;
-    sidecar || len == 0 || (chunked && len == task.total_bytes) || single_stream_partial
 }
 
 // ─── 7. List Tasks ──────────────────────────────────────────
@@ -614,6 +631,13 @@ pub fn take_startup_notices(state: State<'_, AppState>) -> Vec<String> {
 #[tauri::command]
 pub fn take_pending_download(state: State<'_, AppState>) -> Option<ExternalDownloadPayload> {
     state.take_pending_download()
+}
+
+#[tauri::command]
+pub fn dismiss_external_download(handoff_id: String) -> Result<(), String> {
+    crate::browser_bridge::acknowledge_handoff(&handoff_id, false)
+        .map(|_| ())
+        .map_err(|_| "Could not dismiss browser handoff".into())
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -812,15 +836,33 @@ async fn spawn_task(
     engine: DownloadEngine,
     probe: DownloadProbe,
     output_path: PathBuf,
-    adapters: Vec<NetworkAdapter>,
+    expected_identity: Option<conflux_core::FileIdentity>,
     resume: bool,
 ) {
     let (cancel_tx, cancel_rx) = watch::channel(false);
-    let (adapter_tx, adapter_rx) = if probe.supports_ranges && probe.total_bytes > 0 {
+    let (adapter_tx, adapter_rx) = if probe.supports_parallel() {
         let (tx, rx) = mpsc::channel(64);
-        (Some(tx), Some(rx))
+        (
+            Some(crate::adapter_updates::ordered_sender(task_id.clone(), tx)),
+            Some(rx),
+        )
     } else {
         (None, None)
+    };
+    let _adapter_snapshot = shared.last_adapters.read().await;
+    let adapters = match select_adapters(&*shared.settings.read().await) {
+        Ok(adapters) => adapters,
+        Err(message) => {
+            shared
+                .update(&task_id, |task| {
+                    task.status = TaskStatus::Error;
+                    task.error = Some(message.clone());
+                })
+                .await;
+            shared.reserved_paths.lock().await.remove(&output_path);
+            shared.save_history().await;
+            return;
+        }
     };
     let names = Arc::new(RwLock::new(adapter_names(&adapters)));
     // Hold the handles lock across spawn + insert: the task removes its own handle when it
@@ -842,7 +884,7 @@ async fn spawn_task(
         // `remove_download` skipped the file because it was still reserved by this task.
         // A new download's placeholder is still empty and nobody else's: delete it.
         if removed && !resume {
-            remove_empty_placeholder(&output_path).await;
+            remove_empty_placeholder(&output_path, expected_identity).await;
         }
         shared.reserved_paths.lock().await.remove(&output_path);
         return;
@@ -998,6 +1040,14 @@ async fn run_download(
         }
     };
 
+    let completed_length = if status == TaskStatus::Completed {
+        tokio::fs::metadata(&output_path)
+            .await
+            .ok()
+            .map(|metadata| metadata.len())
+    } else {
+        None
+    };
     let final_duration_ms = initial_duration_ms + session_start.elapsed().as_millis() as u64;
     let final_task = shared
         .update(&task_id, |task| {
@@ -1005,6 +1055,8 @@ async fn run_download(
             task.clear_runtime();
             task.duration_ms = final_duration_ms;
             if status == TaskStatus::Completed {
+                task.total_bytes =
+                    completed_length.unwrap_or_else(|| task.total_bytes.max(task.downloaded_bytes));
                 task.downloaded_bytes = task.total_bytes;
                 task.completed_chunks = task.total_chunks;
                 task.completed_at_ms = Some(now_ms());
@@ -1066,9 +1118,9 @@ async fn notify_finished(shared: &Shared, task: &DownloadTaskState) {
 }
 
 struct StoppingGuard {
-    stopping_tasks: Arc<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
+    stopping_tasks: Arc<std::sync::Mutex<HashMap<String, watch::Receiver<bool>>>>,
     task_id: String,
-    notify: Arc<tokio::sync::Notify>,
+    finished: watch::Sender<bool>,
 }
 
 impl Drop for StoppingGuard {
@@ -1076,14 +1128,23 @@ impl Drop for StoppingGuard {
         if let Ok(mut map) = self.stopping_tasks.lock() {
             map.remove(&self.task_id);
         }
-        self.notify.notify_waiters();
+        self.finished.send_replace(true);
     }
 }
 
 /// Signals the task to stop, waits for it to wind down (aborting after `STOP_TIMEOUT`),
 /// and returns the task's resulting snapshot. `None` if the task id is unknown.
 async fn stop_task(shared: &Shared, task_id: &str) -> Option<DownloadTaskState> {
-    let mut handles = shared.handles.lock().await;
+    let mut handles = loop {
+        let handles = shared.handles.lock().await;
+        let stopping = { shared.stopping_tasks.lock().unwrap().get(task_id).cloned() };
+        if let Some(mut finished) = stopping {
+            drop(handles);
+            let _ = finished.wait_for(|done| *done).await;
+        } else {
+            break handles;
+        }
+    };
     let Some(TaskHandle {
         cancel_tx,
         mut join_handle,
@@ -1098,14 +1159,14 @@ async fn stop_task(shared: &Shared, task_id: &str) -> Option<DownloadTaskState> 
         return snapshot;
     };
 
-    let notify = Arc::new(tokio::sync::Notify::new());
+    let (finished, receiver) = watch::channel(false);
     if let Ok(mut map) = shared.stopping_tasks.lock() {
-        map.insert(task_id.to_string(), notify.clone());
+        map.insert(task_id.to_string(), receiver);
     }
     let guard = StoppingGuard {
         stopping_tasks: shared.stopping_tasks.clone(),
         task_id: task_id.to_string(),
-        notify,
+        finished,
     };
 
     // Release the lock before awaiting: the task itself locks `handles` during cleanup.
@@ -1203,12 +1264,7 @@ pub async fn handle_network_change(
         // re-send a dropped update: delivery must not be lossy. A full queue (engine busy)
         // is waited out, but off this task, so the watcher / UI call holding the
         // `last_adapters` lock never blocks. One task per download keeps add/remove order.
-        tokio::spawn(crate::adapter_updates::deliver(
-            task_id,
-            tx,
-            updates.clone(),
-            crate::adapter_updates::SEND_TIMEOUT,
-        ));
+        let _ = tx.send(updates.clone());
     }
 }
 
@@ -1332,7 +1388,7 @@ async fn reserve_output_path(
     claimed_paths: &[PathBuf],
     dir: &Path,
     filename: &str,
-) -> Result<PathBuf, String> {
+) -> Result<(PathBuf, Option<conflux_core::FileIdentity>), String> {
     let mut reserved = reserved.lock().await;
     let mut n: u32 = 0;
     loop {
@@ -1354,9 +1410,10 @@ async fn reserve_output_path(
             .create_new(true)
             .open(&candidate);
         match created {
-            Ok(_) => {
+            Ok(file) => {
+                let identity = conflux_core::FileIdentity::of(&file).ok();
                 reserved.insert(candidate.clone());
-                return Ok(candidate);
+                return Ok((candidate, identity));
             }
             // Taken on disk (possibly a moment ago by another process): try the next name.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -1397,17 +1454,45 @@ async fn write_mark_of_the_web(path: &Path, url: &str) {
     }
 }
 
-/// Deletes the file at `path` only if it is empty (an unused placeholder from
-/// `reserve_output_path`). Best effort.
-async fn remove_empty_placeholder(path: &Path) {
-    let is_empty = tokio::fs::metadata(path)
-        .await
-        .is_ok_and(|m| m.is_file() && m.len() == 0);
-    if !is_empty {
-        return;
-    }
-    if let Err(e) = tokio::fs::remove_file(path).await {
-        warn!(path = %path.display(), "Failed to delete unused placeholder file: {e}");
+/// Deletes only our unchanged empty placeholder, using an exclusive identity-checked handle.
+async fn remove_empty_placeholder(path: &Path, identity: Option<conflux_core::FileIdentity>) {
+    let Some(identity) = identity else { return };
+    let path = path.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || {
+        conflux_core::remove_owned_empty_file(&path, &identity)
+    })
+    .await;
+}
+
+fn prepare_resume_output(
+    path: &Path,
+    expected: Option<&conflux_core::FileIdentity>,
+) -> Result<(bool, Option<conflux_core::FileIdentity>), String> {
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+    {
+        Ok(file) => {
+            let actual = conflux_core::FileIdentity::of(&file)
+                .map_err(|_| "Cannot verify the saved file's ownership".to_string())?;
+            if expected != Some(&actual) {
+                return Err(
+                    "The saved file was replaced or ownership is unknown; it was preserved".into(),
+                );
+            }
+            Ok((true, Some(actual)))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .map_err(|error| format!("Cannot claim the missing output: {error}"))?;
+            Ok((false, conflux_core::FileIdentity::of(&file).ok()))
+        }
+        Err(error) => Err(format!("Cannot open the saved output: {error}")),
     }
 }
 
@@ -1429,6 +1514,47 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stop_completion_is_not_lost_before_a_waiter_starts() {
+        let stopping_tasks = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let (finished, mut receiver) = watch::channel(false);
+        stopping_tasks
+            .lock()
+            .unwrap()
+            .insert("t".into(), receiver.clone());
+        let guard = StoppingGuard {
+            stopping_tasks: stopping_tasks.clone(),
+            task_id: "t".into(),
+            finished,
+        };
+        drop(guard);
+        assert!(stopping_tasks.lock().unwrap().is_empty());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), receiver.wait_for(|done| *done))
+                .await
+                .unwrap()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn resume_claims_missing_files_and_preserves_replacements() {
+        let directory = std::env::temp_dir().join(format!("conflux-resume-{}", Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("file.bin");
+        let (existing, identity) = prepare_resume_output(&path, None).unwrap();
+        assert!(!existing);
+        assert!(identity.is_some());
+        std::fs::write(&path, b"partial").unwrap();
+        assert!(prepare_resume_output(&path, identity.as_ref()).unwrap().0);
+        std::fs::rename(&path, directory.join("old.bin")).unwrap();
+        std::fs::write(&path, b"replace").unwrap();
+        assert!(prepare_resume_output(&path, identity.as_ref()).is_err());
+        assert!(prepare_resume_output(&path, None).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"replace");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn numbered_filename_inserts_counter_before_extension() {
@@ -1455,13 +1581,16 @@ mod tests {
 
         let a = reserve_output_path(&reserved, &[], &dir, "file.bin")
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         let b = reserve_output_path(&reserved, &[], &dir, "file.bin")
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         let c = reserve_output_path(&reserved, &[], &dir, "file.bin")
             .await
-            .unwrap();
+            .unwrap()
+            .0;
 
         assert_eq!(a, dir.join("file.bin"));
         assert_eq!(b, dir.join("file (1).bin"));
@@ -1476,7 +1605,8 @@ mod tests {
         std::fs::write(dir.join("other.bin"), b"keep").unwrap();
         let d = reserve_output_path(&reserved, &[], &dir, "other.bin")
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert_eq!(d, dir.join("other (1).bin"));
         assert_eq!(std::fs::read(dir.join("other.bin")).unwrap(), b"keep");
 
@@ -1485,7 +1615,8 @@ mod tests {
         reserved.lock().await.insert(resumed.clone());
         let e = reserve_output_path(&reserved, &[], &dir, "resumed.bin")
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert_eq!(e, dir.join("resumed (1).bin"));
         assert!(!resumed.exists());
 
@@ -1498,7 +1629,8 @@ mod tests {
             "paused.bin",
         )
         .await
-        .unwrap();
+        .unwrap()
+        .0;
         assert_eq!(f, dir.join("paused (1).bin"));
 
         // A candidate with an existing resume sidecar is skipped.
@@ -1506,7 +1638,8 @@ mod tests {
         std::fs::write(conflux_core::resume_sidecar_path(&sidecar_target), b"{}").unwrap();
         let g = reserve_output_path(&reserved, &[], &dir, "with_sidecar.bin")
             .await
-            .unwrap();
+            .unwrap()
+            .0;
         assert_eq!(g, dir.join("with_sidecar (1).bin"));
 
         assert!(
@@ -1516,63 +1649,6 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    fn task(supports_ranges: bool, total_bytes: u64) -> DownloadTaskState {
-        DownloadTaskState {
-            id: "t".into(),
-            url: "https://example.com/f".into(),
-            filename: "f".into(),
-            save_dir: "d".into(),
-            save_path: "d/f".into(),
-            adapter_ids: vec![],
-            total_bytes,
-            supports_ranges,
-            downloaded_bytes: 0,
-            status: TaskStatus::Paused,
-            speed_bytes_sec: 0.0,
-            eta_seconds: 0,
-            active_chunks: 0,
-            completed_chunks: 0,
-            total_chunks: 0,
-            sha256: None,
-            error: None,
-            created_at_ms: 0,
-            completed_at_ms: None,
-            duration_ms: 0,
-            avg_speed_bytes_sec: None,
-            adapters: vec![],
-            chunk_map: None,
-        }
-    }
-
-    #[test]
-    fn partial_file_deleted_only_with_evidence() {
-        let chunked = task(true, 1000);
-        // No file: nothing to delete.
-        assert!(!partial_file_is_ours(&chunked, None, true));
-        // Resume sidecar present.
-        assert!(partial_file_is_ours(&chunked, Some(123), true));
-        // Pre-allocated to exactly the download size.
-        assert!(partial_file_is_ours(&chunked, Some(1000), false));
-        // Empty placeholder.
-        assert!(partial_file_is_ours(&chunked, Some(0), false));
-        // Some other file now sits at the path.
-        assert!(!partial_file_is_ours(&chunked, Some(999), false));
-        assert!(!partial_file_is_ours(&chunked, Some(5000), false));
-
-        // Streaming downloads are not pre-allocated: length alone without progress is no evidence.
-        let streaming = task(false, 1000);
-        assert!(!partial_file_is_ours(&streaming, Some(1000), false));
-        assert!(partial_file_is_ours(&streaming, Some(1000), true));
-        // An incomplete streaming download whose file length matches downloaded bytes IS ours.
-        let mut streaming_partial = task(false, 1000);
-        streaming_partial.downloaded_bytes = 500;
-        assert!(partial_file_is_ours(&streaming_partial, Some(500), false));
-        assert!(!partial_file_is_ours(&streaming_partial, Some(600), false));
-        let unknown_size = task(true, 0);
-        assert!(!partial_file_is_ours(&unknown_size, Some(42), false));
-        assert!(partial_file_is_ours(&unknown_size, Some(0), false));
     }
 
     fn adapter(name: &str, ip: &str, enabled: bool) -> NetworkAdapter {

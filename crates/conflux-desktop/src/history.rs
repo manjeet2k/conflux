@@ -132,6 +132,7 @@ mod tests {
             filename: "y".into(),
             save_dir: "/tmp".into(),
             save_path: "/tmp/y".into(),
+            file_identity: None,
             adapter_ids: vec![],
             total_bytes: 100,
             supports_ranges: true,

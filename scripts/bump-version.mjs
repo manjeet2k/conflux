@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Usage: node scripts/bump-version.mjs X.Y.Z[-pre]
+// Usage: node scripts/bump-version.mjs X.Y.Z[-pre] [--extension-version X.Y.Z]
 // Rewrites Cargo.toml, tauri.conf.json, ui/package.json, Cargo.lock (workspace crates only,
 // no network) and ui/package-lock.json. Refuses non-semver or non-increasing versions.
 import { readFileSync, writeFileSync } from "node:fs";
@@ -20,6 +20,17 @@ if (!force && cmp <= 0) {
 
 const read = (p) => readFileSync(p, "utf8");
 const edits = new Map(); // compute everything first, write only if all succeed
+const extensionFlag = process.argv.indexOf("--extension-version");
+if (extensionFlag !== -1) {
+  const extensionNext = process.argv[extensionFlag + 1];
+  const text = read(P.extension);
+  const currentExtension = JSON.parse(text).version;
+  if (!extensionNext || !/^\d+\.\d+\.\d+$/.test(extensionNext) || !parseSemver(extensionNext)
+      || compareSemver(parseSemver(extensionNext), parseSemver(currentExtension)) <= 0) {
+    throw new Error("extension version must be valid and increase sequentially");
+  }
+  edits.set(P.extension, text.replace(/^(\s*"version"\s*:\s*")[^"]+(")/m, "$1" + extensionNext + "$2"));
+}
 
 // Cargo.toml: only the version line inside [workspace.package].
 {

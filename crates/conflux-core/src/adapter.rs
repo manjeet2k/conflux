@@ -261,9 +261,9 @@ mod sys {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use windows_sys::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_NO_DATA, ERROR_SUCCESS};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
-        GetAdaptersAddresses, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
-        GAA_FLAG_SKIP_MULTICAST, IF_TYPE_PROP_VIRTUAL, IF_TYPE_TUNNEL, IP_ADAPTER_ADDRESSES_LH,
-        IP_ADAPTER_UNICAST_ADDRESS_LH,
+        GetAdaptersAddresses, GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST,
+        GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST, IF_TYPE_PROP_VIRTUAL, IF_TYPE_TUNNEL,
+        IP_ADAPTER_ADDRESSES_LH, IP_ADAPTER_UNICAST_ADDRESS_LH,
     };
     use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
     use windows_sys::Win32::Networking::WinSock::{
@@ -315,7 +315,10 @@ mod sys {
     /// Lists unicast addresses of adapters that are up, with DAD complete
     /// (`GetAdaptersAddresses`). Names are the adapter friendly names ("Wi-Fi", "Ethernet").
     pub(super) fn list_operational_addresses() -> Result<Vec<InterfaceAddress>> {
-        let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+        let flags = GAA_FLAG_SKIP_ANYCAST
+            | GAA_FLAG_SKIP_MULTICAST
+            | GAA_FLAG_SKIP_DNS_SERVER
+            | GAA_FLAG_INCLUDE_GATEWAYS;
         // 15 KB is Microsoft's recommended starting size; u64 storage keeps the
         // IP_ADAPTER_ADDRESSES_LH structs correctly aligned.
         let mut size: u32 = 15_000;
@@ -474,6 +477,9 @@ pub fn build_bound_http_client(
     stall_timeout: Duration,
 ) -> Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
+        // Redirects must not synthesize a Referer containing a signed URL or replace
+        // the explicitly supplied browser context.
+        .referer(false)
         .connect_timeout(CONNECT_TIMEOUT)
         .read_timeout(stall_timeout);
 

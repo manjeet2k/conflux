@@ -123,6 +123,8 @@ cargo test -p conflux-core
 cargo test -p conflux-cli
 npm --prefix ui run lint && npm --prefix ui run build
 node scripts/check-version.mjs
+npm --prefix ui test
+node --test extensions/conflux-browser/tests/background.test.mjs
 ```
 The engine and watcher integration tests are timing-sensitive: when you touch that code, run
 `cargo test -p conflux-core` three times in a row. Before reporting desktop work done, also run
@@ -164,7 +166,7 @@ Open `http://localhost:5173` to explore the dashboard, adapter toggles, and live
 - The version lives in three files that must agree: `Cargo.toml` (`[workspace.package]`),
   `crates/conflux-desktop/tauri.conf.json`, and `ui/package.json`.
   `node scripts/check-version.mjs` verifies them; `node scripts/bump-version.mjs X.Y.Z` changes
-  all of them (and the lock files) together.
+  all of them (and the lock files) together. Add `--extension-version X.Y.Z` when an extension update needs its own sequential version bump.
 - **Do not build the release `.exe` / NSIS installer unless asked.** Release builds come from
   CI via [`.github/workflows/release.yml`](../.github/workflows/release.yml) (runbook:
   [RELEASING.md](RELEASING.md)). To build for Windows from

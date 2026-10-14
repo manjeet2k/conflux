@@ -35,12 +35,9 @@ real Windows machine with several adapters. The checklist is
   such an adapter still does not help the download.
 - **Gains need independent links.** Two adapters behind the same router/ISP line share that
   line's capacity.
-- **Strict 206 validation can fail on some CDNs.** Every ranged response must carry the same
-  ETag/Last-Modified as the probe. CDNs that serve different edges with inconsistent ETags may
-  make a multi-connection download fail or fall back (roadmap decision D7; observations being
-  collected in [BENCHMARKS.md](BENCHMARKS.md)). The same strictness applies to mirror pools: if
-  mirrors of one file send different ETag/Last-Modified values, the mismatching mirror is
-  rejected even though the bytes may be identical.
+- **Inconsistent strong ETags can fail a parallel download.** Each ranged response must carry the same strong ETag as the probe. An omitted secondary Last-Modified header is accepted, but contradictory supplied validators are rejected. Servers without a strong ETag use a fresh single stream instead of bonding or block resume.
+- **Legacy partial files without recorded identity are preserved.** Their ownership cannot be established safely after an upgrade. Start a new download under a new filename; existing partial data is kept.
+- **Browser interception requires the updated extension.** Use extension 0.2.2 with desktop 0.2.8 or newer for the confirmation acknowledgement protocol.
 - **Disabling the last enabled adapter mid-download does not stop the download.** It keeps going
   over the default route instead of pausing.
 - **Paths longer than 260 characters** (folder plus file name, plus the `.conflux.json` sidecar)
@@ -48,7 +45,7 @@ real Windows machine with several adapters. The checklist is
   download folder.
 - **The Add dialog probes a URL automatically** a moment after you paste or edit it, to show the
   file name and size. The server sees that request before you click Download.
-- **Servers without Range support** are downloaded as a single stream, without bonding.
+- **Servers without verified ranges, a known size or a strong ETag** are downloaded as a fresh single stream, without bonding or block resume.
 - Only `http://` and `https://` URLs are supported.
 
 ## Privacy and logs

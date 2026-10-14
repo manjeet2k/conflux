@@ -8,6 +8,7 @@
 use crate::engine::{DownloadProbe, RequestHeaders};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -17,17 +18,27 @@ pub const SIDECAR_VERSION: u32 = 1;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResumeState {
     pub version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_identity: Option<crate::FileIdentity>,
     pub total_bytes: u64,
     pub chunk_size: u64,
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<RequestHeaders>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_origin: Option<String>,
     /// Completed chunk ids as ascending ranges, e.g. `"0-5,7,9-12"` (empty = none).
     pub completed: String,
 }
 
-/// `<dir>/file.iso` -> `<dir>/file.iso.conflux.json`.
+pub(crate) fn resource_id(url: &str) -> String {
+    format!("{:x}", Sha256::digest(url.as_bytes()))
+}
+
+/// '<dir>/file.iso' -> `<dir>/file.iso.conflux.json`.
 pub fn resume_sidecar_path(output_path: &Path) -> PathBuf {
     let mut name: OsString = output_path
         .file_name()
@@ -87,6 +98,22 @@ pub(crate) fn read_sidecar(path: &Path) -> Result<ResumeState> {
     serde_json::from_str(&text).with_context(|| format!("cannot parse {:?}", path))
 }
 
+/// Restore only non-cookie headers and only the Referer for the saved resource origin.
+pub fn read_resume_headers(output: &Path, url: &str) -> Result<Option<RequestHeaders>> {
+    let state = read_sidecar(&resume_sidecar_path(output))?;
+    Ok(state.headers.map(|mut headers| {
+        headers.cookie = None;
+        let saved_origin = state.header_origin;
+        let same_origin = reqwest::Url::parse(url).ok().is_some_and(|target| {
+            saved_origin.as_deref() == Some(target.origin().ascii_serialization().as_str())
+        });
+        if !same_origin {
+            headers.referer = None;
+        }
+        headers
+    }))
+}
+
 /// Atomically replaces the sidecar at `path` (temp file + sync + rename).
 pub(crate) fn write_sidecar(path: &Path, state: &ResumeState) -> Result<()> {
     let mut tmp_name: OsString = path.file_name().map(OsString::from).unwrap_or_default();
@@ -115,8 +142,8 @@ pub fn remove_resume_sidecar(output_path: &Path) -> std::io::Result<()> {
 }
 
 /// Checks that `state` describes the same remote resource as `probe`.
-/// Validators (ETag / Last-Modified) must be equal, including being absent on both sides:
-/// one that appeared or disappeared means the server can no longer vouch for the old bytes.
+/// A matching strong ETag is mandatory. Secondary validators are compared when present
+/// on both sides; absence cannot override an established primary identity.
 pub(crate) fn validate(state: &ResumeState, probe: &DownloadProbe) -> Result<()> {
     if state.version != SIDECAR_VERSION {
         bail!("unsupported sidecar version {}", state.version);
@@ -134,6 +161,18 @@ pub(crate) fn validate(state: &ResumeState, probe: &DownloadProbe) -> Result<()>
     if state.chunk_size == 0 {
         bail!("sidecar chunk size is 0");
     }
+    if crate::engine::strong_etag(state.etag.as_deref()).is_none()
+        || crate::engine::strong_etag(probe.etag.as_deref()).is_none()
+    {
+        bail!("resume requires a strong ETag; old completed blocks cannot be trusted");
+    }
+    if state
+        .resource_id
+        .as_deref()
+        .is_some_and(|url| url != resource_id(&probe.url))
+    {
+        bail!("resume resource URL changed");
+    }
     if state.etag != probe.etag {
         bail!(
             "ETag changed: sidecar {:?}, server {:?}",
@@ -141,7 +180,10 @@ pub(crate) fn validate(state: &ResumeState, probe: &DownloadProbe) -> Result<()>
             probe.etag
         );
     }
-    if state.last_modified != probe.last_modified {
+    if state.last_modified.is_some()
+        && probe.last_modified.is_some()
+        && state.last_modified != probe.last_modified
+    {
         bail!(
             "Last-Modified changed: sidecar {:?}, server {:?}",
             state.last_modified,
@@ -164,17 +206,21 @@ mod tests {
             etag: etag.map(str::to_string),
             last_modified: None,
             headers: None,
+            header_origin: Some("http://x".into()),
         }
     }
 
     fn state(total: u64, etag: Option<&str>) -> ResumeState {
         ResumeState {
             version: SIDECAR_VERSION,
+            resource_id: Some(resource_id("http://x/y")),
+            file_identity: None,
             total_bytes: total,
             chunk_size: 10,
             etag: etag.map(str::to_string),
             last_modified: None,
             headers: None,
+            header_origin: Some("http://x".into()),
             completed: String::new(),
         }
     }
@@ -211,27 +257,55 @@ mod tests {
     }
 
     #[test]
-    fn test_validate() {
-        assert!(validate(&state(100, None), &probe(100, None)).is_ok());
-        assert!(validate(&state(100, Some("a")), &probe(100, Some("a"))).is_ok());
-        assert!(validate(&state(100, Some("a")), &probe(100, Some("b"))).is_err());
-        // A validator present on only one side is a change too.
-        assert!(validate(&state(100, Some("a")), &probe(100, None)).is_err());
-        assert!(validate(&state(100, None), &probe(100, Some("a"))).is_err());
-        let mut with_lm = state(100, None);
-        with_lm.last_modified = Some("Mon".into());
-        assert!(validate(&with_lm, &probe(100, None)).is_err());
-        let mut probe_lm = probe(100, None);
-        probe_lm.last_modified = Some("Mon".into());
-        assert!(validate(&with_lm, &probe_lm).is_ok());
-        assert!(validate(&state(100, None), &probe_lm).is_err());
-        assert!(validate(&state(100, None), &probe(101, None)).is_err());
-        let mut no_ranges = probe(100, None);
-        no_ranges.supports_ranges = false;
-        assert!(validate(&state(100, None), &no_ranges).is_err());
-        let mut old = state(100, None);
-        old.version = 0;
-        assert!(validate(&old, &probe(100, None)).is_err());
+    fn test_validate_requires_strong_identity() {
+        let strong = Some("\"a\"");
+        assert!(validate(&state(100, strong), &probe(100, strong)).is_ok());
+        for weak in [None, Some("W/\"a\""), Some("a"), Some("")] {
+            assert!(validate(&state(100, weak), &probe(100, weak)).is_err());
+        }
+        assert!(validate(&state(100, strong), &probe(100, Some("\"b\""))).is_err());
+        assert!(validate(&state(100, strong), &probe(101, strong)).is_err());
+        let mut saved = state(100, strong);
+        saved.last_modified = Some("Mon".into());
+        // Missing secondary headers do not override a matching strong ETag.
+        assert!(validate(&saved, &probe(100, strong)).is_ok());
+        let mut fresh = probe(100, strong);
+        fresh.last_modified = Some("Tue".into());
+        assert!(validate(&saved, &fresh).is_err());
+        fresh = probe(100, strong);
+        fresh.url = "http://x/other".into();
+        assert!(validate(&saved, &fresh).is_err());
+        fresh = probe(100, strong);
+        fresh.supports_ranges = false;
+        assert!(validate(&saved, &fresh).is_err());
+        saved.version = 0;
+        assert!(validate(&saved, &probe(100, strong)).is_err());
+    }
+
+    #[test]
+    fn restored_headers_never_include_cookies_and_keep_authorized_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("download.bin");
+        let mut saved = state(100, Some("\"a\""));
+        // A cross-origin redirect changed the final resource URL, not the original header authorization.
+        saved.resource_id = Some(resource_id("http://cdn/target"));
+        saved.headers = Some(RequestHeaders {
+            cookie: Some("secret".into()),
+            referer: Some("http://portal/page".into()),
+            user_agent: Some("Browser".into()),
+        });
+        write_sidecar(&resume_sidecar_path(&path), &saved).unwrap();
+        let same = read_resume_headers(&path, "http://x/original")
+            .unwrap()
+            .unwrap();
+        assert_eq!(same.cookie, None);
+        assert_eq!(same.referer.as_deref(), Some("http://portal/page"));
+        let other = read_resume_headers(&path, "http://other/download")
+            .unwrap()
+            .unwrap();
+        assert_eq!(other.cookie, None);
+        assert_eq!(other.referer, None);
+        assert_eq!(other.user_agent.as_deref(), Some("Browser"));
     }
 
     #[test]

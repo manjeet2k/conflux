@@ -191,6 +191,10 @@ export function installMockBackend() {
           return new Promise((_, reject) => setTimeout(() => reject('Mock backend: installing is not simulated'), 800));
         case 'open_about_link':
           return null;
+        case 'take_pending_download':
+          return null;
+        case 'dismiss_external_download':
+          return null;
         case 'take_startup_notices':
           return [];
         case 'folder_exists':

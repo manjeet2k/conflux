@@ -45,6 +45,23 @@ pub async fn deliver(
     delivered
 }
 
+/// Enqueue under the adapter refresh lock; one pump preserves order across batches.
+pub fn ordered_sender(
+    task_id: String,
+    tx: mpsc::Sender<AdapterUpdate>,
+) -> mpsc::UnboundedSender<Vec<AdapterUpdate>> {
+    let (sender, mut receiver) = mpsc::unbounded_channel::<Vec<AdapterUpdate>>();
+    tokio::spawn(async move {
+        while let Some(updates) = receiver.recv().await {
+            if tx.is_closed() {
+                break;
+            }
+            deliver(task_id.clone(), tx.clone(), updates, SEND_TIMEOUT).await;
+        }
+    });
+    sender
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,6 +76,24 @@ mod tests {
             is_loopback: false,
             enabled: true,
         }
+    }
+
+    #[tokio::test]
+    async fn separate_change_batches_remain_ordered_when_engine_queue_is_full() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let sender = ordered_sender("t".into(), tx);
+        let first = AdapterUpdate::Add(adapter("Wi-Fi", "10.0.0.2"));
+        let second = AdapterUpdate::Remove("10.0.0.2".parse().unwrap());
+        let third = AdapterUpdate::Add(adapter("Wi-Fi", "10.0.0.2"));
+        sender.send(vec![first.clone()]).unwrap();
+        sender.send(vec![second.clone(), third.clone()]).unwrap();
+        drop(sender);
+        let mut delivered = Vec::new();
+        while let Some(update) = rx.recv().await {
+            delivered.push(update);
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(delivered, vec![first, second, third]);
     }
 
     #[test]

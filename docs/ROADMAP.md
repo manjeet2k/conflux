@@ -99,7 +99,7 @@ recommended default. If the user hasn't answered, **ask** (don't assume).
 | D4 | Updates | In-app auto-update · manual download only | In-app auto-update (`tauri-plugin-updater`) | **In-app auto-update** (answered) |
 | D5 | Beta scope | Include browser-capture extension / proxy / speed limit / scheduling? | Not in the beta | **Resolved by the "beta, not 1.0" decision**: no extras are required for the beta. Browser-capture extension and speed limit/scheduler (ticked earlier) are post-beta candidates — P-7 stays deferred until the user picks them |
 | D6 | Telemetry | None · opt-in crash reports | None (app makes no telemetry calls today) | **None** (answered) |
-| D7 | Strict 206 validation | Keep: any ETag/Last-Modified mismatch (or absence) on a 206 fails the download · Loosen: fail only on mismatch, let `If-Range` cover a missing header | Decide after V-2 finds real-world CDN behaviour | _unanswered_ |
+| D7 | Strict 206 validation | Keep strict secondary-header presence · accept missing secondary headers when the primary identity matches | Require a matching strong ETag; compare secondary headers when both present | **Accept missing secondary headers with matching strong ETag** (answered 2026-10-15); weak/missing ETags use a fresh single stream |
 
 ---
 

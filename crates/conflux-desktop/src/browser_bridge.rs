@@ -13,6 +13,9 @@ use std::io::{Read, Write};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExternalDownloadPayload {
     pub url: String,
+    /// Correlates auto-interception with an accepted or dismissed desktop request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -23,6 +26,8 @@ pub struct ExternalDownloadPayload {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ExtensionMessage {
     pub action: String,
+    #[serde(default)]
+    pub wait_for_acceptance: bool,
     #[serde(default)]
     pub url: Option<String>,
     #[serde(default)]
@@ -52,12 +57,20 @@ pub fn from_hex(hex: &str) -> Option<Vec<u8>> {
     if !hex.len().is_multiple_of(2) {
         return None;
     }
-    let mut out = Vec::with_capacity(hex.len() / 2);
-    for i in (0..hex.len()).step_by(2) {
-        let byte = u8::from_str_radix(&hex[i..i + 2], 16).ok()?;
-        out.push(byte);
+    fn nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
     }
-    Some(out)
+    hex.as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| Some(nibble(pair[0])? * 16 + nibble(pair[1])?))
+        .collect()
 }
 
 /// Parses command-line arguments to find external download requests.
@@ -120,13 +133,10 @@ pub fn parse_cli_download_args(args: &[String]) -> Option<ExternalDownloadPayloa
             .strip_prefix("conflux://")
             .or_else(|| trimmed.strip_prefix("conflux:"))
         {
-            let target_url = rest
-                .trim()
-                .trim_matches('"')
-                .trim_matches('\'')
-                .trim_end_matches('/');
+            let target_url = rest.trim().trim_matches('"').trim_matches('\'');
             if is_valid_url(target_url) {
                 return Some(ExternalDownloadPayload {
+                    handoff_id: None,
                     url: target_url.to_string(),
                     filename: None,
                     headers: None,
@@ -137,6 +147,7 @@ pub fn parse_cli_download_args(args: &[String]) -> Option<ExternalDownloadPayloa
         // 3. Direct HTTP(S) URL
         if is_valid_url(trimmed) {
             return Some(ExternalDownloadPayload {
+                handoff_id: None,
                 url: trimmed.to_string(),
                 filename: None,
                 headers: None,
@@ -151,11 +162,97 @@ fn is_valid_url(s: &str) -> bool {
     (s.starts_with("http://") || s.starts_with("https://")) && tauri::Url::parse(s).is_ok()
 }
 
+fn receipt_path(id: &str) -> std::io::Result<std::path::PathBuf> {
+    let id = uuid::Uuid::parse_str(id)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid handoff id"))?;
+    Ok(std::env::temp_dir().join(format!("conflux-receipt-{id}.txt")))
+}
+
+struct HandoffReceipt(std::path::PathBuf);
+impl HandoffReceipt {
+    fn prepare(id: &str) -> std::io::Result<Self> {
+        let path = receipt_path(id)?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path.with_extension("pending"))?;
+        Ok(Self(path))
+    }
+}
+impl Drop for HandoffReceipt {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(self.0.with_extension("pending"));
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// First decision wins: a dismissed request must never later cancel its browser transfer.
+pub fn acknowledge_handoff(id: &str, accepted: bool) -> std::io::Result<bool> {
+    let path = receipt_path(id)?;
+    if !path.with_extension("pending").try_exists()? {
+        return Ok(false);
+    }
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    file.write_all(if accepted { b"accepted" } else { b"cancelled" })?;
+    Ok(true)
+}
+
+fn wait_for_handoff(id: &str, timeout: std::time::Duration) -> std::io::Result<&'static str> {
+    let path = receipt_path(id)?;
+    let started = std::time::Instant::now();
+    loop {
+        match std::fs::read(&path) {
+            Ok(value) if value == b"accepted" => break Ok("accepted"),
+            Ok(value) if value == b"cancelled" => break Ok("cancelled"),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => break Err(error),
+        }
+        if started.elapsed() >= timeout {
+            break Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "handoff not accepted",
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+fn launch_payload(payload: &ExternalDownloadPayload) -> std::io::Result<()> {
+    let bytes = serde_json::to_vec(payload).map_err(std::io::Error::other)?;
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    let temporary = if bytes.len() > 3000 {
+        let path =
+            std::env::temp_dir().join(format!("conflux-handoff-{}.json", uuid::Uuid::new_v4()));
+        std::fs::write(&path, &bytes)?;
+        command.arg("--from-browser-file").arg(&path);
+        Some(path)
+    } else {
+        command.arg("--from-browser").arg(to_hex(&bytes));
+        None
+    };
+    if let Err(error) = command.spawn() {
+        if let Some(path) = temporary {
+            let _ = std::fs::remove_file(path);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// Runs the Native Messaging Host stdio protocol loop for Chrome, Edge, and Firefox.
 ///
 /// Reads 32-bit length-prefixed JSON from `stdin`, forwards the download to the
 /// Conflux desktop instance via `current_exe() --from-browser <hex>`, and responds
-/// with `{"status":"ok"}` on `stdout`.
+/// with a queued, accepted, cancelled, or error status on `stdout`.
 pub fn run_native_host() {
     let mut stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -193,62 +290,55 @@ pub fn run_native_host() {
                 );
             }
             "open" => {
-                if let Ok(exe_path) = std::env::current_exe() {
-                    let _ = std::process::Command::new(exe_path).spawn();
-                }
-                let _ = send_response(&mut stdout, serde_json::json!({ "status": "ok" }));
+                let result = std::env::current_exe()
+                    .and_then(|path| std::process::Command::new(path).spawn());
+                let response = match result {
+                    Ok(_) => serde_json::json!({ "status": "ok" }),
+                    Err(_) => {
+                        serde_json::json!({ "status": "error", "message": "could not launch Conflux" })
+                    }
+                };
+                let _ = send_response(&mut stdout, response);
             }
             "download" | "start_download" => {
-                if let Some(raw_url) = msg.url {
-                    if is_valid_url(&raw_url) {
-                        let payload = ExternalDownloadPayload {
-                            url: raw_url,
-                            filename: msg.filename.or(msg.suggested_filename),
-                            headers: Some(RequestHeaders {
-                                cookie: msg.cookies.filter(|c| !c.trim().is_empty()),
-                                referer: msg.referer.filter(|r| !r.trim().is_empty()),
-                                user_agent: msg.user_agent.filter(|ua| !ua.trim().is_empty()),
-                            }),
-                        };
-
-                        if let Ok(json_bytes) = serde_json::to_vec(&payload) {
-                            if let Ok(exe_path) = std::env::current_exe() {
-                                let mut cmd = std::process::Command::new(exe_path);
-                                // If the payload is large (e.g. enterprise cookies > 3KB),
-                                // write to a temporary handoff file to stay well clear of
-                                // the Windows 8191 character command-line limit.
-                                if json_bytes.len() > 3000 {
-                                    let temp_path = std::env::temp_dir().join(format!(
-                                        "conflux-handoff-{}.json",
-                                        uuid::Uuid::new_v4()
-                                    ));
-                                    if std::fs::write(&temp_path, &json_bytes).is_ok() {
-                                        cmd.arg("--from-browser-file").arg(&temp_path);
-                                    } else {
-                                        let hex_str = to_hex(&json_bytes);
-                                        cmd.arg("--from-browser").arg(hex_str);
-                                    }
-                                } else {
-                                    let hex_str = to_hex(&json_bytes);
-                                    cmd.arg("--from-browser").arg(hex_str);
-                                }
-                                let _ = cmd.spawn();
-                            }
-                        }
-
-                        let _ = send_response(&mut stdout, serde_json::json!({ "status": "ok" }));
-                    } else {
-                        let _ = send_response(
-                            &mut stdout,
-                            serde_json::json!({ "status": "error", "message": "invalid URL" }),
-                        );
-                    }
-                } else {
+                let Some(url) = msg.url.filter(|url| is_valid_url(url)) else {
                     let _ = send_response(
                         &mut stdout,
-                        serde_json::json!({ "status": "error", "message": "missing url" }),
+                        serde_json::json!({ "status": "error", "message": "missing or invalid URL" }),
                     );
-                }
+                    continue;
+                };
+                let payload = ExternalDownloadPayload {
+                    handoff_id: msg
+                        .wait_for_acceptance
+                        .then(|| uuid::Uuid::new_v4().to_string()),
+                    url,
+                    filename: msg.filename.or(msg.suggested_filename),
+                    headers: Some(RequestHeaders {
+                        cookie: msg.cookies.filter(|value| !value.trim().is_empty()),
+                        referer: msg.referer.filter(|value| !value.trim().is_empty()),
+                        user_agent: msg.user_agent.filter(|value| !value.trim().is_empty()),
+                    }),
+                };
+                let result = (|| {
+                    let _receipt = payload
+                        .handoff_id
+                        .as_deref()
+                        .map(HandoffReceipt::prepare)
+                        .transpose()?;
+                    launch_payload(&payload)?;
+                    match payload.handoff_id.as_deref() {
+                        Some(id) => wait_for_handoff(id, std::time::Duration::from_secs(600)),
+                        None => Ok("queued"),
+                    }
+                })();
+                let response = match result {
+                    Ok(status) => serde_json::json!({ "status": status }),
+                    Err(_) => {
+                        serde_json::json!({ "status": "error", "message": "Conflux did not accept the download; keep the browser transfer" })
+                    }
+                };
+                let _ = send_response(&mut stdout, response);
             }
             other => {
                 let _ = send_response(
@@ -400,6 +490,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn malformed_unicode_hex_is_rejected_without_panicking() {
+        for value in ["€0", "😀", "１２", "0g", "a"] {
+            assert_eq!(from_hex(value), None, "{value:?}");
+        }
+        assert_eq!(from_hex(" 00aF "), Some(vec![0, 175]));
+    }
+
+    #[test]
+    fn handoff_requires_acceptance_and_keeps_the_first_decision() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let receipt = HandoffReceipt::prepare(&id).unwrap();
+        assert!(acknowledge_handoff(&id, false).unwrap());
+        assert!(!acknowledge_handoff(&id, true).unwrap());
+        assert_eq!(
+            wait_for_handoff(&id, std::time::Duration::ZERO).unwrap(),
+            "cancelled"
+        );
+        drop(receipt);
+        assert!(!receipt_path(&id).unwrap().exists());
+        assert!(!acknowledge_handoff(&id, true).unwrap());
+        let id = uuid::Uuid::new_v4().to_string();
+        let _receipt = HandoffReceipt::prepare(&id).unwrap();
+        assert!(wait_for_handoff(&id, std::time::Duration::ZERO).is_err());
+        assert!(acknowledge_handoff(&id, true).unwrap());
+        assert_eq!(
+            wait_for_handoff(&id, std::time::Duration::ZERO).unwrap(),
+            "accepted"
+        );
+        assert!(acknowledge_handoff("../invalid", true).is_err());
+    }
+
+    #[test]
+    fn protocol_targets_keep_their_exact_trailing_slashes() {
+        for url in [
+            "https://example.com/download/",
+            "https://example.com/download//",
+            "https://example.com/download?token=x/",
+        ] {
+            let parsed =
+                parse_cli_download_args(&["conflux".into(), format!("conflux://{url}")]).unwrap();
+            assert_eq!(parsed.url, url);
+        }
+    }
+
+    #[test]
     fn test_hex_roundtrip() {
         let data = b"Hello, Conflux Browser Bridge! 12345";
         let hex = to_hex(data);
@@ -446,6 +581,7 @@ mod tests {
     #[test]
     fn test_parse_cli_download_args_from_browser_payload() {
         let original = ExternalDownloadPayload {
+            handoff_id: None,
             url: "https://secure.example.com/archive.zip".into(),
             filename: Some("archive.zip".into()),
             headers: Some(RequestHeaders {
@@ -487,6 +623,7 @@ mod tests {
     #[test]
     fn test_parse_cli_download_args_from_browser_file() {
         let original = ExternalDownloadPayload {
+            handoff_id: None,
             url: "https://secure.example.com/large-archive.iso".into(),
             filename: Some("large-archive.iso".into()),
             headers: Some(RequestHeaders {
@@ -518,6 +655,7 @@ mod tests {
         let dangerous_file =
             std::env::temp_dir().join(format!("evil-{}.json", uuid::Uuid::new_v4()));
         let payload = ExternalDownloadPayload {
+            handoff_id: None,
             url: "https://example.com/file.zip".into(),
             filename: None,
             headers: None,
