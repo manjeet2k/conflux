@@ -42,6 +42,14 @@ pub struct ServerConfig {
     pub stall_first_n_chunks: usize,
     /// Respond with this status to every chunk request (not the probe).
     pub chunk_status: Option<u16>,
+    /// Answer the first N chunk requests with `rate_limit_status` (rate limiting).
+    pub rate_limit_first_n_chunks: usize,
+    pub rate_limit_status: u16,
+    /// `Retry-After` value sent with rate-limit responses.
+    pub retry_after: Option<String>,
+    /// Token bucket on chunk requests `(burst, refill interval per token)`, like a server
+    /// that limits requests per IP: over-budget requests get `rate_limit_status`.
+    pub request_bucket: Option<(f64, Duration)>,
     /// Respond 503 to chunk requests coming from this peer IP.
     pub fail_peer_ip: Option<IpAddr>,
     /// Stall the first N chunk requests from `fail_peer_ip` before failing subsequent requests.
@@ -90,6 +98,10 @@ impl ServerConfig {
             drop_first_n_chunks: 0,
             stall_first_n_chunks: 0,
             chunk_status: None,
+            rate_limit_first_n_chunks: 0,
+            rate_limit_status: 429,
+            retry_after: None,
+            request_bucket: None,
             fail_peer_ip: None,
             stall_peer_first_n_chunks: 0,
             throttle: None,
@@ -156,6 +168,10 @@ pub struct Stats {
     pub head_requests: AtomicUsize,
     pub body_bytes_sent: AtomicU64,
     pub requests_by_peer_127_0_0_2: AtomicUsize,
+    /// Chunk requests answered with a rate-limit status.
+    pub rate_limited_responses: AtomicUsize,
+    /// `(tokens, last refill)` of `ServerConfig::request_bucket`.
+    pub bucket: Mutex<Option<(f64, std::time::Instant)>>,
     /// `If-Range` value of every chunk request that carried one.
     pub if_range_values: Mutex<Vec<String>>,
     pub cookies: Mutex<Vec<String>>,
@@ -301,6 +317,7 @@ fn status_text(code: u16) -> &'static str {
         404 => "Not Found",
         405 => "Method Not Allowed",
         416 => "Range Not Satisfiable",
+        429 => "Too Many Requests",
         503 => "Service Unavailable",
         _ => "Status",
     }
@@ -430,6 +447,29 @@ async fn handle(
 
         if let Some(code) = config.chunk_status {
             send_simple(&mut sock, code).await?;
+            return sock.shutdown().await;
+        }
+        let over_budget = config.request_bucket.is_some_and(|(burst, refill)| {
+            let mut bucket = stats.bucket.lock().unwrap();
+            let now = std::time::Instant::now();
+            let (tokens, last) = bucket.get_or_insert((burst, now));
+            let refilled = now.duration_since(*last).as_secs_f64() / refill.as_secs_f64();
+            *tokens = (*tokens + refilled).min(burst);
+            *last = now;
+            if *tokens >= 1.0 {
+                *tokens -= 1.0;
+                false
+            } else {
+                true
+            }
+        });
+        if n < config.rate_limit_first_n_chunks || over_budget {
+            stats.rate_limited_responses.fetch_add(1, Ordering::SeqCst);
+            let mut headers = vec![("Content-Length".to_string(), "0".to_string())];
+            if let Some(v) = &config.retry_after {
+                headers.push(("Retry-After".to_string(), v.clone()));
+            }
+            write_head(&mut sock, config.rate_limit_status, &headers).await?;
             return sock.shutdown().await;
         }
         if config.fail_peer_ip == Some(peer.ip()) {

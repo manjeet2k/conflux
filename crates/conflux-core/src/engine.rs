@@ -6,7 +6,9 @@ use crate::resume::{
     decode_ranges, encode_ranges, read_sidecar, remove_resume_sidecar, resume_sidecar_path,
     validate, write_sidecar, ResumeState, SIDECAR_VERSION,
 };
-use crate::segment::{block_size_for, Claim, FailOutcome, SegmentLease, SegmentScheduler};
+use crate::segment::{
+    block_size_for, Claim, FailOutcome, SegmentLease, SegmentScheduler, MAX_THROTTLE_ROUNDS,
+};
 use crate::writer::SparseFileWriter;
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::StreamExt;
@@ -226,6 +228,12 @@ enum AttemptError {
     /// A local disk / file system error (e.g. disk full, permission denied). Retrying
     /// over the network cannot succeed and would falsely penalize adapters.
     Disk(std::io::Error),
+    /// The server is rate limiting (HTTP 429, or 503 with `Retry-After`). Not the chunk's
+    /// or the adapter's fault: wait and retry without charging either retry budget.
+    Throttled {
+        status: StatusCode,
+        retry_after: Option<Duration>,
+    },
 }
 
 impl From<anyhow::Error> for AttemptError {
@@ -460,6 +468,8 @@ struct ChunkedShared {
     resource_changed: Mutex<Option<String>>,
     /// Set when a local disk I/O error occurred; fails the download immediately.
     disk_error: Mutex<Option<String>>,
+    /// Set when the server kept rate limiting until the throttle budget ran out.
+    rate_limited: Mutex<Option<String>>,
 }
 
 impl ChunkedShared {
@@ -480,6 +490,15 @@ struct StopOnDrop(Arc<ChunkedShared>);
 impl Drop for StopOnDrop {
     fn drop(&mut self) {
         self.0.stop_tx.send_replace(true);
+    }
+}
+
+/// Unregisters a segment worker from the scheduler when it exits, by any path.
+struct WorkerRegistration(Arc<ChunkedShared>);
+
+impl Drop for WorkerRegistration {
+    fn drop(&mut self) {
+        self.0.scheduler().remove_worker();
     }
 }
 
@@ -1072,6 +1091,7 @@ impl DownloadEngine {
             last_error: Mutex::new(None),
             resource_changed: Mutex::new(None),
             disk_error: Mutex::new(None),
+            rate_limited: Mutex::new(None),
         });
         let _stop_guard = StopOnDrop(Arc::clone(&shared));
 
@@ -1274,6 +1294,18 @@ impl DownloadEngine {
             .clone();
         if let Some(msg) = disk_error {
             bail!("Download failed: {}", msg);
+        }
+
+        let rate_limited = shared
+            .rate_limited
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        if let Some(msg) = rate_limited {
+            bail!(
+                "Download failed: the server kept rate limiting requests; resume it later. {}",
+                msg
+            );
         }
 
         {
@@ -1506,7 +1538,7 @@ impl DownloadEngine {
     }
 }
 
-const WRITE_BUFFER_SIZE: usize = 256 * 1024;
+const WRITE_BUFFER_SIZE: usize = 1024 * 1024;
 
 /// One worker: repeatedly claims a segment lease, streams it on `adapter`, and reports the result.
 async fn run_segment_worker(
@@ -1516,15 +1548,20 @@ async fn run_segment_worker(
     worker_idx: usize,
     mut stop: watch::Receiver<bool>,
 ) {
+    shared.scheduler().add_worker();
+    let _registered = WorkerRegistration(Arc::clone(&shared));
     let mut retire = adapter.retire_tx.subscribe();
+    // Measured speed of this worker's connection; sizes its next piece.
+    let mut conn_rate: Option<f64> = None;
     loop {
         if *stop.borrow() || *retire.borrow() || adapter.dropped.load(Ordering::SeqCst) {
             return;
         }
 
-        let claim = shared
-            .scheduler()
-            .claim(Instant::now(), Some(adapter.label.clone()));
+        let claim =
+            shared
+                .scheduler()
+                .claim(Instant::now(), conn_rate, Some(adapter.label.clone()));
         let lease = match claim {
             Claim::Finished => return,
             Claim::Wait(delay) => {
@@ -1551,6 +1588,7 @@ async fn run_segment_worker(
             &shared,
             &lease,
             &mut uncommitted,
+            &mut conn_rate,
             &mut stop,
             &mut retire,
             &adapter_states,
@@ -1611,6 +1649,49 @@ async fn run_segment_worker(
                 *shared.disk_error.lock().unwrap_or_else(|p| p.into_inner()) = Some(msg);
                 shared.stop_tx.send_replace(true);
                 return;
+            }
+            Err(AttemptError::Throttled {
+                status,
+                retry_after,
+            }) => {
+                shared
+                    .counters
+                    .downloaded
+                    .fetch_sub(uncommitted, Ordering::SeqCst);
+                let outcome = shared
+                    .scheduler()
+                    .throttle(lease.id, Instant::now(), retry_after);
+                match outcome {
+                    FailOutcome::Retry { after } => {
+                        warn!(
+                            "Segment {} via {}: server answered {} (Retry-After {:?}); pausing new requests for {:?}",
+                            lease.id, adapter.label, status, retry_after, after
+                        );
+                        adapter.set_last_error(Some(format!(
+                            "server is rate limiting (HTTP {}); retrying in {:.0}s",
+                            status.as_u16(),
+                            after.as_secs_f64().ceil()
+                        )));
+                    }
+                    FailOutcome::Failed => {
+                        let msg = format!(
+                            "segment {} range [{}, {}) via {}: server answered {} through {} pauses in a row",
+                            lease.id,
+                            lease.start,
+                            lease.end_at_request,
+                            adapter.label,
+                            status,
+                            MAX_THROTTLE_ROUNDS
+                        );
+                        error!("Giving up on rate-limited server: {}", msg);
+                        shared.record_error(msg.clone());
+                        *shared
+                            .rate_limited
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner()) = Some(msg);
+                        shared.stop_tx.send_replace(true);
+                    }
+                }
             }
             Err(AttemptError::Failed(e)) => {
                 // Only this attempt's uncommitted bytes are subtracted.
@@ -1715,11 +1796,9 @@ async fn flush_segment_buffer(
     if buffer.is_empty() {
         return Ok(());
     }
-    if let Err(e) = shared
-        .writer
-        .write_at(*buffer_start_offset, buffer.as_slice())
-        .await
-    {
+    // Hand the filled buffer to the writer instead of copying it.
+    let data = std::mem::replace(buffer, Vec::with_capacity(WRITE_BUFFER_SIZE));
+    if let Err(e) = shared.writer.write_at(*buffer_start_offset, data).await {
         let io_err = e
             .downcast::<std::io::Error>()
             .unwrap_or_else(|e| std::io::Error::other(e.to_string()));
@@ -1736,17 +1815,38 @@ async fn flush_segment_buffer(
             retire_default_route(adapter_states, adapter);
         }
     }
-    buffer.clear();
     *buffer_start_offset = current_offset;
     Ok(())
 }
 
-/// Streams one byte-range segment with strict validation and 256 KiB write buffering.
+/// Parses `Retry-After` as delay-seconds. HTTP-date values are not supported and yield
+/// `None` (the scheduler then uses its own backoff).
+fn retry_after_header(headers: &header::HeaderMap) -> Option<Duration> {
+    header_str(headers, header::RETRY_AFTER)
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+}
+
+/// Smallest sample a connection speed is measured from.
+const RATE_SAMPLE_MIN: u64 = 256 * 1024;
+
+/// Average speed of `bytes` received over `elapsed`; `None` if too little to measure.
+fn measured_rate(bytes: u64, elapsed: Duration) -> Option<f64> {
+    let secs = elapsed.as_secs_f64();
+    (bytes >= RATE_SAMPLE_MIN && secs > 0.0).then(|| bytes as f64 / secs)
+}
+
+/// Streams one byte-range segment with strict validation and 1 MiB write buffering.
+///
+/// Updates `conn_rate` with this piece's average speed (it sizes the worker's next piece)
+/// and publishes the running speed in the lease bounds for tail-steal decisions.
+#[allow(clippy::too_many_arguments)]
 async fn fetch_segment(
     adapter: &AdapterWorkerState,
     shared: &ChunkedShared,
     lease: &SegmentLease,
     uncommitted: &mut u64,
+    conn_rate: &mut Option<f64>,
     stop: &mut watch::Receiver<bool>,
     retire: &mut watch::Receiver<bool>,
     adapter_states: &RwLock<Vec<Arc<AdapterWorkerState>>>,
@@ -1791,6 +1891,15 @@ async fn fetch_segment(
         content_range
     );
 
+    let retry_after = retry_after_header(resp.headers());
+    if status == StatusCode::TOO_MANY_REQUESTS
+        || (status == StatusCode::SERVICE_UNAVAILABLE && retry_after.is_some())
+    {
+        return Err(AttemptError::Throttled {
+            status,
+            retry_after,
+        });
+    }
     if status == StatusCode::OK && shared.if_range.is_some() {
         return Err(AttemptError::ResourceChanged(anyhow!(
             "server answered {} with 200 instead of 206: If-Range {:?} no longer matches",
@@ -1851,6 +1960,9 @@ async fn fetch_segment(
     let mut buffer = Vec::with_capacity(WRITE_BUFFER_SIZE);
     let mut buffer_start_offset = lease.start;
     let mut current_offset = lease.start;
+    let piece_started = Instant::now();
+    // Until this piece has its own measurement, the connection's last one stands in.
+    lease.bounds.lock().unwrap().rate = *conn_rate;
 
     loop {
         let next = tokio::select! {
@@ -1900,6 +2012,11 @@ async fn fetch_segment(
             let mut bounds = lease.bounds.lock().unwrap();
             let (take, reached_end) = bounds.take(len);
             let was_split = bounds.end < lease.end_at_request;
+            if let Some(rate) =
+                measured_rate(bounds.reserved - lease.start, piece_started.elapsed())
+            {
+                bounds.rate = Some(rate);
+            }
             (take, reached_end, was_split)
         };
 
@@ -1932,6 +2049,7 @@ async fn fetch_segment(
                     lease.id, adapter.label, current_offset
                 );
             }
+            update_conn_rate(conn_rate, lease, current_offset, piece_started);
             return Ok(());
         }
     }
@@ -1949,6 +2067,7 @@ async fn fetch_segment(
     )
     .await?;
 
+    update_conn_rate(conn_rate, lease, current_offset, piece_started);
     let current_end = lease.bounds.lock().unwrap().end;
     if current_offset < current_end {
         return Err(AttemptError::Failed(anyhow!(
@@ -1962,6 +2081,24 @@ async fn fetch_segment(
     }
 
     Ok(())
+}
+
+/// Records the finished piece's average speed as the connection's speed.
+fn update_conn_rate(
+    conn_rate: &mut Option<f64>,
+    lease: &SegmentLease,
+    current_offset: u64,
+    piece_started: Instant,
+) {
+    if let Some(rate) = measured_rate(current_offset - lease.start, piece_started.elapsed()) {
+        debug!(
+            "Segment {} piece of {} bytes averaged {:.2} MB/s",
+            lease.id,
+            current_offset - lease.start,
+            rate / 1_000_000.0
+        );
+        *conn_rate = Some(rate);
+    }
 }
 
 /// Writes the sidecar if the completed set changed since `last` (updating `last`).

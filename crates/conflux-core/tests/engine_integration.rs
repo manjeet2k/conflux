@@ -26,6 +26,15 @@ fn test_engine() -> DownloadEngine {
         .with_stall_timeout(Duration::from_secs(3))
 }
 
+/// Blocks small enough that the test payload (66 blocks) outlasts the first round of
+/// 4-block pieces, like a real file of thousands of blocks does. Needed by tests in which
+/// work must still be available for later workers (hot-added or retried adapters).
+const FINE_CHUNK: u64 = 64 * 1024;
+
+fn fine_block_engine() -> DownloadEngine {
+    test_engine().with_block_size(FINE_CHUNK)
+}
+
 struct Outcome {
     result: Result<String>,
     probe: DownloadProbe,
@@ -872,7 +881,7 @@ async fn dynamic_adapter_joins_mid_download_and_aggregates_bandwidth() {
     let mut config = ServerConfig::new(Arc::clone(&data));
     config.throttle = Some(Duration::from_millis(10));
     let server = TestServer::start(config).await;
-    let engine = test_engine();
+    let engine = fine_block_engine();
     let dir = tempfile::tempdir().unwrap();
     let probe = engine.probe(&server.url("/dynamic.bin")).await.unwrap();
     let path = dir.path().join(&probe.suggested_filename);
@@ -1042,7 +1051,7 @@ async fn adapter_interface_name_is_used_for_binding() {
         named_adapter("127.0.0.2", "conflux-nodev0"),
         fake_adapter("127.0.0.1"),
     ];
-    let out = run_download(&test_engine(), &server, &adapters).await;
+    let out = run_download(&fine_block_engine(), &server, &adapters).await;
     assert_file_matches(&out, &data);
     assert_eq!(
         server
@@ -1318,7 +1327,7 @@ async fn failing_hot_added_adapter_keeps_default_route() {
     let mut cfg = throttled_config(&data);
     cfg.fail_peer_ip = Some("127.0.0.2".parse().unwrap());
     let server = TestServer::start(cfg).await;
-    let engine = test_engine();
+    let engine = fine_block_engine();
     let dir = tempfile::tempdir().unwrap();
     let probe = engine.probe(&server.url("/bad-add.bin")).await.unwrap();
     let path = dir.path().join("bad-add.bin");
@@ -1807,7 +1816,7 @@ async fn dropped_adapter_retire_cancels_sibling_workers_promptly() {
     // the stalled chunk would take >= 15 seconds to time out before another adapter could finish it.
     let engine = DownloadEngine::new(4)
         .unwrap()
-        .with_block_size(CHUNK)
+        .with_block_size(FINE_CHUNK)
         .with_retry_backoff(Duration::from_millis(10))
         .with_stall_timeout(Duration::from_secs(15));
     let adapters = [fake_adapter("127.0.0.2"), fake_adapter("127.0.0.1")];
@@ -1827,7 +1836,7 @@ async fn dropped_adapter_retire_cancels_sibling_workers_promptly() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn single_worker_streams_entire_file_in_single_http_request() {
+async fn single_worker_grows_its_piece_to_measured_speed() {
     let data = payload(PAYLOAD_LEN, 101);
     let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
     let engine = DownloadEngine::new(1)
@@ -1839,13 +1848,14 @@ async fn single_worker_streams_entire_file_in_single_http_request() {
     assert_file_matches(&out, &data);
     assert_progress_sane(&out.progress, PAYLOAD_LEN as u64);
 
-    // Single worker claims the whole range as 1 segment and streams to completion
-    // without reconnecting or re-requesting per 256 KiB block.
-    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 1);
+    // A fresh connection starts with the minimum piece (4 blocks = 1 MiB). Its measured
+    // (local, very fast) speed then sizes the next piece past the rest of the file, so the
+    // remainder arrives in one more request instead of one per block.
+    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn idle_worker_steals_and_splits_in_flight_segment_from_active_worker() {
+async fn two_workers_pull_speed_sized_pieces() {
     let total_len = 8 * 1024 * 1024;
     let data = payload(total_len, 102);
     let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
@@ -1863,4 +1873,83 @@ async fn idle_worker_steals_and_splits_in_flight_segment_from_active_worker() {
         (2..=6).contains(&reqs),
         "expected 2..=6 requests, got {reqs}"
     );
+}
+
+/// Runs a single-worker download whose first `n` chunk requests are rate limited.
+/// Returns the outcome and the number of chunk requests the server saw.
+async fn rate_limited_download(
+    n: usize,
+    status: u16,
+    retry_after: Option<&str>,
+) -> (Outcome, usize) {
+    let data = payload(PAYLOAD_LEN, 120 + u64::from(status));
+    let mut cfg = ServerConfig::new(Arc::clone(&data));
+    cfg.rate_limit_first_n_chunks = n;
+    cfg.rate_limit_status = status;
+    cfg.retry_after = retry_after.map(str::to_string);
+    let server = TestServer::start(cfg).await;
+    let engine = DownloadEngine::new(1)
+        .unwrap()
+        .with_block_size(CHUNK)
+        .with_retry_backoff(Duration::from_millis(10));
+    let out = run_download(&engine, &server, &[]).await;
+    let requests = server.stats.chunk_requests.load(Ordering::SeqCst);
+    if out.result.is_ok() {
+        assert!(requests > n);
+        assert_file_matches(&out, &data);
+    }
+    (out, requests)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rate_limited_requests_wait_without_charging_retries() {
+    // Six 429s on the same range: charged as failures they would exceed the 5-attempt
+    // budget and fail the download.
+    let (out, _) = rate_limited_download(6, 429, None).await;
+    assert!(out.result.is_ok(), "{:?}", out.result);
+    let last = out.progress.last().unwrap();
+    assert!(!last.adapters[0].dropped);
+    assert_eq!(last.adapters[0].last_error, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn service_unavailable_with_retry_after_is_treated_as_rate_limiting() {
+    let (out, _) = rate_limited_download(6, 503, Some("0")).await;
+    assert!(out.result.is_ok(), "{:?}", out.result);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn persistent_rate_limiting_fails_with_clear_error() {
+    let (out, requests) = rate_limited_download(usize::MAX, 429, None).await;
+    // One worker, so every 429 starts a new pause: 8 pauses are allowed, the 9th gives up.
+    assert_eq!(requests, 9);
+    let msg = format!("{:#}", out.result.unwrap_err());
+    assert!(msg.contains("kept rate limiting"), "{}", msg);
+    assert!(msg.contains("429"), "{}", msg);
+}
+
+/// A server that allows a burst of 4 requests and then one per second (like OVH's speed
+/// test mirror) must see few rate-limit responses: after the first 429 the engine switches
+/// to one long request per connection and starts requests one per `Retry-After`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_rate_limited_server_gets_few_requests_and_completes() {
+    let data = payload(PAYLOAD_LEN, 131);
+    // ~400 KB/s per connection: like a real large file, each connection's share takes
+    // longer than restarting all connections at one request per second.
+    let mut cfg = throttled_config(&data);
+    cfg.request_bucket = Some((4.0, Duration::from_secs(1)));
+    cfg.retry_after = Some("1".to_string());
+    let server = TestServer::start(cfg).await;
+
+    let out = run_download(&fine_block_engine(), &server, &[]).await;
+    assert_file_matches(&out, &data);
+
+    let limited = server.stats.rate_limited_responses.load(Ordering::SeqCst);
+    let requests = server.stats.chunk_requests.load(Ordering::SeqCst);
+    assert!(limited >= 1, "the scenario must actually hit the limit");
+    assert!(
+        limited <= 4,
+        "kept hammering a rate-limited server: {limited} 429s"
+    );
+    assert!(requests <= 14, "too many requests: {requests}");
 }
