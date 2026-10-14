@@ -205,6 +205,26 @@ input[type="range"]:disabled { opacity: 0.35; }
 .f .num { font: 700 2.6em/1 var(--display); letter-spacing: -0.04em; opacity: 0.5; }
 .f p { font-size: 1.05em; opacity: 0.8; }
 
+/* Browser Extension: glass panel with store badge, details, and extension popup preview. */
+.extension-in .head { margin-bottom: 2.8em; }
+.extension-panel { overflow: hidden; padding: 3em; }
+.extension-grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 3.2em; align-items: center; }
+.extension-info { display: flex; flex-direction: column; }
+.browser-badge { display: inline-flex; align-items: center; gap: 0.8em; padding: 0.4em 1em 0.4em 0.6em; border-radius: 999px; background: rgba(238, 237, 242, 0.08); border: 1px solid rgba(238, 237, 242, 0.16); margin-bottom: 1.4em; width: fit-content; font: 700 0.85em var(--label); letter-spacing: 0.06em; text-transform: uppercase; color: var(--paper); }
+.browser-badge img { display: block; border-radius: 50%; }
+.extension-info h3 { font: 700 clamp(1.8rem, 3vw, 2.4rem)/1.15 var(--display); letter-spacing: -0.03em; margin: 0 0 0.6em; }
+.extension-desc { font-size: 1.15em; line-height: 1.6; opacity: 0.85; margin: 0 0 1.6em; }
+.extension-features { list-style: none; margin: 0 0 2.2em; padding: 0; display: grid; gap: 0.8em; }
+.extension-features li { display: flex; align-items: baseline; gap: 0.8em; font-size: 1.05em; line-height: 1.5; }
+.extension-features li::before { content: "•"; color: var(--pink); font-size: 1.4em; line-height: 0; }
+.extension-features strong { color: var(--paper); }
+.extension-actions { display: flex; align-items: center; gap: 1.6em; flex-wrap: wrap; }
+.extension-privacy-link { color: rgba(238, 237, 242, 0.7); font: 700 0.85em var(--label); letter-spacing: 0.08em; text-transform: uppercase; text-decoration: none; border-bottom: 1px solid rgba(238, 237, 242, 0.3); transition: color 0.3s var(--ease), border-color 0.3s var(--ease); }
+.extension-privacy-link:hover { color: var(--paper); border-color: var(--violet); }
+.extension-media { position: relative; display: flex; justify-content: center; align-items: center; }
+.extension-media img { width: 100%; height: auto; border-radius: 1.2em; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(238, 237, 242, 0.15); transition: transform 0.5s var(--ease); }
+.extension-panel:hover .extension-media img { transform: scale(1.02); }
+
 /* FAQ: hairline rows on the light section. */
 .faq-in .head { grid-template-columns: 1fr; }
 .faq details { border-top: 1.2px solid var(--coal); }
@@ -280,6 +300,8 @@ input[type="range"]:disabled { opacity: 0.35; }
   .glass-panel { padding: 1.4em; border-radius: 1.4em; }
   .chunks { grid-template-columns: repeat(16, 1fr); }
   #plug-progress { font-size: 2em; min-width: 0; }
+  .extension-grid { grid-template-columns: 1fr; gap: 2em; }
+  .extension-panel { padding: 1.8em 1.4em; }
   .faq summary { font-size: 0.95em; gap: 1em; }
   .footer .container { padding-top: 4em; }
   .foot-row { flex-direction: column; align-items: flex-start; }

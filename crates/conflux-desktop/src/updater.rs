@@ -653,10 +653,7 @@ pub fn open_about_link(app: AppHandle, target: String) -> Result<(), String> {
             .map_err(|e| format!("Could not open the browser: {e}")),
         "extension-chrome" => app
             .opener()
-            .open_url(
-                format!("{REPO_URL}/tree/main/extensions/conflux-browser#chromium-browsers-google-chrome-microsoft-edge-brave-vivaldi-opera"),
-                None::<&str>,
-            )
+            .open_url(CHROME_STORE_URL, None::<&str>)
             .map_err(|e| format!("Could not open the browser: {e}")),
         "extension-firefox" => app
             .opener()
@@ -670,3 +667,5 @@ pub fn open_about_link(app: AppHandle, target: String) -> Result<(), String> {
 }
 
 const REPO_URL: &str = "https://github.com/manjeet2k/conflux";
+const CHROME_STORE_URL: &str =
+    "https://chromewebstore.google.com/detail/conflux-download-accelera/ncapjgooomipdohlolfbbknhbjcfdjml";

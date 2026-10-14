@@ -47,6 +47,7 @@ const values = {
   OFFLINE_URL: asset(`Conflux_${version}_x64-offline-setup.exe`)?.browser_download_url ?? RELEASES,
   SUMS_URL: asset("SHA256SUMS.txt")?.browser_download_url ?? RELEASES,
   RELEASE_URL: rel?.html_url ?? RELEASES,
+  EXTENSION_URL: "https://chromewebstore.google.com/detail/conflux-download-accelera/ncapjgooomipdohlolfbbknhbjcfdjml",
   BUILD_DATE: new Date().toISOString().slice(0, 10),
 };
 

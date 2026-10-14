@@ -10,7 +10,7 @@ import {
   Warning20Regular,
   Bug20Regular,
   ArrowSync20Regular,
-  Globe20Regular,
+  ArrowDownload20Regular,
 } from '@fluentui/react-icons';
 import { open } from '@tauri-apps/plugin-dialog';
 import { downloadDir } from '@tauri-apps/api/path';
@@ -18,6 +18,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import { api, errorText } from '../api';
 import type { Settings, ThemePreference, UpdateInfo } from '../types';
 import { Page, SectionHeader, SettingsCard } from '../components/Page';
+import chromeLogo from '../assets/browsers/chrome.svg';
 
 const useStyles = makeStyles({
   stack: { display: 'flex', flexDirection: 'column', gap: '4px' },
@@ -48,6 +49,12 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
     backgroundColor: tokens.colorNeutralBackground3,
     borderRadius: tokens.borderRadiusMedium,
+  },
+  browserIcon: {
+    width: '24px',
+    height: '24px',
+    display: 'block',
+    userSelect: 'none',
   },
 });
 
@@ -304,12 +311,25 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
       <SectionHeader id="settings-browser">Browser Integration</SectionHeader>
       <div className={styles.stack}>
         <SettingsCard
-          icon={<Globe20Regular />}
-          title="Browser extension"
+          icon={<img src={chromeLogo} alt="Google Chrome" className={styles.browserIcon} />}
+          title="Chrome extension"
+          description="Capture downloads directly from Google Chrome, Microsoft Edge, and Brave via the Chrome Web Store"
+        >
+          <Button
+            appearance="primary"
+            icon={<ArrowDownload20Regular />}
+            onClick={() => api.openAboutLink('extension-chrome')}
+          >
+            Get Chrome extension
+          </Button>
+        </SettingsCard>
+        <SettingsCard
+          icon={<PlugConnected20Regular />}
+          title="Native messaging host"
           description={
             browserHostRegistered
-              ? 'Conflux native messaging host is registered for Chrome, Edge, Brave, and Firefox. Install or load the extension to capture downloads.'
-              : 'Conflux native messaging host is not registered. Register the host to enable browser extension communication.'
+              ? 'Conflux native messaging host is registered and ready to receive browser downloads'
+              : 'Register the native messaging host to allow browser extensions to send downloads to Conflux'
           }
         >
           <div className={styles.buttons}>
@@ -317,17 +337,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
               <Badge
                 appearance="tint"
                 color={browserHostRegistered ? 'success' : 'warning'}
-                style={{ alignSelf: 'center', marginRight: '4px' }}
+                style={{ alignSelf: 'center' }}
               >
-                {browserHostRegistered ? 'Host Registered' : 'Not Registered'}
+                {browserHostRegistered ? 'Host registered' : 'Not registered'}
               </Badge>
             )}
-            <Button appearance="secondary" onClick={() => api.openAboutLink('extension-chrome')}>
-              Chrome / Edge / Brave
-            </Button>
-            <Button appearance="secondary" onClick={() => api.openAboutLink('extension-firefox')}>
-              Firefox
-            </Button>
             <Button onClick={handleRegisterHost} disabled={registeringHost}>
               {registeringHost
                 ? 'Registering...'
