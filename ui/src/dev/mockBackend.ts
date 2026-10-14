@@ -73,6 +73,8 @@ const base = (id: string, filename: string, size: number, over: Partial<Download
   error: null,
   created_at_ms: now,
   completed_at_ms: null,
+  duration_ms: 0,
+  avg_speed_bytes_sec: null,
   adapters: [],
   chunk_map: null,
   ...over,
@@ -80,11 +82,11 @@ const base = (id: string, filename: string, size: number, over: Partial<Download
 });
 
 const tasks: DownloadTask[] = [
-  base('t1', 'ubuntu-26.04.1-desktop-amd64.iso', 6.2 * 1024 * MB, { status: 'downloading', created_at_ms: now - 60_000 }),
-  base('t2', 'Fedora-Workstation-Live-x86_64-43.iso', 2.3 * 1024 * MB, { status: 'paused', downloaded_bytes: 1.1 * 1024 * MB, completed_chunks: 281, created_at_ms: now - 3_600_000 }),
-  base('t3', 'blender-4.5.2-windows-x64.msi', 402 * MB, { status: 'completed', downloaded_bytes: 402 * MB, completed_chunks: 101, sha256: '9f2c1d0b7e4a53f8c6de21b04a7f9e3c55d18a2b6f0c4e79d3a1b85f60e2c7d4', created_at_ms: now - 86_400_000, completed_at_ms: now - 86_000_000 }),
-  base('t4', 'dataset-2026-q3.tar.zst', 12.8 * 1024 * MB, { status: 'error', downloaded_bytes: 3.4 * 1024 * MB, completed_chunks: 850, error: 'chunk 871 range [3653238784, 3657433087] via 10.44.2.9: error reading chunk body (stall timeout or disconnect) (received 1048576 of 4194304 bytes)', created_at_ms: now - 7_200_000 }),
-  base('t5', 'podcast-episode-212.mp3', 88 * MB, { status: 'completed', downloaded_bytes: 88 * MB, supports_ranges: false, total_chunks: 1, completed_chunks: 1, sha256: '1c0e8b2f4d6a9e7b3c5f1a0d2e4b6c8a9f7e5d3c1b0a2e4f6d8c0b2a4e6f8d0c', created_at_ms: now - 172_800_000, completed_at_ms: now - 172_700_000 }),
+  base('t1', 'ubuntu-26.04.1-desktop-amd64.iso', 6.2 * 1024 * MB, { status: 'downloading', created_at_ms: now - 60_000, duration_ms: 60_000, avg_speed_bytes_sec: 18.8 * MB }),
+  base('t2', 'Fedora-Workstation-Live-x86_64-43.iso', 2.3 * 1024 * MB, { status: 'paused', downloaded_bytes: 1.1 * 1024 * MB, completed_chunks: 281, created_at_ms: now - 3_600_000, duration_ms: 120_000, avg_speed_bytes_sec: 9.38 * MB }),
+  base('t3', 'blender-4.5.2-windows-x64.msi', 402 * MB, { status: 'completed', downloaded_bytes: 402 * MB, completed_chunks: 101, sha256: '9f2c1d0b7e4a53f8c6de21b04a7f9e3c55d18a2b6f0c4e79d3a1b85f60e2c7d4', created_at_ms: now - 86_400_000, completed_at_ms: now - 86_000_000, duration_ms: 22_500, avg_speed_bytes_sec: 17.86 * MB }),
+  base('t4', 'dataset-2026-q3.tar.zst', 12.8 * 1024 * MB, { status: 'error', downloaded_bytes: 3.4 * 1024 * MB, completed_chunks: 850, error: 'chunk 871 range [3653238784, 3657433087] via 10.44.2.9: error reading chunk body (stall timeout or disconnect) (received 1048576 of 4194304 bytes)', created_at_ms: now - 7_200_000, duration_ms: 300_000, avg_speed_bytes_sec: 11.6 * MB }),
+  base('t5', 'podcast-episode-212.mp3', 88 * MB, { status: 'completed', downloaded_bytes: 88 * MB, supports_ranges: false, total_chunks: 1, completed_chunks: 1, sha256: '1c0e8b2f4d6a9e7b3c5f1a0d2e4b6c8a9f7e5d3c1b0a2e4f6d8c0b2a4e6f8d0c', created_at_ms: now - 172_800_000, completed_at_ms: now - 172_700_000, duration_ms: 8_200, avg_speed_bytes_sec: 10.73 * MB }),
 ];
 // Seed the running task's chunk state.
 const map = (t: DownloadTask, done: number) =>
@@ -114,6 +116,10 @@ function tick() {
     });
     t.speed_bytes_sec = t.adapters.reduce((s, a) => s + a.speed_bytes_sec, 0);
     t.downloaded_bytes = Math.min(t.total_bytes, Math.floor(t.downloaded_bytes + t.speed_bytes_sec / 5));
+    t.duration_ms = (t.duration_ms ?? 0) + 200;
+    if (t.duration_ms > 0 && t.downloaded_bytes > 0) {
+      t.avg_speed_bytes_sec = t.downloaded_bytes / (t.duration_ms / 1000);
+    }
     t.eta_seconds = Math.ceil((t.total_bytes - t.downloaded_bytes) / t.speed_bytes_sec);
     t.completed_chunks = Math.floor(t.downloaded_bytes / (4 * MB));
     t.active_chunks = 12;

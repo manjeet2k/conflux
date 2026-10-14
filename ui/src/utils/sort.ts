@@ -17,8 +17,11 @@ function compare(a: DownloadTask, b: DownloadTask, key: SortKey): number {
       return a.total_bytes - b.total_bytes;
     case 'progress':
       return progressOf(a.downloaded_bytes, a.total_bytes) - progressOf(b.downloaded_bytes, b.total_bytes);
-    case 'speed':
-      return a.speed_bytes_sec - b.speed_bytes_sec;
+    case 'speed': {
+      const aSpeed = a.status === 'downloading' ? a.speed_bytes_sec : (a.avg_speed_bytes_sec ?? 0);
+      const bSpeed = b.status === 'downloading' ? b.speed_bytes_sec : (b.avg_speed_bytes_sec ?? 0);
+      return aSpeed - bSpeed;
+    }
     case 'eta': {
       const aVal = a.status === 'downloading' && a.eta_seconds !== null && a.eta_seconds > 0 ? a.eta_seconds : 0;
       const bVal = b.status === 'downloading' && b.eta_seconds !== null && b.eta_seconds > 0 ? b.eta_seconds : 0;
@@ -41,6 +44,11 @@ export function sortTasks(tasks: DownloadTask[], sort: SortState): DownloadTask[
         return aActive ? -1 : 1; // Active downloads with ETA always partition to the top
       }
       if (!aActive && !bActive) {
+        const aDur = a.duration_ms ?? 0;
+        const bDur = b.duration_ms ?? 0;
+        if (aDur !== bDur) {
+          return sign * (aDur - bDur) || b.created_at_ms - a.created_at_ms;
+        }
         return b.created_at_ms - a.created_at_ms;
       }
       return sign * ((a.eta_seconds ?? 0) - (b.eta_seconds ?? 0)) || b.created_at_ms - a.created_at_ms;

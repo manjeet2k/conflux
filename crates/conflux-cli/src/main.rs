@@ -206,6 +206,7 @@ async fn main() -> Result<()> {
                 eprintln!();
             });
 
+            let download_start = std::time::Instant::now();
             let result = engine
                 .download(&probe, &final_path, &adapters, Some(tx), cancel_rx)
                 .await;
@@ -213,8 +214,16 @@ async fn main() -> Result<()> {
 
             match result {
                 Ok(sha256) => {
+                    let elapsed = download_start.elapsed();
+                    let duration_secs = elapsed.as_secs_f64();
                     println!("\n✅ Download Finished Successfully!");
                     println!("  Saved to:   {:?}", final_path);
+                    println!("  Time taken: {:.2}s", duration_secs);
+                    if duration_secs > 0.0 && probe.total_bytes > 0 {
+                        let avg_speed_mb =
+                            (probe.total_bytes as f64 / (1024.0 * 1024.0)) / duration_secs;
+                        println!("  Avg speed:  {:.2} MB/s", avg_speed_mb);
+                    }
                     println!("  SHA-256:    {}", sha256);
                 }
                 Err(e) if e.downcast_ref::<DownloadCancelled>().is_some() => {

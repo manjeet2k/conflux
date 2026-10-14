@@ -182,6 +182,8 @@ mod tests {
             error: None,
             created_at_ms: 0,
             completed_at_ms: None,
+            duration_ms: 0,
+            avg_speed_bytes_sec: None,
             adapters: vec![],
             chunk_map: None,
         }

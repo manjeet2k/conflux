@@ -1410,6 +1410,7 @@ impl DownloadEngine {
             .await
             .with_context(|| format!("Failed to create output file {:?}", output_path))?;
 
+        let start_time = Instant::now();
         let counters = Arc::new(Counters::default());
         counters.active.store(1, Ordering::SeqCst);
         adapter.active.store(1, Ordering::SeqCst);
@@ -1489,7 +1490,16 @@ impl DownloadEngine {
         drop(file);
 
         let received = result?;
-        info!("Single-stream download finished: {} bytes", received);
+        let duration = start_time.elapsed().as_secs_f64();
+        let avg_speed = if duration > 0.0 {
+            (received as f64 / duration) / 1_000_000.0
+        } else {
+            0.0
+        };
+        info!(
+            "Single-stream download finished: {} bytes in {:.2}s (avg {:.2} MB/s)",
+            received, duration, avg_speed
+        );
         let sha256 = self.hash_output(output_path, &mut cancel).await?;
         info!("File SHA-256: {}", sha256);
         Ok(sha256)

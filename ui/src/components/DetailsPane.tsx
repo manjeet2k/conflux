@@ -20,7 +20,7 @@ import {
   ShieldCheckmark16Regular,
 } from '@fluentui/react-icons';
 import type { AdapterInfo, DownloadTask } from '../types';
-import { formatBytes, formatDate, formatEta, formatSpeed, progressOf } from '../utils/formatters';
+import { formatBytes, formatDate, formatDuration, formatEta, formatSpeed, progressOf } from '../utils/formatters';
 import { FileIcon } from './FileIcon';
 import { adapterColor, adapterProblem } from '../utils/adapters';
 import { StatusLabel } from './StatusLabel';
@@ -194,6 +194,11 @@ export const DetailsPane: React.FC<DetailsPaneProps> = (p) => {
         <div className={styles.row}>
           <span className={styles.big}>{t.total_bytes > 0 ? `${(fraction * 100).toFixed(1)}%` : formatBytes(t.downloaded_bytes)}</span>
           {running && <span className={styles.num}>{formatSpeed(t.speed_bytes_sec)}</span>}
+          {!running && t.status === 'completed' && t.avg_speed_bytes_sec ? (
+            <span className={styles.num} title="Average download speed">
+              {formatSpeed(t.avg_speed_bytes_sec)} avg
+            </span>
+          ) : null}
         </div>
         <ProgressBar
           value={running && t.total_bytes === 0 ? undefined : fraction}
@@ -206,6 +211,16 @@ export const DetailsPane: React.FC<DetailsPaneProps> = (p) => {
             {formatBytes(t.downloaded_bytes)} of {t.total_bytes > 0 ? formatBytes(t.total_bytes) : 'unknown size'}
           </Caption1>
           {running && <Caption1 className={styles.muted}>{formatEta(t.eta_seconds)} left</Caption1>}
+          {!running && t.status === 'completed' && t.duration_ms ? (
+            <Caption1 className={styles.muted} title="Total time taken to download">
+              Took {formatDuration(t.duration_ms)}
+            </Caption1>
+          ) : null}
+          {!running && t.status === 'paused' && t.duration_ms ? (
+            <Caption1 className={styles.muted} title="Active time elapsed so far">
+              {formatDuration(t.duration_ms)} elapsed
+            </Caption1>
+          ) : null}
         </div>
       </section>
 
@@ -276,6 +291,12 @@ export const DetailsPane: React.FC<DetailsPaneProps> = (p) => {
         {prop('Resumable', t.supports_ranges ? 'Yes, the server supports byte ranges' : 'No')}
         {prop('Added', formatDate(t.created_at_ms))}
         {t.completed_at_ms && prop('Completed', formatDate(t.completed_at_ms))}
+        {t.duration_ms && t.duration_ms > 0
+          ? prop(t.status === 'completed' ? 'Time taken' : 'Time elapsed', formatDuration(t.duration_ms))
+          : null}
+        {t.avg_speed_bytes_sec && t.avg_speed_bytes_sec > 0
+          ? prop('Average speed', formatSpeed(t.avg_speed_bytes_sec))
+          : null}
         {t.sha256 &&
           prop(
             'SHA-256',

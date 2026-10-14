@@ -269,6 +269,8 @@ pub async fn start_download(
         error: None,
         created_at_ms: now_ms(),
         completed_at_ms: None,
+        duration_ms: 0,
+        avg_speed_bytes_sec: None,
         adapters: Vec::new(),
         chunk_map: None,
     };
@@ -853,6 +855,11 @@ async fn run_download(
     resume: bool,
 ) {
     let (tx, mut rx) = mpsc::channel::<ProgressUpdate>(100);
+    let session_start = Instant::now();
+    let initial_duration_ms = {
+        let tasks = shared.tasks.read().await;
+        tasks.get(&task_id).map(|t| t.duration_ms).unwrap_or(0)
+    };
 
     let mut forwarder = {
         let shared = shared.clone();
@@ -867,6 +874,7 @@ async fn run_download(
                     .iter()
                     .map(|a| adapter_stat(a, &current_names))
                     .collect();
+                let elapsed_ms = initial_duration_ms + session_start.elapsed().as_millis() as u64;
                 let exists = shared
                     .update(&id, |task| {
                         // A late tick must never undo a final status set elsewhere.
@@ -883,6 +891,11 @@ async fn run_download(
                         task.completed_chunks = p.completed_chunks;
                         task.total_chunks = p.total_chunks;
                         task.adapters = stats;
+                        task.duration_ms = elapsed_ms;
+                        if elapsed_ms > 0 && task.downloaded_bytes > 0 {
+                            task.avg_speed_bytes_sec =
+                                Some((task.downloaded_bytes as f64) / (elapsed_ms as f64 / 1000.0));
+                        }
                         if let Some(map) = p.chunk_map {
                             task.chunk_map = Some(map);
                         }
@@ -955,14 +968,20 @@ async fn run_download(
         }
     };
 
+    let final_duration_ms = initial_duration_ms + session_start.elapsed().as_millis() as u64;
     let final_task = shared
         .update(&task_id, |task| {
             task.status = status;
             task.clear_runtime();
+            task.duration_ms = final_duration_ms;
             if status == TaskStatus::Completed {
                 task.downloaded_bytes = task.total_bytes;
                 task.completed_chunks = task.total_chunks;
                 task.completed_at_ms = Some(now_ms());
+            }
+            if final_duration_ms > 0 && task.downloaded_bytes > 0 {
+                task.avg_speed_bytes_sec =
+                    Some((task.downloaded_bytes as f64) / (final_duration_ms as f64 / 1000.0));
             }
             task.sha256 = sha256;
             task.error = err_msg;
@@ -983,7 +1002,17 @@ async fn notify_finished(shared: &Shared, task: &DownloadTaskState) {
         return;
     }
     let (title, body) = match task.status {
-        TaskStatus::Completed => ("Download complete", task.filename.clone()),
+        TaskStatus::Completed => {
+            let detail = match (task.duration_ms, task.avg_speed_bytes_sec) {
+                (ms, Some(speed)) if ms > 0 => {
+                    let secs = ms as f64 / 1000.0;
+                    let speed_mb = speed / (1024.0 * 1024.0);
+                    format!("{} ({:.1}s, avg {:.2} MB/s)", task.filename, secs, speed_mb)
+                }
+                _ => task.filename.clone(),
+            };
+            ("Download complete", detail)
+        }
         TaskStatus::Error => (
             "Download failed",
             format!(
@@ -1480,6 +1509,8 @@ mod tests {
             error: None,
             created_at_ms: 0,
             completed_at_ms: None,
+            duration_ms: 0,
+            avg_speed_bytes_sec: None,
             adapters: vec![],
             chunk_map: None,
         }

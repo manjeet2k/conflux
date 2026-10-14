@@ -102,6 +102,19 @@ fn load_from(path: &Path) -> (Vec<DownloadTaskState>, Option<String>) {
             task.status = TaskStatus::Paused;
         }
         task.clear_runtime();
+        // Backfill legacy completed tasks that didn't have duration_ms recorded
+        if task.status == TaskStatus::Completed && task.duration_ms == 0 {
+            if let Some(completed_ms) = task.completed_at_ms {
+                if completed_ms >= task.created_at_ms {
+                    let diff = completed_ms - task.created_at_ms;
+                    task.duration_ms = diff;
+                    if diff > 0 && task.downloaded_bytes > 0 && task.avg_speed_bytes_sec.is_none() {
+                        task.avg_speed_bytes_sec =
+                            Some((task.downloaded_bytes as f64) / (diff as f64 / 1000.0));
+                    }
+                }
+            }
+        }
     }
     tasks.sort_by_key(|t| std::cmp::Reverse(t.created_at_ms));
     (tasks, None)
@@ -133,6 +146,8 @@ mod tests {
             error: None,
             created_at_ms: created,
             completed_at_ms: None,
+            duration_ms: 0,
+            avg_speed_bytes_sec: None,
             adapters: vec![AdapterStat {
                 adapter_id: None,
                 name: "Default route".into(),
@@ -223,7 +238,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("downloads.json");
         let mut value = serde_json::to_value(vec![task("a", TaskStatus::Error, 1)]).unwrap();
-        for key in ["completed_at_ms", "adapters", "chunk_map"] {
+        for key in [
+            "completed_at_ms",
+            "adapters",
+            "chunk_map",
+            "duration_ms",
+            "avg_speed_bytes_sec",
+        ] {
             value[0].as_object_mut().unwrap().remove(key);
         }
         std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
@@ -232,6 +253,46 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].status, TaskStatus::Error);
         assert!(loaded[0].adapters.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn older_history_without_duration_backfills_for_completed_tasks() {
+        let dir = std::env::temp_dir().join(format!("conflux-history-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("downloads.json");
+        let mut t = task("a", TaskStatus::Completed, 1000);
+        t.completed_at_ms = Some(5000);
+        t.downloaded_bytes = 4000;
+        let mut value = serde_json::to_value(vec![t]).unwrap();
+        value[0].as_object_mut().unwrap().remove("duration_ms");
+        value[0]
+            .as_object_mut()
+            .unwrap()
+            .remove("avg_speed_bytes_sec");
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let (loaded, notice) = load_from(&path);
+        assert!(notice.is_none());
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].duration_ms, 4000);
+        assert_eq!(loaded[0].avg_speed_bytes_sec, Some(1000.0));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn preserves_duration_and_avg_speed() {
+        let dir = std::env::temp_dir().join(format!("conflux-history-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("downloads.json");
+        let store = HistoryStore::new(Some(path.clone()));
+        let mut t = task("a", TaskStatus::Completed, 1000);
+        t.duration_ms = 2500;
+        t.avg_speed_bytes_sec = Some(1600.0);
+        let tasks = RwLock::new(HashMap::from([("a".to_string(), t)]));
+        store.save(&tasks).await;
+        let (loaded, _) = store.load();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].duration_ms, 2500);
+        assert_eq!(loaded[0].avg_speed_bytes_sec, Some(1600.0));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

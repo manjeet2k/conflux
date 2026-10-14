@@ -61,6 +61,12 @@ pub struct DownloadTaskState {
     pub created_at_ms: u64,
     #[serde(default)]
     pub completed_at_ms: Option<u64>,
+    /// Cumulative active transfer duration in milliseconds.
+    #[serde(default)]
+    pub duration_ms: u64,
+    /// Average download speed across active duration in bytes/second.
+    #[serde(default)]
+    pub avg_speed_bytes_sec: Option<f64>,
     #[serde(default)]
     pub adapters: Vec<AdapterStat>,
     /// Last chunk map reported by the engine (see `conflux_core::ProgressUpdate::chunk_map`).
@@ -222,6 +228,8 @@ mod tests {
             error: None,
             created_at_ms: 0,
             completed_at_ms: None,
+            duration_ms: 0,
+            avg_speed_bytes_sec: None,
             adapters: vec![],
             chunk_map: None,
         };
@@ -253,6 +261,8 @@ mod tests {
             "error",
             "created_at_ms",
             "completed_at_ms",
+            "duration_ms",
+            "avg_speed_bytes_sec",
             "adapters",
             "chunk_map",
         ];

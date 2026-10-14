@@ -72,6 +72,10 @@ export interface DownloadTask {
   error: string | null;
   created_at_ms: number;
   completed_at_ms: number | null;
+  /** Cumulative active download duration in milliseconds. */
+  duration_ms?: number;
+  /** Average speed across active duration in bytes/second. */
+  avg_speed_bytes_sec?: number | null;
   adapters: AdapterStat[];
   /** One char per chunk: '.' pending, '>' downloading, '#' completed, '!' failed. */
   chunk_map: string | null;

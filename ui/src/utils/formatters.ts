@@ -26,6 +26,21 @@ export function formatEta(seconds: number): string {
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
+export function formatDuration(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || ms <= 0 || !isFinite(ms)) return '--';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const secs = ms / 1000;
+  if (secs < 10) return `${secs.toFixed(1)}s`;
+  if (secs < 60) return `${Math.round(secs)}s`;
+  const totalSecs = Math.round(secs);
+  const mins = Math.floor(totalSecs / 60);
+  const remSecs = totalSecs % 60;
+  if (mins < 60) return remSecs > 0 ? `${mins}m ${remSecs}s` : `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hours}h ${remMins}m` : `${hours}h`;
+}
+
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'short' });
 
 export function formatDate(ms: number | null | undefined): string {
