@@ -19,6 +19,7 @@ import { api, errorText } from '../api';
 import type { Settings, ThemePreference, UpdateInfo } from '../types';
 import { Page, SectionHeader, SettingsCard } from '../components/Page';
 import chromeLogo from '../assets/browsers/chrome.svg';
+import firefoxLogo from '../assets/browsers/firefox.svg';
 
 const useStyles = makeStyles({
   stack: { display: 'flex', flexDirection: 'column', gap: '4px' },
@@ -311,16 +312,29 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
       <SectionHeader id="settings-browser">Browser Integration</SectionHeader>
       <div className={styles.stack}>
         <SettingsCard
-          icon={<img src={chromeLogo} alt="Google Chrome" className={styles.browserIcon} />}
-          title="Chrome extension"
-          description="Capture downloads directly from Google Chrome, Microsoft Edge, and Brave via the Chrome Web Store"
+          icon={<img src={chromeLogo} alt="Chromium browsers" className={styles.browserIcon} />}
+          title="Google Chrome, Edge & Brave"
+          description="Capture downloads directly from Chrome, Microsoft Edge, and Brave via the Chrome Web Store"
         >
           <Button
             appearance="primary"
             icon={<ArrowDownload20Regular />}
             onClick={() => api.openAboutLink('extension-chrome')}
           >
-            Get Chrome extension
+            Get extension
+          </Button>
+        </SettingsCard>
+        <SettingsCard
+          icon={<img src={firefoxLogo} alt="Mozilla Firefox" className={styles.browserIcon} />}
+          title="Firefox add-on"
+          description="Capture downloads directly from Mozilla Firefox via Firefox Add-ons (AMO)"
+        >
+          <Button
+            appearance="secondary"
+            icon={<ArrowDownload20Regular />}
+            onClick={() => api.openAboutLink('extension-firefox')}
+          >
+            Get Firefox add-on
           </Button>
         </SettingsCard>
         <SettingsCard

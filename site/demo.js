@@ -135,54 +135,130 @@ function plug() {
   const KEYS = ["eth", "wifi", "cell"], N = 192, SLOTS = 2, CHUNK_MB = 4;
   const dur = { eth: 0.4, wifi: 0.6, cell: 1.2 };
   const cells = Array.from({ length: N }, () => grid.appendChild(document.createElement("span")));
-  const progressEl = document.getElementById("plug-progress"), stateEl = document.getElementById("plug-state");
+  const progressEl = document.getElementById("plug-progress");
+  const stateEl = document.getElementById("plug-state");
+  const timeEl = document.getElementById("plug-time");
   const buttons = [...document.querySelectorAll(".sw[data-link]")];
-  let state, on;
+  let state, on, elapsed = 0, lastSpeedTick = 0;
+
   const reset = () => {
     state = { status: new Array(N).fill("todo"), inflight: [], done: 0, recovered: 0, finished: false };
     on = { eth: true, wifi: true, cell: true };
+    elapsed = 0;
     buttons.forEach((b) => b.setAttribute("aria-pressed", "true"));
     cells.forEach((c) => (c.className = ""));
-    render();
+    if (timeEl) timeEl.textContent = "~19s";
+    render(true);
   };
-  const render = () => {
+
+  const render = (forceSpeedUpdate = false) => {
     progressEl.textContent = `${Math.floor((state.done / N) * 100)}%`;
+
+    // Speed display with 240ms cadence to eliminate 16ms single-frame flickering
+    const now = performance.now();
+    const shouldUpdateSpeed = forceSpeedUpdate || now - lastSpeedTick > 240;
+    if (shouldUpdateSpeed) lastSpeedTick = now;
+
     for (const k of KEYS) {
-      const busy = state.inflight.filter((f) => f.link === k).length;
-      document.querySelector(`[data-speed="${k}"]`).textContent = on[k] && busy ? `${Math.round((busy * CHUNK_MB) / dur[k])} MB/s` : on[k] ? "idle" : "off";
+      const el = document.querySelector(`[data-speed="${k}"]`);
+      if (!el) continue;
+      if (!on[k]) {
+        el.textContent = "off";
+      } else {
+        const busy = state.inflight.filter((f) => f.link === k).length;
+        if (busy === 0) {
+          el.textContent = state.finished ? "done" : "idle";
+        } else if (shouldUpdateSpeed || el.textContent === "off" || el.textContent === "idle") {
+          const jitter = Math.floor(Math.random() * 3) - 1;
+          const nominal = Math.round((busy * CHUNK_MB) / dur[k]);
+          const spd = Math.max(1, nominal + jitter);
+          el.textContent = `${spd} MB/s`;
+        }
+      }
     }
+
+    // Time needed / ETA metric
+    if (timeEl) {
+      if (state.finished) {
+        timeEl.textContent = `${elapsed.toFixed(1)}s total`;
+      } else {
+        const activeRate = KEYS.reduce((acc, k) => (on[k] ? acc + (SLOTS / dur[k]) : acc), 0);
+        if (activeRate <= 0) {
+          timeEl.textContent = "Paused";
+        } else {
+          const remainingChunks = N - state.done;
+          const remainingSeconds = Math.max(1, Math.ceil(remainingChunks / activeRate));
+          timeEl.textContent = `~${remainingSeconds}s`;
+        }
+      }
+    }
+
     if (state.finished) return;
-    if (!on.eth && !on.wifi && !on.cell) stateEl.textContent = "All connections off: paused, nothing lost. Switch one back on.";
-    else stateEl.textContent = state.recovered ? `Downloading… ${state.recovered} chunk${state.recovered > 1 ? "s" : ""} rescheduled after a drop` : "Downloading… try switching a connection off";
+    if (!on.eth && !on.wifi && !on.cell) {
+      stateEl.textContent = "All connections off: paused, nothing lost. Switch one back on.";
+    } else {
+      stateEl.textContent = state.recovered
+        ? `Downloading… ${state.recovered} chunk${state.recovered > 1 ? "s" : ""} rescheduled after a drop`
+        : "Downloading… try switching a connection off";
+    }
   };
+
   const step = (dt) => {
     if (state.finished) return;
+    if (on.eth || on.wifi || on.cell) elapsed += dt;
+
+    // 1. Advance in-flight chunks
+    for (const f of state.inflight) f.left -= dt;
+
+    // 2. Complete finished chunks
+    for (const f of state.inflight.filter((f) => f.left <= 0)) {
+      state.status[f.i] = "done";
+      cells[f.i].className = f.link;
+      state.done++;
+    }
+    state.inflight = state.inflight.filter((f) => f.left > 0);
+
+    // 3. Immediately replenish slots before render so in-flight never dips for 1 frame
     for (const k of KEYS) {
       if (!on[k]) continue;
       while (state.inflight.filter((f) => f.link === k).length < SLOTS) {
         const i = state.status.indexOf("todo");
         if (i < 0) break;
-        state.status[i] = "busy"; cells[i].className = `busy-${k}`;
+        state.status[i] = "busy";
+        cells[i].className = `busy-${k}`;
         state.inflight.push({ i, link: k, left: dur[k] * (0.8 + Math.random() * 0.4) });
       }
     }
-    for (const f of state.inflight) f.left -= dt;
-    for (const f of state.inflight.filter((f) => f.left <= 0)) { state.status[f.i] = "done"; cells[f.i].className = f.link; state.done++; }
-    state.inflight = state.inflight.filter((f) => f.left > 0);
-    if (state.done === N) { state.finished = true; stateEl.textContent = `Done. ${N} chunks, 0 corrupted${state.recovered ? `, ${state.recovered} rescheduled after drops` : ""}.`; }
+
+    if (state.done === N) {
+      state.finished = true;
+      stateEl.textContent = `Done. ${N} chunks, 0 corrupted${state.recovered ? `, ${state.recovered} rescheduled after drops` : ""}.`;
+    }
     render();
   };
+
   buttons.forEach((b) => b.addEventListener("click", () => {
-    const k = b.dataset.link; on[k] = !on[k]; b.setAttribute("aria-pressed", String(on[k]));
+    const k = b.dataset.link;
+    on[k] = !on[k];
+    b.setAttribute("aria-pressed", String(on[k]));
     if (!on[k]) {
       for (const f of state.inflight.filter((f) => f.link === k)) {
-        state.status[f.i] = "lost"; cells[f.i].className = "lost"; state.recovered++;
-        const i = f.i; setTimeout(() => { if (state.status[i] === "lost") { state.status[i] = "todo"; cells[i].className = ""; } }, 450);
+        state.status[f.i] = "lost";
+        cells[f.i].className = "lost";
+        state.recovered++;
+        const i = f.i;
+        setTimeout(() => {
+          if (state.status[i] === "lost") {
+            state.status[i] = "todo";
+            cells[i].className = "";
+          }
+        }, 450);
       }
       state.inflight = state.inflight.filter((f) => f.link !== k);
     }
-    render();
+    render(true);
   }));
+
   document.getElementById("plug-restart")?.addEventListener("click", reset);
   reset();
   animateWhileVisible(grid, step);

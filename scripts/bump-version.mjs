@@ -10,10 +10,11 @@ if (!next || !parseSemver(next)) {
   console.error("usage: bump-version.mjs X.Y.Z[-pre]  (valid semver required)");
   process.exit(2);
 }
+const force = process.argv.includes("--force");
 const current = cargoVersion();
 const cmp = compareSemver(parseSemver(next), parseSemver(current));
-if (cmp <= 0) {
-  console.error(`refusing: ${next} is ${cmp === 0 ? "equal to" : "lower than"} current ${current}`);
+if (!force && cmp <= 0) {
+  console.error(`refusing: ${next} is ${cmp === 0 ? "equal to" : "lower than"} current ${current} (use --force to override)`);
   process.exit(1);
 }
 

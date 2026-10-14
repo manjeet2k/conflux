@@ -75,8 +75,9 @@ Before any commit:
 
 *(Note: Do not run bare `cargo test` without `-p conflux-core` on Linux/WSL2, as `conflux-desktop` targets Windows and requires cross-compilation).*
 
-### Superpower 6: Version Incrementation on Changes, Fixes, and Releases
-- Bump the version sequentially (e.g. `0.2.1`, `0.2.2`, `0.2.3`, ...) with every change, fix, or feature update.
+### Superpower 6: Version Incrementation on App Changes, Fixes, and Releases
+- Bump the version sequentially (e.g. `0.2.1`, `0.2.2`, `0.2.3`, ...) with every change, fix, or feature update to the application crates, desktop client, or extensions.
+- **DO NOT bump the application version for documentation, script adjustments, or landing website (`site/`) changes.**
 - Always use `node scripts/bump-version.mjs <new-version>` (or `npm --prefix ui run version:bump -- <new-version>`) to synchronously update all version sources:
   - `Cargo.toml` (`[workspace.package.version]`)
   - `Cargo.lock` (workspace crates: `conflux-core`, `conflux-cli`, `conflux-desktop`)

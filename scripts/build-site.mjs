@@ -48,6 +48,7 @@ const values = {
   SUMS_URL: asset("SHA256SUMS.txt")?.browser_download_url ?? RELEASES,
   RELEASE_URL: rel?.html_url ?? RELEASES,
   EXTENSION_URL: "https://chromewebstore.google.com/detail/conflux-download-accelera/ncapjgooomipdohlolfbbknhbjcfdjml",
+  FIREFOX_EXTENSION_URL: "https://addons.mozilla.org/en-US/firefox/addon/conflux-download-accelerator/",
   BUILD_DATE: new Date().toISOString().slice(0, 10),
 };
 
