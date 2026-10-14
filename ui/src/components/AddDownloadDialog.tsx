@@ -63,6 +63,8 @@ const sameOrigin = (a: string, b: string) => {
 
 interface AddDownloadDialogProps {
   open: boolean;
+  requestId: string;
+  initialHandoffId?: string | null;
   initialUrl: string;
   initialFilename?: string | null;
   initialHeaders?: RequestHeaders | null;
@@ -73,15 +75,16 @@ interface AddDownloadDialogProps {
     saveDir: string;
     filename: string | null;
     headers?: RequestHeaders | null;
+    handoffId?: string | null;
   }) => Promise<void>;
-  onClose: () => void;
+  onClose: (accepted?: boolean) => void;
   onCancelAll?: () => void;
 }
 
-/** Keyed on open state so every open starts from a fresh form. */
+/** Only advancing to a different request resets the form. Queue arrivals retain edits/submission. */
 export const AddDownloadDialog: React.FC<AddDownloadDialogProps> = (props) => (
   <Dialog open={props.open} onOpenChange={(_, d) => !d.open && (props.onCancelAll ? props.onCancelAll() : props.onClose())}>
-    <AddDownloadForm key={`${props.open}:${props.initialUrl}:${props.initialFilename ?? ''}:${props.queueCount ?? 0}`} {...props} />
+    <AddDownloadForm key={props.requestId} {...props} />
   </Dialog>
 );
 
@@ -89,6 +92,7 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
   initialUrl,
   initialFilename,
   initialHeaders,
+  initialHandoffId,
   defaultSaveDir,
   queueCount = 0,
   onStart,
@@ -164,8 +168,9 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
         saveDir: saveDir.trim(),
         filename: filename !== null && effectiveName ? effectiveName : null,
         headers: effectiveHeaders,
+        handoffId: initialHandoffId ?? null,
       });
-      onClose();
+      onClose(true);
     } catch (err) {
       setSubmitError(errorText(err));
       setSubmitting(false);
@@ -261,11 +266,11 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
           </DialogContent>
           <DialogActions>
             {queueCount > 0 && (
-              <Button onClick={onCancelAll ?? onClose} appearance="subtle">
+              <Button onClick={() => (onCancelAll ?? onClose)()} appearance="subtle">
                 Cancel All
               </Button>
             )}
-            <Button onClick={onClose}>{queueCount > 0 ? 'Skip' : 'Cancel'}</Button>
+            <Button onClick={() => onClose()}>{queueCount > 0 ? 'Skip' : 'Cancel'}</Button>
             <Button appearance="primary" type="submit" disabled={!canSubmit}>
               {submitting ? <Spinner size="tiny" /> : 'Download'}
             </Button>

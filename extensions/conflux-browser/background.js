@@ -86,9 +86,10 @@ function sendDownloadToConflux(payload) {
           `Desktop rejected link: ${response.message || "Invalid URL"}`
         );
         reject(new Error(response.message || "Desktop rejected link"));
-      } else {
-        console.log("[Conflux] Native host responded successfully:", response);
+      } else if (["ok", "queued", "accepted", "cancelled"].includes(response?.status)) {
         resolve(response);
+      } else {
+        reject(new Error("Invalid response from Conflux Desktop"));
       }
     });
   });
@@ -204,10 +205,15 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   };
 
   try {
-    await sendDownloadToConflux(payload);
-    // Only drop the browser download once Conflux has accepted it
-    chrome.downloads.cancel(downloadItem.id, () => {
-      chrome.downloads.erase({ id: downloadItem.id });
+    const response = await sendDownloadToConflux({ ...payload, wait_for_acceptance: true });
+    if (response?.status !== "accepted") return;
+    // A finished browser download must retain its file and history entry.
+    chrome.downloads.search({ id: downloadItem.id }, (items) => {
+      if (chrome.runtime.lastError || items[0]?.state !== "in_progress") return;
+      // Only drop the browser download once Conflux has accepted a task
+      chrome.downloads.cancel(downloadItem.id, () => {
+        if (!chrome.runtime.lastError) chrome.downloads.erase({ id: downloadItem.id });
+      });
     });
   } catch (e) {
     console.error("[Conflux] Failed to auto-intercept download to Conflux; leaving browser download running:", e);

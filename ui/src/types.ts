@@ -58,6 +58,8 @@ export interface DownloadTask {
   filename: string;
   save_dir: string;
   save_path: string;
+  /** Opaque backend-owned identity; never reconstructed or submitted by the UI. */
+  file_identity?: { volume: number; file: number } | null;
   adapter_ids?: string[];
   total_bytes: number;
   supports_ranges: boolean;
@@ -162,6 +164,7 @@ export interface RequestHeaders {
 
 export interface ExternalDownloadPayload {
   url: string;
+  handoff_id?: string | null;
   filename?: string | null;
   headers?: RequestHeaders | null;
 }

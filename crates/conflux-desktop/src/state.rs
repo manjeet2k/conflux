@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{watch, Mutex, Notify, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 
 /// Lifecycle status of a download task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +43,8 @@ pub struct DownloadTaskState {
     pub filename: String,
     pub save_dir: String,
     pub save_path: String,
+    #[serde(default)]
+    pub file_identity: Option<conflux_core::FileIdentity>,
     /// Adapter ids the user selected (empty = discovery defaults). Reused on resume.
     #[serde(default)]
     pub adapter_ids: Vec<String>,
@@ -92,7 +94,7 @@ impl DownloadTaskState {
 
 pub struct TaskHandle {
     pub cancel_tx: watch::Sender<bool>,
-    pub adapter_tx: Option<tokio::sync::mpsc::Sender<conflux_core::AdapterUpdate>>,
+    pub adapter_tx: Option<tokio::sync::mpsc::UnboundedSender<Vec<conflux_core::AdapterUpdate>>>,
     pub names: Arc<RwLock<HashMap<std::net::IpAddr, (String, String)>>>,
     pub join_handle: tokio::task::JoinHandle<()>,
     pub output_path: PathBuf,
@@ -117,7 +119,7 @@ pub struct AppState {
     pub adapter_defaults: std::sync::Mutex<HashMap<String, bool>>,
     /// Tasks currently winding down in `stop_task`, with a notifier that wakes waiters
     /// when the engine task has fully exited and status has been updated.
-    pub stopping_tasks: Arc<std::sync::Mutex<HashMap<String, Arc<Notify>>>>,
+    pub stopping_tasks: Arc<std::sync::Mutex<HashMap<String, watch::Receiver<bool>>>>,
     /// One-shot messages for the UI (e.g. a data file was reset), drained by the UI once.
     notices: std::sync::Mutex<Vec<String>>,
     /// Pending external download from browser extension or command line on cold start.
@@ -214,6 +216,7 @@ mod tests {
             filename: "f".into(),
             save_dir: "d".into(),
             save_path: "p".into(),
+            file_identity: None,
             adapter_ids: vec![],
             total_bytes: 1,
             supports_ranges: true,
@@ -247,6 +250,7 @@ mod tests {
             "filename",
             "save_dir",
             "save_path",
+            "file_identity",
             "adapter_ids",
             "total_bytes",
             "supports_ranges",

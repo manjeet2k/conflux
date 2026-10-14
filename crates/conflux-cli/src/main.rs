@@ -126,13 +126,7 @@ async fn main() -> Result<()> {
             // Fallible setup first: resolve_output_path leaves an empty placeholder file.
             let mut adapters = discover_adapters()?;
             if let Some(ref filter) = adapter {
-                let needle = filter.to_lowercase();
-                adapters.retain(|a| {
-                    a.id.to_lowercase().contains(&needle) || a.ip.to_string().contains(filter)
-                });
-                if adapters.is_empty() {
-                    bail!("No network adapters matched filter {:?}", filter);
-                }
+                retain_selected_adapters(&mut adapters, filter)?;
             }
             let final_path = resolve_output_path(output.as_deref(), &probe.suggested_filename)?;
 
@@ -148,7 +142,7 @@ async fn main() -> Result<()> {
             }
             println!(
                 "  Mode:       {}",
-                if probe.supports_ranges && probe.total_bytes > 0 {
+                if probe.supports_parallel() {
                     "multi-chunk"
                 } else {
                     "single-stream"
@@ -238,6 +232,25 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// An explicit adapter filter must never turn into an unbound default-route download.
+fn retain_selected_adapters(
+    adapters: &mut Vec<conflux_core::NetworkAdapter>,
+    filter: &str,
+) -> Result<()> {
+    let needle = filter.to_lowercase();
+    adapters.retain(|a| a.id.to_lowercase().contains(&needle) || a.ip.to_string().contains(filter));
+    if adapters.is_empty() {
+        bail!("No network adapters matched filter {:?}", filter);
+    }
+    if !adapters
+        .iter()
+        .any(|a| a.enabled && a.is_ipv4 && a.ip.is_ipv4() && !a.is_loopback)
+    {
+        bail!("No usable network adapters matched filter {:?}; matched adapters are disabled, loopback, or lack IPv4", filter);
+    }
+    Ok(())
+}
+
 fn validate_url(url: &str) -> Result<()> {
     let lower = url.trim().to_ascii_lowercase();
     if !(lower.starts_with("http://") || lower.starts_with("https://")) {
@@ -281,6 +294,27 @@ fn ends_with_separator(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_adapter_filter_rejects_unusable_matches() {
+        let adapter = |ip: &str, enabled| conflux_core::NetworkAdapter {
+            id: format!("Ethernet:{ip}"),
+            name: "Ethernet".into(),
+            ip: ip.parse().unwrap(),
+            is_ipv4: ip.contains('.'),
+            is_loopback: ip == "127.0.0.1",
+            enabled,
+        };
+        for unusable in [
+            adapter("10.0.0.2", false),
+            adapter("::1", true),
+            adapter("127.0.0.1", true),
+        ] {
+            assert!(retain_selected_adapters(&mut vec![unusable], "Ethernet").is_err());
+        }
+        assert!(retain_selected_adapters(&mut vec![adapter("10.0.0.2", true)], "Ethernet").is_ok());
+        assert!(retain_selected_adapters(&mut vec![adapter("10.0.0.2", true)], "Wi-Fi").is_err());
+    }
 
     #[test]
     fn test_validate_url() {

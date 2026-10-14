@@ -89,6 +89,9 @@ pub struct DownloadProbe {
     /// Optional HTTP request headers (Cookie, Referer, User-Agent) attached to probe and chunk requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<RequestHeaders>,
+    /// Original request origin authorized for persisted non-cookie headers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_origin: Option<String>,
 }
 
 /// Live statistics of one bound adapter (or the unbound default route) in one download run.
@@ -511,11 +514,26 @@ impl Drop for NotifyOnDrop {
     }
 }
 
-/// The `If-Range` validator for `probe`: a strong ETag, else Last-Modified.
+/// Only a syntactically valid strong ETag establishes byte identity across requests.
+pub(crate) fn strong_etag(etag: Option<&str>) -> Option<&str> {
+    etag.filter(|value| {
+        value.len() >= 2
+            && value.starts_with('"')
+            && value.ends_with('"')
+            && value.as_bytes()[1..value.len() - 1]
+                .iter()
+                .all(|byte| *byte == 0x21 || *byte >= 0x23 && *byte != 0x7f)
+    })
+}
+
 fn if_range_validator(probe: &DownloadProbe) -> Option<String> {
-    match &probe.etag {
-        Some(etag) if !etag.trim_start().starts_with("W/") => Some(etag.clone()),
-        _ => probe.last_modified.clone(),
+    strong_etag(probe.etag.as_deref()).map(str::to_owned)
+}
+
+impl DownloadProbe {
+    /// Parallel requests and persisted blocks require a strong representation identity.
+    pub fn supports_parallel(&self) -> bool {
+        self.supports_ranges && self.total_bytes > 0 && strong_etag(self.etag.as_deref()).is_some()
     }
 }
 
@@ -711,6 +729,7 @@ impl DownloadEngine {
             etag,
             last_modified,
             headers: effective_headers,
+            header_origin: Some(parsed_url.origin().ascii_serialization()),
         })
     }
 
@@ -792,6 +811,7 @@ impl DownloadEngine {
             etag: header_str(headers, header::ETAG).map(str::to_string),
             last_modified: header_str(headers, header::LAST_MODIFIED).map(str::to_string),
             headers: effective_headers,
+            header_origin: Some(parsed_url.origin().ascii_serialization()),
         })
     }
 
@@ -843,7 +863,7 @@ impl DownloadEngine {
     /// Chunked downloads keep a resume sidecar (see [`resume_sidecar_path`]) while running
     /// and after a cancel or failure; it is deleted on success.
     ///
-    /// Chunk requests carry `If-Range` (strong ETag, else Last-Modified). If the server shows
+    /// Chunk requests carry `If-Range` with a strong ETag; transfers without one use a fresh single stream. If the server shows
     /// the resource changed mid-download (200 instead of 206, or different validators on a
     /// 206), the download fails at once instead of mixing two versions.
     ///
@@ -938,21 +958,37 @@ impl DownloadEngine {
             return Err(cancelled_error());
         }
 
+        if probe.supports_ranges && probe.total_bytes > 0 {
+            Self::check_chunk_plan(probe.total_bytes, self.block_size_for(probe.total_bytes))?;
+        }
+        if resume {
+            if let Some(expected) = read_sidecar(&resume_sidecar_path(output_path))
+                .ok()
+                .and_then(|saved| saved.file_identity)
+            {
+                let path = output_path.to_path_buf();
+                tokio::task::spawn_blocking(move || -> Result<()> {
+                    match crate::FileIdentity::at(&path) {
+                        Ok(actual) if actual != expected => Err(anyhow::Error::new(
+                            crate::file_identity::FileOwnershipChanged,
+                        )),
+                        Ok(_) => Ok(()),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                        Err(error) => Err(error.into()),
+                    }
+                })
+                .await
+                .context("Resume ownership check failed")??;
+            }
+        }
         let targets = Self::select_bind_targets(adapters);
         info!(
             "Download {} -> {:?} (size {} bytes, ranges {}, adapters {:?})",
             probe.url, output_path, probe.total_bytes, probe.supports_ranges, targets
         );
 
-        if !probe.supports_ranges || probe.total_bytes == 0 {
-            if resume {
-                bail!(
-                    "Server no longer reports range support (or reported zero size) for {:?}; partial download preserved",
-                    output_path
-                );
-            }
-            info!("Using single-stream download (no verified range support or unknown/zero size)");
-            // A stale sidecar must never outlive the file it described.
+        if !probe.supports_parallel() {
+            info!("Using a fresh single stream: ranges, known size and a strong ETag are required for parallel resume");
             remove_resume_sidecar(output_path).with_context(|| {
                 format!("Failed to remove stale resume data for {:?}", output_path)
             })?;
@@ -981,11 +1017,16 @@ impl DownloadEngine {
         output_path: &Path,
     ) -> Result<(Vec<Chunk>, u64, SparseFileWriter, Option<RequestHeaders>)> {
         let state = read_sidecar(&resume_sidecar_path(output_path))?;
+        let writer = SparseFileWriter::open_existing_verified(
+            output_path,
+            probe.total_bytes,
+            state.file_identity.clone(),
+        )
+        .await?;
         validate(&state, probe)?;
         // A tampered sidecar must not make us allocate an absurd plan.
         let mut chunks = try_plan_chunks(probe.total_bytes, state.chunk_size)?;
         let done = decode_ranges(&state.completed, chunks.len())?;
-        let writer = SparseFileWriter::open_existing(output_path, probe.total_bytes).await?;
         for id in done {
             // `plan_chunks` ids are their positions.
             chunks[id].status = ChunkStatus::Completed;
@@ -1020,6 +1061,12 @@ impl DownloadEngine {
         let resumed = if resume {
             match self.open_for_resume(probe, output_path).await {
                 Ok(r) => Some(r),
+                Err(e)
+                    if e.downcast_ref::<crate::file_identity::FileOwnershipChanged>()
+                        .is_some() =>
+                {
+                    return Err(e)
+                }
                 Err(e) => {
                     warn!(
                         "Cannot resume {:?} ({:#}); starting from zero",
@@ -1104,11 +1151,14 @@ impl DownloadEngine {
             path: resume_sidecar_path(output_path),
             template: ResumeState {
                 version: SIDECAR_VERSION,
+                resource_id: Some(crate::resume::resource_id(&probe.url)),
+                file_identity: writer.identity().ok(),
                 total_bytes: probe.total_bytes,
                 chunk_size: block_size,
                 etag: probe.etag.clone(),
                 last_modified: probe.last_modified.clone(),
                 headers: sidecar_headers,
+                header_origin: probe.header_origin.clone(),
                 completed: String::new(),
             },
         });
@@ -1425,10 +1475,24 @@ impl DownloadEngine {
             resp.remote_addr(),
             resp.content_length()
         );
-        if !status.is_success() {
-            bail!("Single-stream download failed: server returned {}", status);
+        if status != StatusCode::OK {
+            bail!(
+                "Single-stream download requires a complete 200 response; server returned {}",
+                status
+            );
         }
-        let expected = resp.content_length();
+        let response_length = resp.content_length();
+        let probed_length = (probe.total_bytes > 0).then_some(probe.total_bytes);
+        if let (Some(probed), Some(received)) = (probed_length, response_length) {
+            if probed != received {
+                bail!(
+                    "Single-stream size changed: probe saw {} bytes, response advertises {}",
+                    probed,
+                    received
+                );
+            }
+        }
+        let expected = probed_length.or(response_length);
         let total_for_progress = expected.unwrap_or(0);
 
         if let Some(parent) = output_path.parent() {
@@ -1918,7 +1982,12 @@ async fn fetch_segment(
         (header::LAST_MODIFIED, &shared.last_modified),
     ] {
         let got = header_str(resp.headers(), name.clone());
-        if got != expected.as_deref() {
+        if (name == header::ETAG && got != expected.as_deref())
+            || (name == header::LAST_MODIFIED
+                && got.is_some()
+                && expected.is_some()
+                && got != expected.as_deref())
+        {
             return Err(AttemptError::ResourceChanged(anyhow!(
                 "{} for {} is {:?}, probe saw {:?}",
                 name,
@@ -2028,7 +2097,7 @@ async fn fetch_segment(
             adapter.received.fetch_add(take, Ordering::SeqCst);
         }
 
-        if buffer.len() >= WRITE_BUFFER_SIZE || reached_end {
+        if (buffer.len() >= WRITE_BUFFER_SIZE || reached_end) && (!reached_end || was_split) {
             flush_segment_buffer(
                 shared,
                 lease.id,
@@ -2042,13 +2111,11 @@ async fn fetch_segment(
             .await?;
         }
 
-        if reached_end {
-            if was_split {
-                debug!(
-                    "Segment {} via {} reached split cutoff at offset {}",
-                    lease.id, adapter.label, current_offset
-                );
-            }
+        if reached_end && was_split {
+            debug!(
+                "Segment {} via {} reached split cutoff at offset {}",
+                lease.id, adapter.label, current_offset
+            );
             update_conn_rate(conn_rate, lease, current_offset, piece_started);
             return Ok(());
         }
@@ -2445,6 +2512,7 @@ mod tests {
             etag: etag.map(str::to_string),
             last_modified: last_modified.map(str::to_string),
             headers: None,
+            header_origin: None,
         }
     }
 
@@ -2453,9 +2521,9 @@ mod tests {
         let lm = "Wed, 21 Oct 2015 07:28:00 GMT";
         let v = |e, l| if_range_validator(&probe_with(e, l));
         assert_eq!(v(Some("\"a\""), Some(lm)).as_deref(), Some("\"a\""));
-        assert_eq!(v(Some("W/\"a\""), Some(lm)).as_deref(), Some(lm));
+        assert_eq!(v(Some("W/\"a\""), Some(lm)), None);
         assert_eq!(v(Some("W/\"a\""), None), None);
-        assert_eq!(v(None, Some(lm)).as_deref(), Some(lm));
+        assert_eq!(v(None, Some(lm)), None);
         assert_eq!(v(None, None), None);
     }
 

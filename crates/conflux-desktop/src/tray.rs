@@ -168,6 +168,7 @@ mod tests {
             filename: format!("{id}.bin"),
             save_dir: ".".into(),
             save_path: format!("./{id}.bin"),
+            file_identity: None,
             adapter_ids: vec![],
             total_bytes: total,
             supports_ranges: true,

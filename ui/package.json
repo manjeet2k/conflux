@@ -1,7 +1,7 @@
 {
   "name": "conflux-ui",
   "private": true,
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Conflux Desktop - Multi-Interface Download Accelerator",
   "author": "Manjeet Singh <manjeetsgh11@gmail.com>",
   "license": "MIT OR Apache-2.0",
@@ -21,7 +21,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "version:check": "node ../scripts/check-version.mjs",
-    "version:bump": "node ../scripts/bump-version.mjs"
+    "version:bump": "node ../scripts/bump-version.mjs",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@fluentui/react-components": "^9.74.9",

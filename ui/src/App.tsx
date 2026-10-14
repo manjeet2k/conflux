@@ -45,6 +45,8 @@ import { EmptyState } from './components/EmptyState';
 import { NetworkPage } from './pages/NetworkPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { copyText, extractUrl } from './utils/files';
+import { advanceDownload, enqueueDownload, presentQueuedDownload } from './utils/downloadQueue';
+import type { DownloadQueue, DownloadRequest } from './utils/downloadQueue';
 
 const useStyles = makeStyles({
   root: {
@@ -167,11 +169,20 @@ export const App: React.FC = () => {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortState>({ key: 'added', direction: 'descending' });
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [addOpen, setAddOpen] = useState(false);
-  const [addUrl, setAddUrl] = useState('');
-  const [addFilename, setAddFilename] = useState<string | null>(null);
-  const [addHeaders, setAddHeaders] = useState<RequestHeaders | null>(null);
-  const [downloadQueue, setDownloadQueue] = useState<ExternalDownloadPayload[]>([]);
+  const [downloadDialogs, setDownloadDialogs] = useState<DownloadQueue>({ current: null, queued: [] });
+  const downloadDialogsRef = useRef(downloadDialogs);
+  const dialogOpenRef = useRef(false);
+  const updateDownloadDialogs = useCallback((update: (state: DownloadQueue) => DownloadQueue) => {
+    const next = update(downloadDialogsRef.current);
+    downloadDialogsRef.current = next;
+    if (next.current) dialogOpenRef.current = true;
+    setDownloadDialogs(next);
+  }, []);
+  const addOpen = downloadDialogs.current !== null;
+  const addUrl = downloadDialogs.current?.payload.url ?? '';
+  const addFilename = downloadDialogs.current?.payload.filename ?? null;
+  const addHeaders = downloadDialogs.current?.payload.headers ?? null;
+  const downloadQueue = downloadDialogs.queued;
   const [removeIds, setRemoveIds] = useState<string[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -239,69 +250,56 @@ export const App: React.FC = () => {
   const removeTasks = tasks.filter((t) => removeIds.includes(t.id));
   const removeOpen = removeTasks.length > 0;
 
-  // Read by `openAdd` so a second open request (tray, paste, shortcut) never resets an open
-  // form or stacks a dialog on top of another one (e.g. the Remove dialog).
-  const dialogOpenRef = useRef(false);
   useEffect(() => {
-    dialogOpenRef.current = addOpen || removeOpen;
-  }, [addOpen, removeOpen]);
+    dialogOpenRef.current = downloadDialogsRef.current.current !== null || removeOpen;
+    if (!removeOpen && !downloadDialogsRef.current.current) {
+      updateDownloadDialogs(presentQueuedDownload);
+    }
+  }, [addOpen, removeOpen, updateDownloadDialogs]);
+
+  const dismissRequest = useCallback((request: DownloadRequest) => {
+    if (request.payload.handoff_id) {
+      api.dismissExternalDownload(request.payload.handoff_id)
+        .catch((error) => onError(errorText(error)));
+    }
+  }, [onError]);
 
   const openAdd = useCallback(
     (url = '', filename: string | null = null, headers: RequestHeaders | null = null) => {
       if (dialogOpenRef.current) return;
       refreshAdapters();
-      setAddUrl(url);
-      setAddFilename(filename);
-      setAddHeaders(headers);
-      setAddOpen(true);
+      const request = { id: crypto.randomUUID(), payload: { url, filename, headers } };
+      dialogOpenRef.current = true;
+      updateDownloadDialogs((state) => enqueueDownload(state, request, false));
     },
-    [refreshAdapters]
+    [refreshAdapters, updateDownloadDialogs]
   );
 
-  const handleExternalDownload = useCallback(
-    (payload: ExternalDownloadPayload) => {
-      refreshAdapters();
-      if (dialogOpenRef.current) {
-        setDownloadQueue((prev) => [...prev, payload]);
-        notify('info', `Queued link: ${payload.filename || payload.url}`);
-      } else {
-        setAddUrl(payload.url);
-        setAddFilename(payload.filename ?? null);
-        setAddHeaders(payload.headers ?? null);
-        setAddOpen(true);
-      }
-    },
-    [refreshAdapters, notify]
-  );
+  const handleExternalDownload = useCallback((payload: ExternalDownloadPayload) => {
+    refreshAdapters();
+    const request = { id: crypto.randomUUID(), payload };
+    const blocked = dialogOpenRef.current;
+    if (blocked) notify('info', 'Queued link: ' + (payload.filename || payload.url));
+    // The ref is updated synchronously: consecutive native events cannot overwrite each other.
+    updateDownloadDialogs((state) => enqueueDownload(state, request, blocked));
+  }, [refreshAdapters, notify, updateDownloadDialogs]);
 
-  const handleAdvanceOrClose = useCallback(() => {
-    setDownloadQueue((prev) => {
-      if (prev.length > 0) {
-        const [next, ...rest] = prev;
-        setAddUrl(next.url);
-        setAddFilename(next.filename ?? null);
-        setAddHeaders(next.headers ?? null);
-        setAddOpen(true);
-        return rest;
-      } else {
-        setAddOpen(false);
-        setAddUrl('');
-        setAddFilename(null);
-        setAddHeaders(null);
-        document.getElementById(GRID_ID)?.focus();
-        return [];
-      }
-    });
-  }, []);
+  const handleAdvanceOrClose = useCallback((requestId: string, accepted = false) => {
+    const current = downloadDialogsRef.current.current;
+    if (current?.id !== requestId) return;
+    if (!accepted) dismissRequest(current);
+    updateDownloadDialogs((state) => advanceDownload(state, requestId));
+    dialogOpenRef.current = downloadDialogsRef.current.current !== null;
+    if (!dialogOpenRef.current) document.getElementById(GRID_ID)?.focus();
+  }, [dismissRequest, updateDownloadDialogs]);
 
   const handleCancelAll = useCallback(() => {
-    setDownloadQueue([]);
-    setAddOpen(false);
-    setAddUrl('');
-    setAddFilename(null);
-    setAddHeaders(null);
+    const state = downloadDialogsRef.current;
+    for (const request of [...(state.current ? [state.current] : []), ...state.queued]) dismissRequest(request);
+    updateDownloadDialogs(() => ({ current: null, queued: [] }));
+    dialogOpenRef.current = false;
     document.getElementById(GRID_ID)?.focus();
-  }, []);
+  }, [dismissRequest, updateDownloadDialogs]);
 
   useEffect(() => {
     api
@@ -406,7 +404,9 @@ export const App: React.FC = () => {
     onReveal: (t) => api.revealFile(t.id).catch((e) => onError(`Couldn't show ${t.filename}: ${errorText(e)}`)),
     onResume: (ids) => ids.length > 0 && resume(ids),
     onPause: (ids) => ids.length > 0 && pause(ids),
-    onRemove: (ids) => ids.length > 0 && setRemoveIds(ids),
+    onRemove: (ids) => {
+      if (ids.length > 0) { dialogOpenRef.current = true; setRemoveIds(ids); }
+    },
     onCopyLink: (list) =>
       copyText(list.map((t) => t.url).join('\n')).then(() =>
         notify('success', list.length === 1 ? 'Link copied' : `${list.length} links copied`)
@@ -616,13 +616,15 @@ export const App: React.FC = () => {
 
       <AddDownloadDialog
         open={addOpen}
+        requestId={downloadDialogs.current?.id ?? 'closed'}
+        initialHandoffId={downloadDialogs.current?.payload.handoff_id}
         initialUrl={addUrl}
         initialFilename={addFilename}
         initialHeaders={addHeaders}
         defaultSaveDir={settings.default_save_dir}
         queueCount={downloadQueue.length}
         onStart={handleStart}
-        onClose={handleAdvanceOrClose}
+        onClose={(accepted) => handleAdvanceOrClose(downloadDialogs.current?.id ?? 'closed', accepted)}
         onCancelAll={handleCancelAll}
       />
       <RemoveDialog

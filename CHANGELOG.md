@@ -9,6 +9,22 @@ All notable changes to Conflux are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Parallel downloads and block resume require verified ranges, a known size and a strong ETag. Other transfers restart as a complete single stream, including when a server loses range support.
+- Missing secondary Last-Modified headers on a ranged response are accepted when its strong ETag matches; contradictory supplied validators still fail.
+- Partial-file deletion and resume verify recorded Windows file identity. Legacy files with unknown ownership and replacement files are preserved.
+- Browser extension 0.2.2 waits for a desktop task to be accepted before cancelling an intercepted transfer. Dismissal, timeout and host failure retain the browser download.
+
+### Fixed
+- Enabled Hyper-V external uplinks by requesting gateway information during Windows discovery.
+- Prevented signed URL queries from being generated as redirect Referer headers; explicit browser context is retained.
+- Rejected partial/short single-stream responses and delayed excess bytes on unsplit ranged responses.
+- Rejected explicit CLI adapter selections that would otherwise fall back to an unintended default route.
+- Serialized adapter changes, reconciled selection after probing, and made concurrent stop/remove wait for shutdown.
+- Restored permitted non-cookie headers before protected resume probes, retaining their original authorized origin across redirects.
+- Kept Add dialog edits/submission state while links queue, prevented stale submissions advancing another request, and presented links queued behind Remove.
+- Recorded actual completed sizes for unknown-length downloads, rejected malformed Unicode hex without panicking, and preserved exact protocol URL trailing slashes.
+
 ## [0.2.4] - 2026-10-14
 
 ### Added

@@ -726,8 +726,11 @@ async fn pause_then_resume_continues_from_completed_chunks() {
     let sidecar = resume_sidecar_path(&path);
     assert!(sidecar.exists(), "cancel must leave a resume sidecar");
 
-    // Resume against a fast server with the same content; count what it has to send.
-    let fast = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    // Resume against the same resource URL after removing throttling.
+    slow.replace_config(ServerConfig::new(Arc::clone(&data)));
+    let fast = &slow;
+    let requests_before = fast.stats.chunk_requests.load(Ordering::SeqCst);
+    let bytes_before = fast.stats.body_bytes_sent.load(Ordering::SeqCst);
     let (result, progress) = resume_to_end(&engine, &fast.url("/resume.bin"), &path).await;
     assert_eq!(result.expect("resume should succeed"), sha256_hex(&data));
     assert!(
@@ -736,13 +739,13 @@ async fn pause_then_resume_continues_from_completed_chunks() {
     );
     assert!(!sidecar.exists(), "sidecar must be removed on success");
 
-    let fetched = fast.stats.chunk_requests.load(Ordering::SeqCst);
+    let fetched = fast.stats.chunk_requests.load(Ordering::SeqCst) - requests_before;
     assert!(
         fetched >= 1 && fetched <= 17 - done_before,
         "only missing chunks are fetched (expected 1..={}, got {fetched})",
         17 - done_before
     );
-    let sent = fast.stats.body_bytes_sent.load(Ordering::SeqCst);
+    let sent = fast.stats.body_bytes_sent.load(Ordering::SeqCst) - bytes_before;
     assert!(
         sent < PAYLOAD_LEN as u64,
         "resume re-downloaded everything ({} bytes)",
@@ -841,7 +844,7 @@ async fn resume_with_corrupt_sidecar_or_missing_file_starts_fresh() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn single_stream_resume_preserves_partial_file_and_aborts_on_range_loss() {
+async fn range_loss_restarts_with_a_complete_single_stream() {
     let data = payload(PAYLOAD_LEN, 25);
     let mut cfg = ServerConfig::new(Arc::clone(&data));
     cfg.range_mode = RangeMode::Ignore;
@@ -854,15 +857,9 @@ async fn single_stream_resume_preserves_partial_file_and_aborts_on_range_loss() 
     std::fs::write(resume_sidecar_path(&path), b"{\"version\":1}").unwrap();
 
     let (result, _) = resume_to_end(&engine, &server.url("/single.bin"), &path).await;
-    let err = result.expect_err("resuming when server reports no ranges must abort with error");
-    assert!(
-        err.to_string().contains("partial download preserved"),
-        "error must explicitly report that partial data was preserved: {}",
-        err
-    );
-    // Partial file and sidecar must NOT be truncated or removed
-    assert_eq!(std::fs::read(&path).unwrap(), b"partial data");
-    assert!(resume_sidecar_path(&path).exists());
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+    assert_eq!(std::fs::read(&path).unwrap(), *data);
+    assert!(!resume_sidecar_path(&path).exists());
 }
 
 #[tokio::test]
@@ -1210,7 +1207,7 @@ async fn chunk_requests_carry_if_range_validator() {
     assert!(!if_ranges.is_empty() && if_ranges.len() <= 17);
     assert!(if_ranges.iter().all(|v| v == "\"v1\""));
 
-    // Weak ETags are not allowed in If-Range: use Last-Modified instead.
+    // Weak ETags cannot establish byte identity, even with Last-Modified: use one fresh stream.
     let mut cfg = ServerConfig::new(Arc::clone(&data));
     cfg.etag = Some("W/\"v1\"".into());
     cfg.last_modified = Some(LAST_MODIFIED.into());
@@ -1218,8 +1215,8 @@ async fn chunk_requests_carry_if_range_validator() {
     let out = run_download(&test_engine(), &server, &[]).await;
     assert_file_matches(&out, &data);
     let if_ranges = if_range_values(&server);
-    assert!(!if_ranges.is_empty() && if_ranges.len() <= 17);
-    assert!(if_ranges.iter().all(|v| v == LAST_MODIFIED));
+    assert!(if_ranges.is_empty());
+    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 0);
 
     // Weak ETag only: no usable validator, no If-Range.
     let mut cfg = ServerConfig::new(Arc::clone(&data));
@@ -1509,11 +1506,12 @@ async fn cancel_during_hashing_keeps_sidecar_and_resume_does_not_redownload() {
         "file must be intact"
     );
 
-    let fast = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let fast = &server;
+    let requests_before = fast.stats.chunk_requests.load(Ordering::SeqCst);
     let (result, _) = resume_to_end(&test_engine(), &fast.url("/hashing.bin"), &path).await;
     assert_eq!(result.expect("resume must succeed"), sha256_hex(&data));
     assert_eq!(
-        fast.stats.chunk_requests.load(Ordering::SeqCst),
+        fast.stats.chunk_requests.load(Ordering::SeqCst) - requests_before,
         0,
         "a fully downloaded file must not be fetched again"
     );
@@ -1541,6 +1539,7 @@ async fn hostile_download_probe_is_refused_by_download() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("huge.bin");
     let probe = DownloadProbe {
+        header_origin: None,
         url: server.url("/huge.bin"),
         total_bytes: 1 << 60,
         supports_ranges: true,
@@ -1952,4 +1951,237 @@ async fn request_rate_limited_server_gets_few_requests_and_completes() {
         "kept hammering a rate-limited server: {limited} 429s"
     );
     assert!(requests <= 14, "too many requests: {requests}");
+}
+
+// Review regressions: representation identity, framing, privacy and protected resume.
+#[tokio::test]
+async fn missing_or_weak_etags_never_start_parallel_requests() {
+    for tag in [None, Some("W/\"version\"".to_string())] {
+        let data = payload(512 * 1024, 91);
+        let mut config = ServerConfig::new(Arc::clone(&data));
+        config.etag = tag;
+        config.last_modified = Some(LAST_MODIFIED.into());
+        let server = TestServer::start(config).await;
+        let out = run_download(&test_engine(), &server, &[]).await;
+        assert_file_matches(&out, &data);
+        assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 0);
+        assert!(!resume_sidecar_path(&out.path).exists());
+    }
+}
+
+#[tokio::test]
+async fn unvalidated_resume_restarts_with_a_whole_new_representation() {
+    for tag in [None, Some("W/\"unchanged\"".to_string())] {
+        let old = payload(CHUNK as usize * 2, 92);
+        let new = payload(old.len(), 93);
+        let mut config = ServerConfig::new(Arc::clone(&old));
+        config.etag = tag.clone();
+        config.last_modified = Some(LAST_MODIFIED.into());
+        let server = TestServer::start(config.clone()).await;
+        let engine = test_engine();
+        let url = server.url("/same.bin");
+        let probe = engine.probe(&url).await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("same.bin");
+        std::fs::write(&path, old.as_ref()).unwrap();
+        let saved = conflux_core::resume::ResumeState {
+            version: 1,
+            resource_id: Some(sha256_hex(url.as_bytes())),
+            file_identity: Some(conflux_core::FileIdentity::at(&path).unwrap()),
+            total_bytes: old.len() as u64,
+            chunk_size: CHUNK,
+            completed: "0".into(),
+            etag: tag,
+            last_modified: probe.last_modified,
+            headers: None,
+            header_origin: None,
+        };
+        std::fs::write(
+            resume_sidecar_path(&path),
+            serde_json::to_vec(&saved).unwrap(),
+        )
+        .unwrap();
+        config.payload = Arc::clone(&new);
+        server.replace_config(config);
+        let fresh = engine.probe(&url).await.unwrap();
+        let (_cancel, receiver) = watch::channel(false);
+        assert_eq!(
+            engine
+                .resume(&fresh, &path, &[], None, receiver)
+                .await
+                .unwrap(),
+            sha256_hex(&new)
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), *new);
+        assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn single_stream_rejects_short_whole_responses_and_partial_status() {
+    for (send_length, status) in [(true, 200), (false, 200), (true, 206)] {
+        let original = payload(4096, 94);
+        let mut config = ServerConfig::new(original);
+        config.range_mode = RangeMode::Ignore;
+        let server = TestServer::start(config.clone()).await;
+        let engine = test_engine();
+        let probe = engine.probe(&server.url("/file.bin")).await.unwrap();
+        config.payload = payload(100, 95);
+        config.send_content_length = send_length;
+        config.full_status = status;
+        server.replace_config(config);
+        let dir = tempfile::tempdir().unwrap();
+        let (_cancel, receiver) = watch::channel(false);
+        let error = engine
+            .download(&probe, &dir.path().join("file.bin"), &[], None, receiver)
+            .await
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("size changed")
+                || message.contains("ended short")
+                || message.contains("complete 200"),
+            "{message}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn matching_strong_etag_allows_omitted_secondary_validator() {
+    let data = payload(512 * 1024, 96);
+    let mut config = ServerConfig::new(Arc::clone(&data));
+    config.last_modified = Some(LAST_MODIFIED.into());
+    config.omit_last_modified_on_chunks = true;
+    let server = TestServer::start(config).await;
+    let out = run_download(&test_engine(), &server, &[]).await;
+    assert_file_matches(&out, &data);
+    assert!(server.stats.chunk_requests.load(Ordering::SeqCst) > 0);
+}
+
+#[tokio::test]
+async fn delayed_overlong_segment_is_not_committed_as_complete() {
+    let mut config = ServerConfig::new(payload(4096, 97));
+    config.range_mode = RangeMode::Overlong;
+    config.overlong_tail_delay = Some(Duration::from_millis(50));
+    let server = TestServer::start(config).await;
+    let out = run_download(
+        &DownloadEngine::new(1)
+            .unwrap()
+            .with_retry_backoff(Duration::from_millis(1)),
+        &server,
+        &[],
+    )
+    .await;
+    assert!(out.result.is_err());
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(resume_sidecar_path(&out.path)).unwrap()).unwrap();
+    assert_eq!(saved["completed"], "");
+}
+
+#[tokio::test]
+async fn redirects_never_synthesize_referer_from_signed_urls() {
+    let data = payload(1024, 98);
+    let target = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let mut config = ServerConfig::new(data);
+    config.redirect_to = Some(target.url("/file.bin"));
+    let origin = TestServer::start(config).await;
+    test_engine()
+        .probe(&origin.url("/export?token=PRIVATE_QUERY_TOKEN"))
+        .await
+        .unwrap();
+    assert!(target.stats.referers.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn protected_resume_restores_headers_before_its_probe() {
+    let data = payload(1024, 99);
+    let mut config = ServerConfig::new(Arc::clone(&data));
+    config.required_referer = Some("https://portal.example/download".into());
+    config.required_user_agent = Some("RequiredBrowser".into());
+    let server = TestServer::start(config.clone()).await;
+    let url = server.url("/protected.bin");
+    let engine = test_engine();
+    assert!(engine.probe(&url).await.is_err());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("protected.bin");
+    std::fs::write(&path, data.as_ref()).unwrap();
+    let saved = conflux_core::resume::ResumeState {
+        version: 1,
+        resource_id: Some(sha256_hex(url.as_bytes())),
+        file_identity: Some(conflux_core::FileIdentity::at(&path).unwrap()),
+        total_bytes: data.len() as u64,
+        chunk_size: CHUNK,
+        completed: "0".into(),
+        etag: config.etag,
+        last_modified: None,
+        header_origin: Some(
+            reqwest::Url::parse(&url)
+                .unwrap()
+                .origin()
+                .ascii_serialization(),
+        ),
+        headers: Some(RequestHeaders {
+            cookie: None,
+            referer: config.required_referer,
+            user_agent: config.required_user_agent,
+        }),
+    };
+    std::fs::write(
+        resume_sidecar_path(&path),
+        serde_json::to_vec(&saved).unwrap(),
+    )
+    .unwrap();
+    let headers = conflux_core::read_resume_headers(&path, &url).unwrap();
+    let probe = engine.probe_with_headers(&url, headers).await.unwrap();
+    let (_cancel, receiver) = watch::channel(false);
+    assert_eq!(
+        engine
+            .resume(&probe, &path, &[], None, receiver)
+            .await
+            .unwrap(),
+        sha256_hex(&data)
+    );
+    assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn resume_preserves_a_replacement_file_even_with_a_valid_sidecar() {
+    let original = payload(1024, 100);
+    let replacement = payload(1024, 101);
+    let server = TestServer::start(ServerConfig::new(Arc::clone(&original))).await;
+    let engine = test_engine();
+    let url = server.url("/file.bin");
+    let probe = engine.probe(&url).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("file.bin");
+    std::fs::write(&path, original.as_ref()).unwrap();
+    let saved = conflux_core::resume::ResumeState {
+        version: 1,
+        resource_id: Some(sha256_hex(url.as_bytes())),
+        file_identity: Some(conflux_core::FileIdentity::at(&path).unwrap()),
+        total_bytes: 1024,
+        chunk_size: CHUNK,
+        completed: "0".into(),
+        etag: probe.etag.clone(),
+        last_modified: None,
+        headers: None,
+        header_origin: None,
+    };
+    std::fs::write(
+        resume_sidecar_path(&path),
+        serde_json::to_vec(&saved).unwrap(),
+    )
+    .unwrap();
+    std::fs::rename(&path, dir.path().join("old.bin")).unwrap();
+    std::fs::write(&path, replacement.as_ref()).unwrap();
+    let (_cancel, receiver) = watch::channel(false);
+    let error = engine
+        .resume(&probe, &path, &[], None, receiver)
+        .await
+        .unwrap_err();
+    assert!(error
+        .downcast_ref::<conflux_core::file_identity::FileOwnershipChanged>()
+        .is_some());
+    assert_eq!(std::fs::read(&path).unwrap(), *replacement);
+    assert!(resume_sidecar_path(&path).exists());
 }
