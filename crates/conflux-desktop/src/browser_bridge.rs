@@ -316,93 +316,39 @@ pub fn register_browser_integration() -> std::io::Result<()> {
     let icon_arg = format!("\"{exe_str}\",0");
     let cmd_arg = format!("\"{exe_str}\" \"%1\"");
 
-    let reg_cmds = [
-        vec![
-            "add",
-            r"HKCU\Software\Classes\conflux",
-            "/ve",
-            "/t",
-            "REG_SZ",
-            "/d",
-            "URL:Conflux Protocol",
-            "/f",
-        ],
-        vec![
-            "add",
-            r"HKCU\Software\Classes\conflux",
-            "/v",
-            "URL Protocol",
-            "/t",
-            "REG_SZ",
-            "/d",
-            "",
-            "/f",
-        ],
-        vec![
-            "add",
-            r"HKCU\Software\Classes\conflux\DefaultIcon",
-            "/ve",
-            "/t",
-            "REG_SZ",
-            "/d",
-            &icon_arg,
-            "/f",
-        ],
-        vec![
-            "add",
-            r"HKCU\Software\Classes\conflux\shell\open\command",
-            "/ve",
-            "/t",
-            "REG_SZ",
-            "/d",
-            &cmd_arg,
-            "/f",
-        ],
-        vec![
-            "add",
-            r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop",
-            "/ve",
-            "/t",
-            "REG_SZ",
-            "/d",
-            &chrome_manifest_str,
-            "/f",
-        ],
-        vec![
-            "add",
-            r"HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.conflux.desktop",
-            "/ve",
-            "/t",
-            "REG_SZ",
-            "/d",
-            &chrome_manifest_str,
-            "/f",
-        ],
-        vec![
-            "add",
-            r"HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.conflux.desktop",
-            "/ve",
-            "/t",
-            "REG_SZ",
-            "/d",
-            &chrome_manifest_str,
-            "/f",
-        ],
-        vec![
-            "add",
-            r"HKCU\Software\Mozilla\NativeMessagingHosts\com.conflux.desktop",
-            "/ve",
-            "/t",
-            "REG_SZ",
-            "/d",
-            &ff_manifest_str,
-            "/f",
-        ],
-    ];
+    use winreg::enums::*;
+    use winreg::RegKey;
 
-    for cmd_args in reg_cmds {
-        let _ = std::process::Command::new("reg").args(&cmd_args).output();
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+
+    // Protocol: conflux://
+    let (conflux_key, _) = hkcu.create_subkey(r"Software\Classes\conflux")?;
+    conflux_key.set_value("", &"URL:Conflux Protocol")?;
+    conflux_key.set_value("URL Protocol", &"")?;
+
+    let (icon_key, _) = hkcu.create_subkey(r"Software\Classes\conflux\DefaultIcon")?;
+    icon_key.set_value("", &icon_arg)?;
+
+    let (cmd_key, _) = hkcu.create_subkey(r"Software\Classes\conflux\shell\open\command")?;
+    cmd_key.set_value("", &cmd_arg)?;
+
+    // Native messaging hosts
+    let chrome_hosts = [
+        r"Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop",
+        r"Software\Microsoft\Edge\NativeMessagingHosts\com.conflux.desktop",
+        r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.conflux.desktop",
+    ];
+    let manifest_val: &str = &chrome_manifest_str;
+    for host in chrome_hosts {
+        let (key, _) = hkcu.create_subkey(host)?;
+        key.set_value("", &manifest_val)?;
     }
+
+    let (ff_key, _) =
+        hkcu.create_subkey(r"Software\Mozilla\NativeMessagingHosts\com.conflux.desktop")?;
+    let ff_val: &str = &ff_manifest_str;
+    ff_key.set_value("", &ff_val)?;
+
     Ok(())
 }
 
@@ -413,19 +359,19 @@ pub fn register_browser_integration() -> std::io::Result<()> {
 
 #[cfg(windows)]
 pub fn unregister_browser_integration() -> std::io::Result<()> {
-    let reg_keys = [
-        r"HKCU\Software\Classes\conflux",
-        r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop",
-        r"HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.conflux.desktop",
-        r"HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.conflux.desktop",
-        r"HKCU\Software\Mozilla\NativeMessagingHosts\com.conflux.desktop",
-    ];
+    use winreg::enums::*;
+    use winreg::RegKey;
 
-    for key in reg_keys {
-        let _ = std::process::Command::new("reg")
-            .args(["delete", key, "/f"])
-            .output();
-    }
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let _ = hkcu.delete_subkey_all(r"Software\Classes\conflux");
+    let _ =
+        hkcu.delete_subkey_all(r"Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop");
+    let _ =
+        hkcu.delete_subkey_all(r"Software\Microsoft\Edge\NativeMessagingHosts\com.conflux.desktop");
+    let _ = hkcu.delete_subkey_all(
+        r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.conflux.desktop",
+    );
+    let _ = hkcu.delete_subkey_all(r"Software\Mozilla\NativeMessagingHosts\com.conflux.desktop");
     Ok(())
 }
 
@@ -436,13 +382,12 @@ pub fn unregister_browser_integration() -> std::io::Result<()> {
 
 #[cfg(windows)]
 pub fn is_browser_integration_registered() -> bool {
-    let output = std::process::Command::new("reg")
-        .args([
-            "query",
-            r"HKCU\Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop",
-        ])
-        .output();
-    output.map(|o| o.status.success()).unwrap_or(false)
+    use winreg::enums::*;
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    hkcu.open_subkey(r"Software\Google\Chrome\NativeMessagingHosts\com.conflux.desktop")
+        .is_ok()
 }
 
 #[cfg(not(windows))]

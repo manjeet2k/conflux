@@ -76,12 +76,16 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
   const [registeringHost, setRegisteringHost] = useState(false);
 
   useEffect(() => {
-    downloadDir().then(setOsDownloads).catch(() => {});
-    getVersion().then(setVersion).catch(() => {});
+    let current = true;
+    downloadDir().then((d) => current && setOsDownloads(d)).catch(() => {});
+    getVersion().then((v) => current && setVersion(v)).catch(() => {});
     api
       .getBrowserIntegrationStatus()
-      .then((s) => setBrowserHostRegistered(s.registered))
-      .catch(() => setBrowserHostRegistered(false));
+      .then((s) => current && setBrowserHostRegistered(s.registered))
+      .catch(() => current && setBrowserHostRegistered(false));
+    return () => {
+      current = false;
+    };
   }, []);
 
   // Warn when the chosen default folder is gone (e.g. an unplugged drive).

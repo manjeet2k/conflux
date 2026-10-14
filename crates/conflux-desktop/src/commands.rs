@@ -621,16 +621,22 @@ pub struct BrowserIntegrationStatus {
 
 /// Checks whether Conflux is registered as a native messaging host in the OS.
 #[tauri::command]
-pub fn get_browser_integration_status() -> BrowserIntegrationStatus {
-    BrowserIntegrationStatus {
+pub async fn get_browser_integration_status() -> BrowserIntegrationStatus {
+    tokio::task::spawn_blocking(move || BrowserIntegrationStatus {
         registered: crate::browser_bridge::is_browser_integration_registered(),
-    }
+    })
+    .await
+    .unwrap_or(BrowserIntegrationStatus { registered: false })
 }
 
 /// Registers the native messaging hosts and conflux:// protocol handler in HKCU.
 #[tauri::command]
-pub fn register_browser_extension() -> Result<(), String> {
-    crate::browser_bridge::register_browser_integration().map_err(|e| e.to_string())
+pub async fn register_browser_extension() -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        crate::browser_bridge::register_browser_integration().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Whether `path` is an existing directory (the Settings page warns when the default
@@ -1569,9 +1575,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_browser_integration_status_smoke() {
-        let status = get_browser_integration_status();
+    #[tokio::test]
+    async fn test_browser_integration_status_smoke() {
+        let status = get_browser_integration_status().await;
         // Just verify it returns a valid boolean without panicking
         let _ = status.registered;
     }

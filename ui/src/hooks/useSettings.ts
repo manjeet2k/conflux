@@ -42,7 +42,14 @@ export function useSettings(onError: (message: string) => void) {
         setLoaded(true);
         display();
       })
-      .catch((e) => !disposed && onError(`Failed to load settings: ${String(e)}`));
+      .catch((e) => {
+        if (!disposed) {
+          confirmed.current = DEFAULT_SETTINGS;
+          setLoaded(true);
+          display();
+          onError(`Failed to load settings: ${String(e)}`);
+        }
+      });
     return () => {
       disposed = true;
     };
@@ -63,7 +70,10 @@ export function useSettings(onError: (message: string) => void) {
         })
         .catch((e) => onError(`Failed to save settings: ${String(e)}`))
         .finally(() => {
-          pending.current.splice(pending.current.indexOf(patch), 1);
+          const idx = pending.current.indexOf(patch);
+          if (idx !== -1) {
+            pending.current.splice(idx, 1);
+          }
           display();
         });
     },
