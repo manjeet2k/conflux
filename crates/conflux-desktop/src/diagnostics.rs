@@ -3,7 +3,7 @@
 
 use crate::adapters::{AdapterInfo, AdapterKind, DisabledReason};
 use crate::redact::mask_ip;
-use crate::settings::{Settings, ThemePreference};
+use crate::settings::{Backdrop, Settings, ThemePreference};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -23,6 +23,7 @@ pub struct DiagAdapter {
 pub struct DiagSettings {
     pub schema_version: u32,
     pub theme: ThemePreference,
+    pub backdrop: Backdrop,
     pub connections_per_adapter: u32,
     pub notify_on_complete: bool,
     pub close_to_tray: bool,
@@ -69,6 +70,7 @@ pub fn build(
         settings: DiagSettings {
             schema_version: settings.schema_version,
             theme: settings.theme,
+            backdrop: settings.backdrop,
             connections_per_adapter: settings.connections_per_adapter,
             notify_on_complete: settings.notify_on_complete,
             close_to_tray: settings.close_to_tray,

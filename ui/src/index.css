@@ -11,9 +11,8 @@ body,
 
 body {
   user-select: none;
+  /* No `text-rendering: geometricPrecision`: it turns hinting off and makes Segoe UI look soft. */
   -webkit-font-smoothing: auto;
-  -moz-osx-font-smoothing: auto;
-  text-rendering: geometricPrecision;
 }
 
 /* Win11-style overlay scrollbars */
@@ -36,4 +35,25 @@ body {
 }
 ::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/*
+ * Win11 flyouts (context menus, dropdown lists, popovers) are in-app acrylic: a translucent
+ * fill over a blur of the window beneath. Portals carry the theme's token variables, so the
+ * fill follows light/dark. `body` raises specificity above Fluent's atomic classes.
+ */
+body .fui-MenuPopover,
+body .fui-Listbox,
+body .fui-PopoverSurface {
+  background-color: color-mix(in srgb, var(--colorNeutralBackground1) 82%, transparent);
+  backdrop-filter: blur(30px) saturate(125%);
+}
+body .fui-MenuPopover .fui-MenuItem,
+body .fui-Listbox .fui-Option {
+  background-color: transparent;
+}
+body .fui-MenuPopover .fui-MenuItem:hover,
+body .fui-MenuPopover .fui-MenuItem:focus-visible,
+body .fui-Listbox .fui-Option:hover {
+  background-color: var(--colorSubtleBackgroundHover);
 }

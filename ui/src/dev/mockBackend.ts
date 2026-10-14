@@ -3,7 +3,7 @@
 // main.tsx only imports it when running outside Tauri in dev mode.
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
-import type { AdapterInfo, Diagnostics, DownloadTask, Settings } from '../types';
+import type { AdapterInfo, Backdrop, Diagnostics, DownloadTask, Settings } from '../types';
 import { NETWORK_ADAPTERS_CHANGED_EVENT, PROGRESS_EVENT, UPDATE_AVAILABLE_EVENT } from '../types';
 
 // Keep in sync with the real app version (Cargo.toml / tauri.conf.json / ui/package.json).
@@ -31,6 +31,7 @@ const ifaceName = (a: AdapterInfo) => a.id.slice(0, a.id.length - a.ip.length - 
 
 let settings: Settings = {
   theme: 'system',
+  backdrop: 'mica_alt',
   default_save_dir: null,
   connections_per_adapter: 4,
   notify_on_complete: true,
@@ -214,6 +215,7 @@ export function installMockBackend() {
             settings: {
               schema_version: 1,
               theme: settings.theme,
+              backdrop: settings.backdrop,
               connections_per_adapter: settings.connections_per_adapter,
               notify_on_complete: settings.notify_on_complete,
               close_to_tray: settings.close_to_tray,
@@ -225,8 +227,17 @@ export function installMockBackend() {
           };
           return diag;
         }
-        case 'apply_window_theme':
-          return { mica: false };
+        case 'apply_window_theme': {
+          // Stand-in for the real material so translucent surfaces can be judged in a browser.
+          const backdrop = args.backdrop as Backdrop;
+          document.documentElement.style.background =
+            backdrop === 'none'
+              ? ''
+              : args.dark
+                ? 'linear-gradient(135deg, #0f3057 0%, #4a1d4f 50%, #0f4a3a 100%)'
+                : 'linear-gradient(135deg, #a9cdf0 0%, #e6b8e2 50%, #b5e3c4 100%)';
+          return { backdrop };
+        }
         case 'probe_url': {
           const url = String(args.url);
           const name = decodeURIComponent(url.split('/').pop() || 'download.bin');

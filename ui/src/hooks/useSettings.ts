@@ -4,6 +4,7 @@ import type { Settings } from '../types';
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
+  backdrop: 'mica_alt',
   default_save_dir: null,
   connections_per_adapter: 4,
   notify_on_complete: true,

@@ -155,7 +155,7 @@ export const App: React.FC = () => {
   }, [notify]);
 
   const { settings, loaded: settingsLoaded, update: updateSettings } = useSettings(onError);
-  const { dark, mica } = useWindowTheme(settings.theme);
+  const { dark, backdrop } = useWindowTheme(settings.theme, settings.backdrop);
   const { tasks, start, pause, resume, remove } = useDownloads(onError);
   const history = useSpeedHistory(tasks);
   const styles = useStyles();
@@ -505,7 +505,12 @@ export const App: React.FC = () => {
   return (
     // Layout lives on an inner div: FluentProvider's className is also applied to portal
     // mount nodes (menus, dialogs, toasts), which must not become full-screen boxes.
-    <FluentProvider theme={dark ? darkTheme : lightTheme} style={surfaceVars(dark, mica)}>
+    // FluentProvider paints an opaque background by default, which would hide the window
+    // material; the root below paints `--cfx-window` instead.
+    <FluentProvider
+      theme={dark ? darkTheme : lightTheme}
+      style={{ ...surfaceVars(dark, backdrop), backgroundColor: 'transparent' }}
+    >
       <div className={styles.root}>
         <TitleBar />
         <div className={styles.body}>
@@ -572,6 +577,7 @@ export const App: React.FC = () => {
                         selected={selected}
                         onSelectionChange={setSelected}
                         actions={actions}
+                        onRowClick={() => setDetailsOpen(true)}
                       />
                     )}
                   </div>

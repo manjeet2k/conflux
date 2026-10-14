@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Badge, Button, Dropdown, Option, SpinButton, Spinner, Switch, Text, makeStyles, tokens } from '@fluentui/react-components';
 import {
   Alert20Regular,
+  Blur20Regular,
   DarkTheme20Regular,
   Folder20Regular,
   PlugConnected20Regular,
@@ -16,7 +17,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { downloadDir } from '@tauri-apps/api/path';
 import { getVersion } from '@tauri-apps/api/app';
 import { api, errorText } from '../api';
-import type { Settings, ThemePreference, UpdateInfo } from '../types';
+import type { Backdrop, Settings, ThemePreference, UpdateInfo } from '../types';
 import { Page, SectionHeader, SettingsCard } from '../components/Page';
 import chromeLogo from '../assets/browsers/chrome.svg';
 import firefoxLogo from '../assets/browsers/firefox.svg';
@@ -30,7 +31,7 @@ const useStyles = makeStyles({
     whiteSpace: 'nowrap',
     color: tokens.colorNeutralForeground2,
   },
-  dropdown: { minWidth: '160px' },
+  dropdown: { width: '200px', minWidth: '200px' },
   warning: {
     display: 'flex',
     alignItems: 'center',
@@ -60,6 +61,12 @@ const useStyles = makeStyles({
 });
 
 const themeLabels: Record<ThemePreference, string> = { system: 'Use system setting', light: 'Light', dark: 'Dark' };
+const backdropLabels: Record<Backdrop, string> = {
+  mica_alt: 'Mica Alt',
+  mica: 'Mica',
+  acrylic: 'Acrylic',
+  none: 'None',
+};
 
 interface SettingsPageProps {
   settings: Settings;
@@ -190,20 +197,40 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
   return (
     <Page title="Settings">
       <SectionHeader>Appearance</SectionHeader>
-      <SettingsCard icon={<DarkTheme20Regular />} title="App theme" description="Choose light or dark, or follow Windows">
-        <Dropdown
-          className={styles.dropdown}
-          value={themeLabels[settings.theme]}
-          selectedOptions={[settings.theme]}
-          onOptionSelect={(_, d) => onChange({ theme: d.optionValue as ThemePreference })}
+      <div className={styles.stack}>
+        <SettingsCard icon={<DarkTheme20Regular />} title="App theme" description="Choose light or dark, or follow Windows">
+          <Dropdown
+            className={styles.dropdown}
+            value={themeLabels[settings.theme]}
+            selectedOptions={[settings.theme]}
+            onOptionSelect={(_, d) => onChange({ theme: d.optionValue as ThemePreference })}
+          >
+            {(Object.keys(themeLabels) as ThemePreference[]).map((t) => (
+              <Option key={t} value={t}>
+                {themeLabels[t]}
+              </Option>
+            ))}
+          </Dropdown>
+        </SettingsCard>
+        <SettingsCard
+          icon={<Blur20Regular />}
+          title="Window material"
+          description="Let your wallpaper show through the window. Needs Windows 11; Mica Alt and Acrylic need version 22H2 or later."
         >
-          {(Object.keys(themeLabels) as ThemePreference[]).map((t) => (
-            <Option key={t} value={t}>
-              {themeLabels[t]}
-            </Option>
-          ))}
-        </Dropdown>
-      </SettingsCard>
+          <Dropdown
+            className={styles.dropdown}
+            value={backdropLabels[settings.backdrop]}
+            selectedOptions={[settings.backdrop]}
+            onOptionSelect={(_, d) => onChange({ backdrop: d.optionValue as Backdrop })}
+          >
+            {(Object.keys(backdropLabels) as Backdrop[]).map((b) => (
+              <Option key={b} value={b}>
+                {backdropLabels[b]}
+              </Option>
+            ))}
+          </Dropdown>
+        </SettingsCard>
+      </div>
 
       <SectionHeader>Downloads</SectionHeader>
       <div className={styles.stack}>

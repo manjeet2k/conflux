@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import type { ThemePreference } from '../types';
+import type { Backdrop, ThemePreference } from '../types';
 
 const darkQuery = '(prefers-color-scheme: dark)';
 
-/** Resolves the effective light/dark mode and applies it (plus Mica) to the native window. */
-export function useWindowTheme(preference: ThemePreference) {
+/**
+ * Resolves the effective light/dark mode and applies it, plus the requested window material,
+ * to the native window. `backdrop` is the material Windows actually gave us, which can be
+ * weaker than requested (or `none` before the first answer arrives).
+ */
+export function useWindowTheme(preference: ThemePreference, requested: Backdrop) {
   const [systemDark, setSystemDark] = useState(() => window.matchMedia(darkQuery).matches);
-  const [mica, setMica] = useState(false);
+  const [backdrop, setBackdrop] = useState<Backdrop>('none');
 
   useEffect(() => {
     const mq = window.matchMedia(darkQuery);
@@ -26,17 +30,17 @@ export function useWindowTheme(preference: ThemePreference) {
   useEffect(() => {
     let cancelled = false;
     api
-      .applyWindowTheme(dark)
-      .then((b) => !cancelled && setMica(b.mica))
+      .applyWindowTheme(dark, requested)
+      .then((b) => !cancelled && setBackdrop(b.backdrop))
       .catch((e) => {
-        // Not fatal: fall back to an opaque background.
+        // Not fatal: fall back to opaque surfaces.
         console.warn('apply_window_theme failed:', e);
-        if (!cancelled) setMica(false);
+        if (!cancelled) setBackdrop('none');
       });
     return () => {
       cancelled = true;
     };
-  }, [dark]);
+  }, [dark, requested]);
 
-  return { dark, mica };
+  return { dark, backdrop };
 }

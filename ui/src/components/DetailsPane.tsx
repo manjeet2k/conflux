@@ -4,7 +4,6 @@ import {
   Caption1,
   MessageBar,
   MessageBarBody,
-  ProgressBar,
   Subtitle2,
   Text,
   Tooltip,
@@ -24,13 +23,14 @@ import { formatBytes, formatDate, formatDuration, formatEta, formatSpeed, progre
 import { FileIcon } from './FileIcon';
 import { adapterColor, adapterProblem } from '../utils/adapters';
 import { StatusLabel } from './StatusLabel';
-import { progressColor } from '../utils/status';
+import { DownloadProgress } from './DownloadProgress';
 import { ChunkMap } from './ChunkMap';
 import type { ChunkMapColors } from './ChunkMap';
 
 const useStyles = makeStyles({
   root: {
     width: '340px',
+    boxSizing: 'border-box',
     flexShrink: 0,
     borderLeft: '1px solid var(--cfx-divider)',
     overflowY: 'auto',
@@ -61,7 +61,6 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
     fontVariantNumeric: 'tabular-nums',
   },
-  pausedBar: { backgroundColor: tokens.colorPaletteMarigoldBackground3 },
   actions: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
   adapter: { display: 'flex', flexDirection: 'column', gap: '4px' },
   dot: { width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0 },
@@ -200,11 +199,11 @@ export const DetailsPane: React.FC<DetailsPaneProps> = (p) => {
             </span>
           ) : null}
         </div>
-        <ProgressBar
-          value={running && t.total_bytes === 0 ? undefined : fraction}
-          color={progressColor(t.status)}
-          bar={{ className: t.status === 'paused' ? styles.pausedBar : undefined }}
-          thickness="large"
+        <DownloadProgress
+          status={t.status}
+          fraction={fraction}
+          indeterminate={running && t.total_bytes === 0}
+          size="large"
         />
         <div className={styles.row}>
           <Caption1 className={styles.num}>

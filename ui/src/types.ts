@@ -83,11 +83,15 @@ export interface DownloadTask {
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
+/** Window material (Rust `Backdrop`): the preference, and also what was actually applied. */
+export type Backdrop = 'mica' | 'mica_alt' | 'acrylic' | 'none';
+
 // Matches Rust Settings
 export interface Settings {
   /** Version of the on-disk layout; owned by the backend. */
   schema_version?: number;
   theme: ThemePreference;
+  backdrop: Backdrop;
   /** null = the OS Downloads folder. */
   default_save_dir: string | null;
   connections_per_adapter: number;
@@ -134,6 +138,7 @@ export interface Diagnostics {
   settings: {
     schema_version: number;
     theme: ThemePreference;
+    backdrop: Backdrop;
     connections_per_adapter: number;
     notify_on_complete: boolean;
     close_to_tray: boolean;
@@ -146,7 +151,7 @@ export interface Diagnostics {
 
 // Matches Rust WindowBackdrop (returned by apply_window_theme)
 export interface WindowBackdrop {
-  mica: boolean;
+  backdrop: Backdrop;
 }
 
 export const PROGRESS_EVENT = 'download-progress';

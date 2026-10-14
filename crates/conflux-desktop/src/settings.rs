@@ -17,6 +17,20 @@ pub enum ThemePreference {
     Dark,
 }
 
+/// Window material behind the UI. Used both as the user's preference and as the material
+/// actually applied, which can be weaker when Windows lacks the requested one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Backdrop {
+    Mica,
+    /// The "tabbed" Mica variant: more strongly tinted by the wallpaper.
+    #[default]
+    MicaAlt,
+    Acrylic,
+    /// Solid colors.
+    None,
+}
+
 /// User preferences, stored as JSON in the app config dir. Unknown or missing fields fall
 /// back to defaults so old or hand-edited files still load.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +39,7 @@ pub struct Settings {
     #[serde(default = "legacy_schema_version")]
     pub schema_version: u32,
     pub theme: ThemePreference,
+    pub backdrop: Backdrop,
     /// `None` = the OS Downloads folder.
     pub default_save_dir: Option<String>,
     pub connections_per_adapter: u32,
@@ -50,6 +65,7 @@ impl Default for Settings {
         Self {
             schema_version: SCHEMA_VERSION,
             theme: ThemePreference::System,
+            backdrop: Backdrop::MicaAlt,
             default_save_dir: None,
             connections_per_adapter: 4,
             notify_on_complete: true,
@@ -174,6 +190,7 @@ mod tests {
     fn serde_names_and_partial_files() {
         let json = serde_json::to_value(Settings::default()).unwrap();
         assert_eq!(json["theme"], "system");
+        assert_eq!(json["backdrop"], "mica_alt");
         assert_eq!(json["connections_per_adapter"], 4);
         assert_eq!(json["notify_on_complete"], true);
         assert_eq!(json["close_to_tray"], true);
@@ -182,8 +199,20 @@ mod tests {
 
         let partial: Settings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
         assert_eq!(partial.theme, ThemePreference::Dark);
+        assert_eq!(partial.backdrop, Backdrop::MicaAlt);
         assert_eq!(partial.connections_per_adapter, 4);
         assert!(partial.adapter_overrides.is_empty());
+
+        for (name, backdrop) in [
+            ("mica", Backdrop::Mica),
+            ("mica_alt", Backdrop::MicaAlt),
+            ("acrylic", Backdrop::Acrylic),
+            ("none", Backdrop::None),
+        ] {
+            let parsed: Settings =
+                serde_json::from_str(&format!(r#"{{"backdrop":"{name}"}}"#)).unwrap();
+            assert_eq!(parsed.backdrop, backdrop);
+        }
 
         let with_overrides: Settings =
             serde_json::from_str(r#"{"adapter_overrides":{"eth0":false,"wlan0":true}}"#).unwrap();

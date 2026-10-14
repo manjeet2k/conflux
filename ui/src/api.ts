@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   AboutLink,
   AdapterInfo,
+  Backdrop,
   BrowserIntegrationStatus,
   Diagnostics,
   DownloadTask,
@@ -46,7 +47,8 @@ export const api = {
   /** Downloads, pauses running downloads, installs and relaunches; resolves only on failure. */
   installUpdate: () => invoke<void>('install_update'),
   openAboutLink: (target: AboutLink) => invoke<void>('open_about_link', { target }),
-  applyWindowTheme: (dark: boolean) => invoke<WindowBackdrop>('apply_window_theme', { dark }),
+  applyWindowTheme: (dark: boolean, backdrop: Backdrop) =>
+    invoke<WindowBackdrop>('apply_window_theme', { dark, backdrop }),
   getBrowserIntegrationStatus: () =>
     invoke<BrowserIntegrationStatus>('get_browser_integration_status'),
   registerBrowserExtension: () => invoke<void>('register_browser_extension'),

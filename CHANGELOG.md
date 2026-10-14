@@ -9,6 +9,19 @@ All notable changes to Conflux are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Window material setting:** choose Mica Alt (default), Mica, Acrylic or None under Settings → Appearance. Falls back to a weaker material where Windows lacks the requested one.
+- Context menus and dropdown lists use in-app acrylic like Windows 11 flyouts.
+- Clicking a download opens the details pane if it is closed.
+
+### Changed
+- Redesigned download progress bars: status-colored fill on a visible track, a moving sheen while running, and a one-decimal percentage.
+- Windows 11-style rounded row highlight in the download list; toolbar, column headers, rows and status bar now share one left edge.
+
+### Fixed
+- The window material was never visible: the UI root painted an opaque background over it.
+- Blurry text and edges in the download list caused by rows sitting on half-pixel offsets.
+
 ## [0.2.4] - 2026-10-14
 
 ### Added

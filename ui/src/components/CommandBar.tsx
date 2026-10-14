@@ -34,13 +34,17 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
-    padding: '6px 12px 6px 8px',
+    // Left inset matches the list's text column so buttons, headers and rows share one edge.
+    // 48px of content plus the 1px divider; an odd inner height would center on half pixels.
+    height: '49px',
+    boxSizing: 'border-box',
+    padding: '0 12px',
     borderBottom: '1px solid var(--cfx-divider)',
     flexShrink: 0,
   },
   toolbar: { flex: 1, minWidth: 0, overflow: 'hidden' },
   search: { width: '240px' },
-  add: { marginRight: '4px' },
+  add: { marginRight: '4px', minWidth: '88px' },
   divider: { color: tokens.colorNeutralStroke2 },
 });
 

@@ -6,7 +6,6 @@ import {
   MenuList,
   MenuPopover,
   MenuTrigger,
-  ProgressBar,
   Table,
   TableBody,
   TableCell,
@@ -32,7 +31,7 @@ import type { DownloadTask } from '../types';
 import { formatBytes, formatDate, formatDuration, formatEta, formatSpeed, progressOf } from '../utils/formatters';
 import { FileIcon } from './FileIcon';
 import { StatusLabel } from './StatusLabel';
-import { progressColor, statusText } from '../utils/status';
+import { DownloadProgress } from './DownloadProgress';
 import type { SortKey, SortState } from '../utils/sort';
 
 interface Column {
@@ -50,12 +49,15 @@ export const GRID_ID = 'download-grid';
 const columns: Column[] = [
   { key: 'name', label: 'Name' },
   { key: 'size', label: 'Size', width: 88, align: 'end', minListWidth: 640 },
-  { key: 'progress', label: 'Progress', width: 180 },
+  { key: 'progress', label: 'Progress', width: 196 },
   { key: 'speed', label: 'Speed', width: 100, align: 'end', minListWidth: 760 },
   { key: 'eta', label: 'Time left', width: 88, align: 'end', minListWidth: 860 },
   { key: 'status', label: 'Status', width: 124 },
   { key: 'added', label: 'Date added', width: 136, minListWidth: 1000 },
 ];
+
+const ROW_HEIGHT = 36;
+const PILL_HEIGHT = 16;
 
 const useStyles = makeStyles({
   scroller: {
@@ -64,7 +66,7 @@ const useStyles = makeStyles({
     outline: 'none',
     padding: '0 4px 8px',
   },
-  table: { tableLayout: 'fixed' },
+  table: { tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 },
   header: {
     position: 'sticky',
     top: 0,
@@ -72,49 +74,76 @@ const useStyles = makeStyles({
     backgroundColor: 'var(--cfx-header)',
     backdropFilter: 'blur(20px)',
   },
-  headerCell: { fontWeight: tokens.fontWeightRegular, color: tokens.colorNeutralForeground2 },
+  // Whole-pixel heights keep every row below on the pixel grid, so text and edges stay crisp.
+  headerRow: { height: '32px', borderBottom: 'none' },
+  headerCell: {
+    height: '32px',
+    fontWeight: tokens.fontWeightRegular,
+    color: tokens.colorNeutralForeground2,
+  },
+  // Win11 list rows: the highlight is a rounded rectangle inset from the list edges.
   row: {
+    height: `${ROW_HEIGHT}px`,
     cursor: 'default',
     borderBottom: 'none',
-    ':hover': { backgroundColor: 'var(--cfx-subtle-hover)' },
-    ':active': { backgroundColor: 'var(--cfx-subtle-pressed)' },
+    ':hover': { backgroundColor: 'transparent' },
+    ':active': { backgroundColor: 'transparent' },
+    '& > td': { height: `${ROW_HEIGHT}px` },
+    '& > td:first-child': {
+      borderTopLeftRadius: tokens.borderRadiusMedium,
+      borderBottomLeftRadius: tokens.borderRadiusMedium,
+    },
+    '& > td:last-child': {
+      borderTopRightRadius: tokens.borderRadiusMedium,
+      borderBottomRightRadius: tokens.borderRadiusMedium,
+    },
+    '&:hover > td': { backgroundColor: 'var(--cfx-subtle-hover)' },
+    '&:active > td': { backgroundColor: 'var(--cfx-subtle-pressed)' },
   },
   selected: {
-    backgroundColor: 'var(--cfx-selected)',
-    ':hover': { backgroundColor: 'var(--cfx-selected-hover)' },
+    '& > td': { backgroundColor: 'var(--cfx-selected)' },
+    '&:hover > td': { backgroundColor: 'var(--cfx-selected-hover)' },
   },
   focused: {
     outline: `1px solid ${tokens.colorStrokeFocus2}`,
     outlineOffset: '-1px',
+    borderRadius: tokens.borderRadiusMedium,
   },
   firstCell: {
     position: 'relative',
   },
   pill: {
     position: 'absolute',
-    left: '0',
-    top: '50%',
-    transform: 'translateY(-50%)',
+    left: 0,
+    top: `${(ROW_HEIGHT - PILL_HEIGHT) / 2}px`,
     width: '3px',
-    height: '16px',
+    height: `${PILL_HEIGHT}px`,
     borderRadius: '2px',
-    backgroundColor: tokens.colorBrandBackground,
+    backgroundColor: tokens.colorCompoundBrandBackground,
   },
   endHeader: { justifyContent: 'flex-end' },
   end: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' },
   num: { fontVariantNumeric: 'tabular-nums', color: tokens.colorNeutralForeground2 },
   progressCell: { display: 'flex', alignItems: 'center', gap: '10px' },
-  progressBar: { flex: 1 },
-  pausedBar: { backgroundColor: tokens.colorPaletteMarigoldBackground3 },
+  progressBar: { flex: 1, minWidth: 0 },
   percent: {
-    width: '40px',
+    width: '44px',
+    flexShrink: 0,
     textAlign: 'right',
     fontVariantNumeric: 'tabular-nums',
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
   },
   name: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  icon: { color: tokens.colorNeutralForeground2 },
+  icon: { color: tokens.colorNeutralForeground2, fontSize: '20px' },
 });
+
+/** Percent for the list: one decimal while running (so progress visibly moves), whole otherwise. */
+const percentText = (t: DownloadTask, fraction: number) => {
+  if (t.total_bytes <= 0) return '';
+  const pct = fraction * 100;
+  return t.status === 'downloading' && pct < 100 ? `${(Math.floor(pct * 10) / 10).toFixed(1)}%` : `${Math.floor(pct)}%`;
+};
 
 export interface RowActions {
   onOpen: (task: DownloadTask) => void;
@@ -133,6 +162,8 @@ interface DownloadTableProps {
   selected: Set<string>;
   onSelectionChange: (ids: Set<string>) => void;
   actions: RowActions;
+  /** A row was clicked with the mouse (after the selection updated). */
+  onRowClick?: () => void;
 }
 
 export const DownloadTable: React.FC<DownloadTableProps> = ({
@@ -142,6 +173,7 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
   selected,
   onSelectionChange,
   actions,
+  onRowClick: onRowClicked,
 }) => {
   const styles = useStyles();
   const [focusId, setFocusId] = useState<string | null>(null);
@@ -195,6 +227,7 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
     } else {
       selectOnly(id);
     }
+    onRowClicked?.();
   };
 
   const onRowContextMenu = (id: string) => {
@@ -323,7 +356,7 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
             aria-label="Downloads"
           >
             <TableHeader className={styles.header}>
-              <TableRow>{shown.map(headerCell)}</TableRow>
+              <TableRow className={styles.headerRow}>{shown.map(headerCell)}</TableRow>
             </TableHeader>
             <TableBody>
               {tasks.map((t) => {
@@ -359,17 +392,13 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
                     )}
                     <TableCell>
                       <div className={styles.progressCell}>
-                        <ProgressBar
+                        <DownloadProgress
                           className={styles.progressBar}
-                          bar={{ className: t.status === 'paused' ? styles.pausedBar : undefined }}
-                          value={indeterminate ? undefined : fraction}
-                          color={progressColor(t.status)}
-                          thickness="medium"
-                          aria-label={`${statusText[t.status]} ${Math.floor(fraction * 100)}%`}
+                          status={t.status}
+                          fraction={fraction}
+                          indeterminate={indeterminate}
                         />
-                        <span className={styles.percent}>
-                          {t.total_bytes > 0 ? `${Math.floor(fraction * 100)}%` : ''}
-                        </span>
+                        <span className={styles.percent}>{percentText(t, fraction)}</span>
                       </div>
                     </TableCell>
                     {has('speed') && (

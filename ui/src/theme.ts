@@ -1,5 +1,6 @@
 import { createDarkTheme, createLightTheme } from '@fluentui/react-components';
 import type { BrandVariants, Theme } from '@fluentui/react-components';
+import type { Backdrop } from './types';
 
 // Ramp around the Windows 11 default accent (#005FB8 light-mode accent fill at 80).
 const windowsBlue: BrandVariants = {
@@ -57,41 +58,44 @@ export const darkTheme: Theme = {
 
 /**
  * Surface colors that Fluent's tokens don't cover: the Win11 layering model of a window
- * backdrop (Mica, or a solid fallback), a translucent content layer, and cards on it.
- * Exposed as CSS variables on the app root.
+ * backdrop (a material such as Mica, or a solid fallback), a translucent content layer, and
+ * cards on it. Exposed as CSS variables on the app root.
  */
-export function surfaceVars(dark: boolean, mica: boolean): Record<string, string> {
+export function surfaceVars(dark: boolean, backdrop: Backdrop): Record<string, string> {
+  const material = backdrop !== 'none';
+  // Acrylic lets more of the desktop through than Mica, so the layer above it is denser.
+  const acrylic = backdrop === 'acrylic';
   if (dark) {
     return {
-      '--cfx-window': mica ? 'transparent' : '#202020',
-      '--cfx-layer': mica ? 'rgba(58, 58, 58, 0.30)' : '#272727',
+      '--cfx-window': material ? 'transparent' : '#202020',
+      '--cfx-layer': acrylic ? 'rgba(40, 40, 40, 0.55)' : material ? 'rgba(58, 58, 58, 0.30)' : '#272727',
       '--cfx-card': 'rgba(255, 255, 255, 0.05)',
       '--cfx-card-hover': 'rgba(255, 255, 255, 0.08)',
       '--cfx-stroke': 'rgba(255, 255, 255, 0.08)',
       '--cfx-divider': 'rgba(255, 255, 255, 0.0837)',
       '--cfx-subtle-hover': 'rgba(255, 255, 255, 0.06)',
       '--cfx-subtle-pressed': 'rgba(255, 255, 255, 0.04)',
-      '--cfx-track': 'rgba(255, 255, 255, 0.10)',
+      '--cfx-track': 'rgba(255, 255, 255, 0.12)',
       '--cfx-accent': '#60CDFF',
-      '--cfx-header': mica ? 'rgba(44, 44, 44, 0.82)' : '#272727',
-      '--cfx-selected': 'rgba(96, 205, 255, 0.12)',
-      '--cfx-selected-hover': 'rgba(96, 205, 255, 0.16)',
+      '--cfx-header': material ? 'rgba(40, 40, 40, 0.60)' : '#272727',
+      '--cfx-selected': 'rgba(255, 255, 255, 0.07)',
+      '--cfx-selected-hover': 'rgba(255, 255, 255, 0.10)',
     };
   }
   return {
-    '--cfx-window': mica ? 'transparent' : '#F3F3F3',
-    '--cfx-layer': mica ? 'rgba(255, 255, 255, 0.50)' : '#F9F9F9',
+    '--cfx-window': material ? 'transparent' : '#F3F3F3',
+    '--cfx-layer': acrylic ? 'rgba(252, 252, 252, 0.65)' : material ? 'rgba(255, 255, 255, 0.50)' : '#F9F9F9',
     '--cfx-card': 'rgba(255, 255, 255, 0.70)',
     '--cfx-card-hover': 'rgba(249, 249, 249, 0.50)',
     '--cfx-stroke': 'rgba(0, 0, 0, 0.0578)',
     '--cfx-divider': 'rgba(0, 0, 0, 0.0803)',
     '--cfx-subtle-hover': 'rgba(0, 0, 0, 0.0373)',
     '--cfx-subtle-pressed': 'rgba(0, 0, 0, 0.0241)',
-    '--cfx-track': 'rgba(0, 0, 0, 0.08)',
+    '--cfx-track': 'rgba(0, 0, 0, 0.10)',
     '--cfx-accent': '#005FB8',
-    '--cfx-header': mica ? 'rgba(250, 250, 250, 0.85)' : '#F9F9F9',
-    '--cfx-selected': 'rgba(0, 95, 184, 0.08)',
-    '--cfx-selected-hover': 'rgba(0, 95, 184, 0.12)',
+    '--cfx-header': material ? 'rgba(252, 252, 252, 0.70)' : '#F9F9F9',
+    '--cfx-selected': 'rgba(0, 0, 0, 0.0373)',
+    '--cfx-selected-hover': 'rgba(0, 0, 0, 0.0578)',
   };
 }
 

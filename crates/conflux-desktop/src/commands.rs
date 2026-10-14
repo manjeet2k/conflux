@@ -2,7 +2,7 @@ use crate::adapters::{adapter_names, adapter_stat, AdapterInfo};
 use crate::browser_bridge::ExternalDownloadPayload;
 use crate::history::HistoryStore;
 use crate::redact::redact_error;
-use crate::settings::{self, Settings};
+use crate::settings::{self, Backdrop, Settings};
 use crate::state::{AppState, DownloadTaskState, TaskHandle, TaskStatus};
 use conflux_core::{
     discover_adapters as core_discover, remove_resume_sidecar, resume_sidecar_path,
@@ -745,16 +745,18 @@ pub async fn reveal_file(
     }
 }
 
-// ─── 10. Window Theme / Mica ────────────────────────────────
+// ─── 10. Window Theme / Backdrop ────────────────────────────
 #[derive(Debug, Clone, Serialize)]
 pub struct WindowBackdrop {
-    pub mica: bool,
+    /// The material actually applied; `None` means the UI must paint opaque surfaces.
+    pub backdrop: Backdrop,
 }
 
-/// Applies the Windows 11 Mica backdrop tinted for `dark`. Returns `mica: false` where it is
-/// unsupported (Windows 10, Linux, macOS); the UI then paints an opaque background.
+/// Sets the window frame to `dark` and applies the `requested` material, falling back to
+/// weaker ones where Windows lacks it: Acrylic and Mica Alt need Windows 11 22H2+, Mica
+/// needs Windows 11, and Windows 10 gets no material.
 #[tauri::command]
-pub fn apply_window_theme(window: WebviewWindow, dark: bool) -> WindowBackdrop {
+pub fn apply_window_theme(window: WebviewWindow, dark: bool, backdrop: Backdrop) -> WindowBackdrop {
     let theme = if dark {
         tauri::Theme::Dark
     } else {
@@ -763,12 +765,40 @@ pub fn apply_window_theme(window: WebviewWindow, dark: bool) -> WindowBackdrop {
     if let Err(e) = window.set_theme(Some(theme)) {
         warn!("Failed to set window theme: {e}");
     }
-    match window_vibrancy::apply_mica(&window, Some(dark)) {
-        Ok(()) => WindowBackdrop { mica: true },
+    let applied = apply_backdrop(&window, dark, backdrop);
+    info!("Window backdrop: requested {backdrop:?}, applied {applied:?}");
+    WindowBackdrop { backdrop: applied }
+}
+
+fn apply_backdrop(window: &WebviewWindow, dark: bool, requested: Backdrop) -> Backdrop {
+    // Reset to no material first. `clear_tabbed` only succeeds where the system backdrop
+    // API (DWMWA_SYSTEMBACKDROP_TYPE, Windows 11 22H2+) exists, so it doubles as the probe.
+    // Without that API `apply_acrylic` would use the legacy blur that lags while dragging.
+    let system_backdrop = window_vibrancy::clear_tabbed(window).is_ok();
+    let _ = window_vibrancy::clear_mica(window);
+
+    if system_backdrop {
+        let result = match requested {
+            Backdrop::None => return Backdrop::None,
+            Backdrop::Acrylic => window_vibrancy::apply_acrylic(window, None),
+            Backdrop::MicaAlt => window_vibrancy::apply_tabbed(window, Some(dark)),
+            Backdrop::Mica => window_vibrancy::apply_mica(window, Some(dark)),
+        };
+        match result {
+            Ok(()) => return requested,
+            Err(e) => info!("{requested:?} backdrop unavailable: {e}"),
+        }
+    }
+    if requested == Backdrop::None {
+        return Backdrop::None;
+    }
+    // Windows 11 21H2 has only the original Mica; Windows 10 has none.
+    match window_vibrancy::apply_mica(window, Some(dark)) {
+        Ok(()) => Backdrop::Mica,
         Err(e) => {
             info!("Mica backdrop unavailable: {e}");
-            let _ = window_vibrancy::clear_mica(&window);
-            WindowBackdrop { mica: false }
+            let _ = window_vibrancy::clear_mica(window);
+            Backdrop::None
         }
     }
 }
