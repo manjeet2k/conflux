@@ -9,6 +9,24 @@ All notable changes to Conflux are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-14
+
+### Added
+- **Dynamic Range Splitting & Adaptive Chunking:** Real-time throughput-based segment stealing and dynamic range splitting across bonded network adapters. Faster connections automatically claim and split remaining byte segments from slower or stalled interfaces to sustain maximum aggregate bandwidth.
+- **Brave Browser Support:** Full support for Brave alongside Google Chrome, Microsoft Edge, and Mozilla Firefox for browser integration and download interception.
+- **Download Filter Preferences:** Configurable minimum file size threshold for automatic browser download interception.
+- **Direct Store & Add-on Links:** Direct action buttons in Settings to install browser extensions from the Chrome Web Store and Firefox Add-ons (AMO).
+
+### Changed
+- Streamlined browser extension permissions for accelerated store verification and Firefox AMO compliance.
+- Upgraded `rustls` to 0.23.46 resolving TLS key share prediction advisory.
+- Updated third-party licenses inventory.
+
+### Fixed
+- Resolved Settings page freeze caused by PowerShell registry lookups by implementing native direct winreg IPC.
+- Resolved notification dismissal behavior: interactive clicks and action buttons now immediately dismiss notifications across the UI and browser extension.
+- Resolved TOCTOU race condition in dynamic chunk scheduler and improved lockless boundary tracking.
+
 ## [0.2.0-beta.2] - 2026-10-01
 
 ### Added
