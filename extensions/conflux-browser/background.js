@@ -41,6 +41,15 @@ function showNotification(title, message) {
   }
 }
 
+if (typeof chrome !== "undefined" && chrome.notifications) {
+  chrome.notifications.onClicked?.addListener((notificationId) => {
+    chrome.notifications.clear(notificationId);
+  });
+  chrome.notifications.onButtonClicked?.addListener((notificationId) => {
+    chrome.notifications.clear(notificationId);
+  });
+}
+
 function sanitizeReferer(pageUrl, targetUrl) {
   if (!pageUrl) return null;
   try {

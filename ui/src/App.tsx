@@ -5,16 +5,18 @@ import {
   Toast,
   ToastBody,
   ToastTitle,
+  ToastTrigger,
   Toaster,
   makeStyles,
   tokens,
   useId,
   useToastController,
 } from '@fluentui/react-components';
-import type { ToastIntent } from '@fluentui/react-components';
+import type { ToastIntent, ToastProps } from '@fluentui/react-components';
 import {
   ArrowDownload48Regular,
   CheckmarkCircle48Regular,
+  Dismiss16Regular,
   ErrorCircle48Regular,
   PauseCircle48Regular,
   Search48Regular,
@@ -93,15 +95,51 @@ const readPref = (key: string, fallback: boolean) => {
   return v === null ? fallback : v === '1';
 };
 
+interface InteractiveToastProps extends ToastProps {
+  children: React.ReactNode;
+}
+
+const InteractiveToast: React.FC<InteractiveToastProps> = ({ children, onClick, style, ...props }) => {
+  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    onClick?.(e);
+    if (e.defaultPrevented) return;
+    // Don't dismiss if the user is highlighting/selecting text
+    const selection = window.getSelection();
+    if (selection && selection.toString().trim().length > 0) {
+      e.preventDefault();
+    }
+  };
+  return (
+    <ToastTrigger disableButtonEnhancement>
+      <Toast {...props} onClick={handleClick} style={{ cursor: 'pointer', ...style }}>
+        {children}
+      </Toast>
+    </ToastTrigger>
+  );
+};
+
 export const App: React.FC = () => {
   const toasterId = useId('toaster');
   const { dispatchToast } = useToastController(toasterId);
   const notify = useCallback(
     (intent: ToastIntent, title: string) =>
       dispatchToast(
-        <Toast>
-          <ToastTitle>{title}</ToastTitle>
-        </Toast>,
+        <InteractiveToast>
+          <ToastTitle
+            action={
+              <ToastTrigger>
+                <Button
+                  appearance="subtle"
+                  aria-label="Dismiss notification"
+                  icon={<Dismiss16Regular />}
+                  size="small"
+                />
+              </ToastTrigger>
+            }
+          >
+            {title}
+          </ToastTitle>
+        </InteractiveToast>,
         { intent, timeout: intent === 'error' || intent === 'warning' ? 8000 : 3000 }
       ),
     [dispatchToast]
@@ -147,12 +185,24 @@ export const App: React.FC = () => {
       localStorage.setItem(key, '1');
       const timer = window.setTimeout(() => {
         dispatchToast(
-          <Toast>
+          <InteractiveToast>
             <ToastTitle
               action={
-                <Button appearance="transparent" size="small" onClick={() => setView('settings')}>
-                  View
-                </Button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <ToastTrigger>
+                    <Button appearance="transparent" size="small" onClick={() => setView('settings')}>
+                      View
+                    </Button>
+                  </ToastTrigger>
+                  <ToastTrigger>
+                    <Button
+                      appearance="subtle"
+                      aria-label="Dismiss notification"
+                      icon={<Dismiss16Regular />}
+                      size="small"
+                    />
+                  </ToastTrigger>
+                </div>
               }
             >
               Browser integration available
@@ -160,7 +210,7 @@ export const App: React.FC = () => {
             <ToastBody subtitle="Open Settings → Browser Integration to get the extension.">
               Capture downloads directly from Chrome, Edge, and Firefox.
             </ToastBody>
-          </Toast>,
+          </InteractiveToast>,
           { intent: 'info', timeout: 12000 }
         );
       }, 1500);
@@ -283,12 +333,24 @@ export const App: React.FC = () => {
   useEffect(() => {
     const unlisten = listen<UpdateInfo>(UPDATE_AVAILABLE_EVENT, (event) => {
       dispatchToast(
-        <Toast>
+        <InteractiveToast>
           <ToastTitle
             action={
-              <Button appearance="transparent" size="small" onClick={openAbout}>
-                View
-              </Button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <ToastTrigger>
+                  <Button appearance="transparent" size="small" onClick={openAbout}>
+                    View
+                  </Button>
+                </ToastTrigger>
+                <ToastTrigger>
+                  <Button
+                    appearance="subtle"
+                    aria-label="Dismiss notification"
+                    icon={<Dismiss16Regular />}
+                    size="small"
+                  />
+                </ToastTrigger>
+              </div>
             }
           >
             Update available
@@ -296,7 +358,7 @@ export const App: React.FC = () => {
           <ToastBody subtitle="Open Settings → About & Updates to install it.">
             Conflux {event.payload.version} is ready to download.
           </ToastBody>
-        </Toast>,
+        </InteractiveToast>,
         { intent: 'info', timeout: 15000 }
       );
     });
