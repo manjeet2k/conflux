@@ -43,6 +43,7 @@ const labels: Record<ViewId, string> = {
 
 const useStyles = makeStyles({
   root: {
+    position: 'relative',
     display: 'flex',
     flexDirection: 'column',
     padding: '4px 4px 8px',
@@ -72,6 +73,9 @@ const useStyles = makeStyles({
     cursor: 'default',
     whiteSpace: 'nowrap',
     flexShrink: 0,
+    transitionProperty: 'background-color, color',
+    transitionDuration: tokens.durationFaster,
+    transitionTimingFunction: tokens.curveEasyEase,
     ':hover': { backgroundColor: 'var(--cfx-subtle-hover)' },
     ':active': { backgroundColor: 'var(--cfx-subtle-pressed)', color: tokens.colorNeutralForeground2 },
     ':focus-visible': {
@@ -81,16 +85,26 @@ const useStyles = makeStyles({
   },
   selected: {
     backgroundColor: 'var(--cfx-subtle-hover)',
-    '::before': {
-      content: '""',
-      position: 'absolute',
-      left: 0,
-      top: '10px',
-      height: '16px',
-      width: '3px',
-      borderRadius: '2px',
-      backgroundColor: tokens.colorBrandBackground,
+  },
+  indicator: {
+    position: 'absolute',
+    left: '4px',
+    top: 0,
+    width: '3px',
+    height: '16px',
+    borderRadius: '2px',
+    backgroundColor: tokens.colorBrandBackground,
+    pointerEvents: 'none',
+    zIndex: 1,
+    transitionProperty: 'transform, opacity',
+    transitionDuration: `${tokens.durationGentle}, ${tokens.durationNormal}`,
+    transitionTimingFunction: `${tokens.curveDecelerateMax}, ${tokens.curveEasyEase}`,
+    '@media (prefers-reduced-motion: reduce)': {
+      transitionProperty: 'none',
     },
+  },
+  indicatorImmediate: {
+    transitionProperty: 'none',
   },
   label: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' },
   count: {
@@ -118,6 +132,52 @@ interface NavPaneProps {
 
 export const NavPane: React.FC<NavPaneProps> = ({ view, onSelect, counts, compact, onToggleCompact }) => {
   const styles = useStyles();
+  const navRef = React.useRef<HTMLElement | null>(null);
+  const itemRefs = React.useRef<Partial<Record<ViewId, HTMLButtonElement | null>>>({});
+  const isMountedRef = React.useRef(false);
+  const [indicatorPos, setIndicatorPos] = React.useState<{ y: number; ready: boolean; animate: boolean }>({
+    y: 0,
+    ready: false,
+    animate: false,
+  });
+
+  const updateIndicator = React.useCallback(
+    (shouldAnimate: boolean) => {
+      const button = itemRefs.current[view];
+      if (!button) return;
+      const targetY = button.offsetTop + Math.round((button.offsetHeight - 16) / 2);
+      setIndicatorPos((prev) => {
+        if (prev.ready && prev.y === targetY && prev.animate === shouldAnimate) {
+          return prev;
+        }
+        return {
+          y: targetY,
+          ready: true,
+          animate: shouldAnimate,
+        };
+      });
+    },
+    [view]
+  );
+
+  React.useLayoutEffect(() => {
+    if (!isMountedRef.current) {
+      updateIndicator(false);
+      isMountedRef.current = true;
+    } else {
+      updateIndicator(true);
+    }
+  }, [view, updateIndicator]);
+
+  React.useEffect(() => {
+    const navEl = navRef.current;
+    if (!navEl || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      updateIndicator(false);
+    });
+    observer.observe(navEl);
+    return () => observer.disconnect();
+  }, [updateIndicator]);
 
   const item = (id: ViewId, count?: number) => {
     const Icon = icons[id];
@@ -125,6 +185,9 @@ export const NavPane: React.FC<NavPaneProps> = ({ view, onSelect, counts, compac
     const button = (
       <button
         key={id}
+        ref={(el) => {
+          itemRefs.current[id] = el;
+        }}
         className={mergeClasses(styles.item, selected && styles.selected)}
         onClick={() => onSelect(id)}
         aria-current={selected ? 'page' : undefined}
@@ -147,7 +210,15 @@ export const NavPane: React.FC<NavPaneProps> = ({ view, onSelect, counts, compac
   };
 
   return (
-    <nav className={mergeClasses(styles.root, compact ? styles.compact : styles.expanded)}>
+    <nav ref={navRef} className={mergeClasses(styles.root, compact ? styles.compact : styles.expanded)}>
+      <div
+        className={mergeClasses(styles.indicator, !indicatorPos.animate && styles.indicatorImmediate)}
+        style={{
+          transform: `translate3d(0, ${indicatorPos.y}px, 0)`,
+          opacity: indicatorPos.ready ? 1 : 0,
+        }}
+        aria-hidden="true"
+      />
       <button
         className={styles.item}
         onClick={onToggleCompact}

@@ -1,10 +1,10 @@
+import { FolderIcon } from '../components/FileIcon';
 import React, { useEffect, useState } from 'react';
 import { Badge, Button, Dropdown, Option, SpinButton, Spinner, Switch, Text, makeStyles, tokens } from '@fluentui/react-components';
 import {
   Alert20Regular,
   Blur20Regular,
   DarkTheme20Regular,
-  Folder20Regular,
   PlugConnected20Regular,
   Info20Regular,
   Navigation20Regular,
@@ -235,7 +235,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
       <SectionHeader>Downloads</SectionHeader>
       <div className={styles.stack}>
         <SettingsCard
-          icon={<Folder20Regular />}
+          icon={<FolderIcon />}
           title="Default download folder"
           description={
             <span className={styles.path} title={folder}>

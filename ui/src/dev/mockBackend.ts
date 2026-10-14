@@ -134,6 +134,13 @@ function tick() {
   }
 }
 
+// Optional fixture exported by the native Shell test on this Windows PC.
+let nativeIconPreview: Promise<Record<string, { width: number; height: number; rgba: number[] }>> | null = null;
+function previewIcon(extension: string | null, folder: boolean) {
+  nativeIconPreview ??= fetch('/windows-icon-preview.json').then(response => response.ok ? response.json() : {}).catch(() => ({}));
+  return nativeIconPreview.then(icons => icons[folder ? 'folder' : extension ?? ''] ?? icons[''] ?? null);
+}
+
 export function installMockBackend() {
   mockWindows('main');
   mockIPC(
@@ -145,6 +152,8 @@ export function installMockBackend() {
         return t;
       };
       switch (cmd) {
+        case 'get_shell_icon':
+          return previewIcon(args.extension as string | null, Boolean(args.folder));
         case 'discover_adapters':
           applyOverrides();
           return adapterCopies();

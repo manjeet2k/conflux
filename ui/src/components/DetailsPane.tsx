@@ -12,7 +12,6 @@ import {
 } from '@fluentui/react-components';
 import {
   Copy16Regular,
-  FolderOpen20Regular,
   Open20Regular,
   Pause20Regular,
   Play20Regular,
@@ -20,7 +19,8 @@ import {
 } from '@fluentui/react-icons';
 import type { AdapterInfo, DownloadTask } from '../types';
 import { formatBytes, formatDate, formatDuration, formatEta, formatSpeed, progressOf } from '../utils/formatters';
-import { FileIcon } from './FileIcon';
+import { FileIcon, FolderIcon } from './FileIcon';
+import { fileKind, fileTypeLabels } from '../utils/fileTypes';
 import { adapterColor, adapterProblem } from '../utils/adapters';
 import { StatusLabel } from './StatusLabel';
 import { DownloadProgress } from './DownloadProgress';
@@ -41,7 +41,8 @@ const useStyles = makeStyles({
     '> *': { flexShrink: 0 },
   },
   header: { display: 'flex', gap: '12px', alignItems: 'flex-start' },
-  bigIcon: { fontSize: '40px', color: tokens.colorNeutralForeground2, flexShrink: 0 },
+  bigIcon: { fontSize: '48px', flexShrink: 0 },
+  emptyIcon: { fontSize: '56px', marginBottom: '8px', opacity: 0.8 },
   title: { wordBreak: 'break-word', userSelect: 'text' },
   card: {
     backgroundColor: 'var(--cfx-card)',
@@ -110,6 +111,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = (p) => {
     return (
       <aside className={styles.root} aria-label="Details">
         <div className={styles.empty}>
+          <FileIcon filename="" className={styles.emptyIcon} />
           {n === 0 ? (
             <>
               <Subtitle2>No selection</Subtitle2>
@@ -158,6 +160,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = (p) => {
           <Subtitle2 as="h2" className={styles.title} block>
             {t.filename}
           </Subtitle2>
+          <Caption1 block className={styles.muted} style={{ margin: '3px 0 6px' }}>{fileTypeLabels[fileKind(t.filename)]}</Caption1>
           <StatusLabel status={t.status} />
         </div>
       </div>
@@ -178,7 +181,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = (p) => {
             Open
           </Button>
         )}
-        <Button icon={<FolderOpen20Regular />} onClick={() => p.onReveal(t)}>
+        <Button icon={<FolderIcon />} onClick={() => p.onReveal(t)}>
           Show in folder
         </Button>
       </div>

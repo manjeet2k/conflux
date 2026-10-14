@@ -210,3 +210,7 @@ The repository is public, so standard GitHub runners are free; CI is still Windo
 and can be started by hand (`gh workflow run ci.yml`); the Security workflow runs weekly or when
 dependency files change; there are no Dependabot update PRs — a monthly "Dependency report" issue
 lists outdated dependencies instead. Add `[skip ci]` to a commit message to skip all workflows.
+
+### Windows Shell icon preview
+
+The desktop gets file-type and folder icons from Windows without opening download outputs. The browser-only dev backend can use a local fixture exported by the native test `shell_icons::tests::shell_icons_have_visible_pixels_and_transparent_backgrounds`: set `CONFLUX_SHELL_ICON_PREVIEW` in the Windows test process to the absolute path of `ui/windows-icon-preview.json`. This optional fixture is ignored by Git and is not included in the production bundle. Open `http://localhost:5173/icon-preview.html` while the UI dev server is running to inspect the captured icons in light and dark appearances.

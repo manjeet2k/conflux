@@ -64,3 +64,6 @@ _site/
 # Local design reference files
 LOGO_VARIANTS.md
 
+
+# Local Windows Shell icon fixture for browser-only UI previews.
+ui/windows-icon-preview*.json

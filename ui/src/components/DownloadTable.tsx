@@ -20,7 +20,6 @@ import {
 import {
   Add20Regular,
   Delete20Regular,
-  FolderOpen20Regular,
   Link20Regular,
   Open20Regular,
   Pause20Regular,
@@ -29,7 +28,7 @@ import {
 } from '@fluentui/react-icons';
 import type { DownloadTask } from '../types';
 import { formatBytes, formatDate, formatDuration, formatEta, formatSpeed, progressOf } from '../utils/formatters';
-import { FileIcon } from './FileIcon';
+import { FileIcon, FolderIcon } from './FileIcon';
 import { StatusLabel } from './StatusLabel';
 import { DownloadProgress } from './DownloadProgress';
 import type { SortKey, SortState } from '../utils/sort';
@@ -135,7 +134,7 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
   },
   name: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  icon: { color: tokens.colorNeutralForeground2, fontSize: '20px' },
+  icon: { fontSize: '24px' },
 });
 
 /** Percent for the list: one decimal while running (so progress visibly moves), whole otherwise. */
@@ -456,7 +455,7 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
               Open
             </MenuItem>
             <MenuItem
-              icon={<FolderOpen20Regular />}
+              icon={<FolderIcon />}
               disabled={!single}
               onClick={() => single && actions.onReveal(single)}
             >

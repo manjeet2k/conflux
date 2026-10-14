@@ -8,6 +8,7 @@ mod history;
 mod logging;
 mod redact;
 mod settings;
+mod shell_icons;
 mod state;
 mod tray;
 mod updater;
@@ -229,6 +230,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            shell_icons::get_shell_icon,
             commands::discover_adapters,
             commands::set_adapter_enabled,
             commands::probe_url,

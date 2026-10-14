@@ -10,6 +10,7 @@ All notable changes to Conflux are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Native Windows Shell file and folder icons throughout download lists, details, dialogs and folder actions. Icons follow installed file associations, load without reading partial files, and are cached per extension.
 - **Window material setting:** choose Mica Alt (default), Mica, Acrylic or None under Settings → Appearance. Falls back to a weaker material where Windows lacks the requested one.
 - Context menus and dropdown lists use in-app acrylic like Windows 11 flyouts.
 - Clicking a download opens the details pane if it is closed.
@@ -23,6 +24,7 @@ All notable changes to Conflux are documented here. The format follows
 - Browser extension 0.2.2 waits for a desktop task to be accepted before cancelling an intercepted transfer. Dismissal, timeout and host failure retain the browser download.
 
 ### Fixed
+- Retrieve native 256-pixel Shell icon frames for sharp file and folder icons at high display scaling, avoiding enlargement of 48-pixel icons.
 - The window material was never visible: the UI root painted an opaque background over it.
 - Blurry text and edges in the download list caused by rows sitting on half-pixel offsets.
 - Enabled Hyper-V external uplinks by requesting gateway information during Windows discovery.

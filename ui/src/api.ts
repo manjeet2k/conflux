@@ -15,7 +15,11 @@ import type {
 } from './types';
 
 /** Typed wrappers around the Tauri commands in crates/conflux-desktop/src/commands.rs. */
+export interface ShellIconPixels { width: number; height: number; rgba: number[] }
+
 export const api = {
+  getShellIcon: (extension: string | null, folder = false) =>
+    invoke<ShellIconPixels>('get_shell_icon', { extension, folder }),
   discoverAdapters: () => invoke<AdapterInfo[]>('discover_adapters'),
   setAdapterEnabled: (id: string, enabled: boolean) =>
     invoke<AdapterInfo[]>('set_adapter_enabled', { id, enabled }),

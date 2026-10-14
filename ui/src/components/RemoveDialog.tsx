@@ -10,6 +10,7 @@ import {
   DialogTitle,
   Text,
 } from '@fluentui/react-components';
+import { FileIcon } from './FileIcon';
 import type { DownloadTask } from '../types';
 
 interface RemoveDialogProps {
@@ -33,7 +34,12 @@ const RemoveForm: React.FC<RemoveDialogProps> = ({ tasks, onConfirm, onClose }) 
   return (
     <DialogSurface style={{ maxWidth: 460 }}>
       <DialogBody>
-        <DialogTitle style={{ wordBreak: 'break-word' }}>{title}</DialogTitle>
+        <DialogTitle style={{ wordBreak: 'break-word' }}>
+          <span style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <span style={{ fontSize: 32, display: 'flex', flexShrink: 0 }}><FileIcon filename={tasks.length === 1 ? tasks[0].filename : ''} /></span>
+            {title}
+          </span>
+        </DialogTitle>
         <DialogContent style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {unfinished > 0 && (
             <Text>
