@@ -87,8 +87,8 @@ const useStyles = makeStyles({
       animation: 'none',
     },
   },
-  content: { flex: 1, display: 'flex', minHeight: 0 },
-  list: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' },
+  content: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 },
+  list: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' },
 });
 
 const viewStatuses: Partial<Record<ViewId, TaskStatus>> = {
@@ -176,7 +176,7 @@ export const App: React.FC = () => {
   const { settings, loaded: settingsLoaded, update: updateSettings } = useSettings(onError);
   const { dark, backdrop } = useWindowTheme(settings.theme, settings.backdrop);
   const { tasks, start, pause, resume, remove } = useDownloads(onError);
-  const history = useSpeedHistory(tasks);
+  const { history, taskHistory } = useSpeedHistory(tasks);
   const styles = useStyles();
 
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
@@ -605,6 +605,7 @@ export const App: React.FC = () => {
                       <DetailsPane
                         selection={selectedTasks}
                         adapters={adapters}
+                        speedHistory={taskHistory}
                         dark={dark}
                         chunkColors={chunkColors}
                         onResume={(ids) => resume(ids)}
@@ -612,6 +613,7 @@ export const App: React.FC = () => {
                         onOpen={actions.onOpen}
                         onReveal={actions.onReveal}
                         onCopy={copy}
+                        onClose={() => setDetailsOpen(false)}
                       />
                     )}
                   </div>

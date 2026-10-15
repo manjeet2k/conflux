@@ -1,6 +1,7 @@
 import React from 'react';
 import { makeStyles, tokens } from '@fluentui/react-components';
 import { formatSpeed } from '../utils/formatters';
+import { SpeedSparkline } from './SpeedSparkline';
 
 export interface Series {
   key: string;
@@ -34,16 +35,21 @@ function niceCeil(bytesPerSec: number): number {
  * Rolling throughput chart: `area` is drawn filled (the aggregate), `lines` on top (per adapter).
  * Values are right-aligned to `capacity` samples so the chart scrolls in from the right.
  */
-export const SpeedGraph: React.FC<{ area: Series; lines: Series[]; capacity: number; height?: number }> = ({
+export const SpeedGraph: React.FC<{ area: Series; lines: Series[]; capacity: number; height?: number; compact?: boolean; paused?: boolean; active?: boolean }> = ({
   area,
   lines,
   capacity,
-  height = 120,
+  height,
+  compact = false,
+  paused = false,
+  active = false,
 }) => {
   const styles = useStyles();
+  if (compact) return <SpeedSparkline key={area.key} samples={area.values} color={area.color} height={height} paused={paused} active={active} />;
   const W = 600;
-  const H = height;
-  const max = niceCeil(Math.max(...area.values, ...lines.flatMap((l) => l.values), 1));
+  const H = height ?? 120;
+  const observedMax = Math.max(...area.values, ...lines.flatMap((l) => l.values), 1);
+  const max = niceCeil(observedMax);
   const x = (i: number, n: number) => ((capacity - n + i) / Math.max(1, capacity - 1)) * W;
   const y = (v: number) => H - (v / max) * H;
 

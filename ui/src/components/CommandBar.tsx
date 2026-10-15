@@ -25,7 +25,7 @@ import {
   FolderOpen20Regular,
   Link20Regular,
   MoreHorizontal20Regular,
-  PanelRight20Regular,
+  PanelBottom20Regular,
   Broom20Regular,
 } from '@fluentui/react-icons';
 
@@ -165,7 +165,7 @@ const ToolbarToggleButtonStandalone: React.FC<{ checked: boolean; onClick: () =>
     <ToolbarToggleButton
       aria-label="Details pane"
       appearance="subtle"
-      icon={<PanelRight20Regular />}
+      icon={<PanelBottom20Regular />}
       name="panel"
       value="details"
     />

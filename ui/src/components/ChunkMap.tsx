@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { makeStyles, tokens } from '@fluentui/react-components';
+import { makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import { formatBytes } from '../utils/formatters';
 
 const CELL = 8;
 const GAP = 2;
@@ -30,6 +31,14 @@ const useStyles = makeStyles({
     marginRight: '6px',
     verticalAlign: '-1px',
   },
+  compactLegend: {
+    gap: '4px 12px',
+    marginTop: '12px',
+    fontSize: '10px',
+    lineHeight: '16px',
+  },
+  compactSwatch: { width: '7px', height: '7px', borderRadius: '1px', marginRight: '6px', verticalAlign: '0' },
+  scale: { marginLeft: 'auto' },
 });
 
 /** Per cell: which color to paint. Cells cover `bucket` chunks each when there are too many to show 1:1. */
@@ -49,7 +58,7 @@ function cellColor(slice: string, colors: ChunkMapColors): { color: string; alph
  * Canvas chunk map. One cell per chunk when it fits in MAX_ROWS rows; otherwise each cell
  * aggregates a contiguous run of chunks (active/failed win, else shaded by completion).
  */
-export const ChunkMap: React.FC<{ map: string; colors: ChunkMapColors }> = ({ map, colors }) => {
+export const ChunkMap: React.FC<{ map: string; colors: ChunkMapColors; compact?: boolean; totalBytes?: number }> = ({ map, colors, compact = false, totalBytes }) => {
   const styles = useStyles();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [width, setWidth] = useState(0);
@@ -62,11 +71,17 @@ export const ChunkMap: React.FC<{ map: string; colors: ChunkMapColors }> = ({ ma
     return () => ro.disconnect();
   }, []);
 
-  const cols = Math.max(1, Math.floor((width + GAP) / (CELL + GAP)));
-  const bucket = Math.max(1, Math.ceil(map.length / (cols * MAX_ROWS)));
+  const cellWidth = compact ? 6 : CELL;
+  const cellHeight = compact ? 8 : CELL;
+  const gap = compact ? 3 : GAP;
+  const maxRows = compact ? 5 : MAX_ROWS;
+  const cols = Math.max(1, Math.floor((width + gap) / (cellWidth + gap)));
+  const bucket = Math.max(1, Math.ceil(map.length / (cols * maxRows)));
   const cells = Math.ceil(map.length / bucket);
   const rows = Math.max(1, Math.ceil(cells / cols));
-  const height = rows * (CELL + GAP) - GAP;
+  const height = rows * (cellHeight + gap) - gap;
+  const active = map.split('>').length - 1;
+  const swatch = mergeClasses(styles.swatch, compact && styles.compactSwatch);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -82,14 +97,14 @@ export const ChunkMap: React.FC<{ map: string; colors: ChunkMapColors }> = ({ ma
       const { color, alpha } = cellColor(map.slice(i * bucket, (i + 1) * bucket), colors);
       ctx.globalAlpha = alpha;
       ctx.fillStyle = color;
-      const x = (i % cols) * (CELL + GAP);
-      const y = Math.floor(i / cols) * (CELL + GAP);
+      const x = (i % cols) * (cellWidth + gap);
+      const y = Math.floor(i / cols) * (cellHeight + gap);
       ctx.beginPath();
-      ctx.roundRect(x, y, CELL, CELL, 2);
+      ctx.roundRect(x, y, cellWidth, cellHeight, compact ? 0 : 2);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
-  }, [map, colors, width, height, cells, cols, bucket]);
+  }, [map, colors, width, height, cells, cols, bucket, cellWidth, cellHeight, gap, compact]);
 
   return (
     <div>
@@ -100,26 +115,26 @@ export const ChunkMap: React.FC<{ map: string; colors: ChunkMapColors }> = ({ ma
         role="img"
         aria-label={`Chunk map: ${map.split('#').length - 1} of ${map.length} chunks complete`}
       />
-      <div className={styles.legend}>
+      <div className={mergeClasses(styles.legend, compact && styles.compactLegend)}>
         <span>
-          <span className={styles.swatch} style={{ background: colors.done }} />
+          <span className={swatch} style={{ background: colors.done }} />
           Done
         </span>
         <span>
-          <span className={styles.swatch} style={{ background: colors.active }} />
-          Downloading
+          <span className={swatch} style={{ background: colors.active }} />
+          Downloading{compact && ` · ${active} active`}
         </span>
         <span>
-          <span className={styles.swatch} style={{ background: colors.pending }} />
+          <span className={swatch} style={{ background: colors.pending }} />
           Pending
         </span>
         {map.includes('!') && (
           <span>
-            <span className={styles.swatch} style={{ background: colors.failed }} />
+            <span className={swatch} style={{ background: colors.failed }} />
             Failed
           </span>
         )}
-        {bucket > 1 && <span>1 cell = {bucket} chunks</span>}
+        {(compact || bucket > 1) && <span className={compact ? styles.scale : undefined}>1 cell = {bucket} chunk{bucket === 1 ? '' : 's'}{compact && totalBytes != null && totalBytes > 0 && map.length > 0 ? ` · ≈${formatBytes(bucket * totalBytes / map.length)}` : ''}</span>}
       </div>
     </div>
   );

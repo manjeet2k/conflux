@@ -84,16 +84,27 @@ body {
 
 /*
  * 3. Details Pane Entrance:
- * Slide in from right with Fluent deceleration curve.
+ * Slide in from bottom with Fluent deceleration curve.
  */
-@keyframes win11PaneEntrance {
+@keyframes win11BottomPaneEntrance {
   0% {
     opacity: 0;
-    transform: translateX(12px);
+    transform: translateY(12px);
   }
   100% {
     opacity: 1;
-    transform: translateX(0);
+    transform: translateY(0);
+  }
+}
+
+@keyframes win11PaneEntrance {
+  0% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
