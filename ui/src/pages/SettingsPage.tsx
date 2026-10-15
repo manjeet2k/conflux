@@ -1,10 +1,10 @@
-import { FolderIcon } from '../components/FileIcon';
 import React, { useEffect, useState } from 'react';
-import { Badge, Button, Dropdown, Option, SpinButton, Spinner, Switch, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Badge, Button, SpinButton, Spinner, Switch, Text, makeStyles, tokens } from '@fluentui/react-components';
 import {
   Alert20Regular,
   Blur20Regular,
   DarkTheme20Regular,
+  Folder20Regular,
   PlugConnected20Regular,
   Info20Regular,
   Navigation20Regular,
@@ -19,6 +19,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import { api, errorText } from '../api';
 import type { Backdrop, Settings, ThemePreference, UpdateInfo } from '../types';
 import { Page, SectionHeader, SettingsCard } from '../components/Page';
+import { WindowsDropdown } from '../components/WindowsDropdown';
 import chromeLogo from '../assets/browsers/chrome.svg';
 import firefoxLogo from '../assets/browsers/firefox.svg';
 
@@ -31,7 +32,6 @@ const useStyles = makeStyles({
     whiteSpace: 'nowrap',
     color: tokens.colorNeutralForeground2,
   },
-  dropdown: { width: '200px', minWidth: '200px' },
   warning: {
     display: 'flex',
     alignItems: 'center',
@@ -199,43 +199,32 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
       <SectionHeader>Appearance</SectionHeader>
       <div className={styles.stack}>
         <SettingsCard icon={<DarkTheme20Regular />} title="App theme" description="Choose light or dark, or follow Windows">
-          <Dropdown
-            className={styles.dropdown}
-            value={themeLabels[settings.theme]}
-            selectedOptions={[settings.theme]}
-            onOptionSelect={(_, d) => onChange({ theme: d.optionValue as ThemePreference })}
-          >
-            {(Object.keys(themeLabels) as ThemePreference[]).map((t) => (
-              <Option key={t} value={t}>
-                {themeLabels[t]}
-              </Option>
-            ))}
-          </Dropdown>
+          <WindowsDropdown
+            label="App theme"
+            value={settings.theme}
+            options={themeLabels}
+            onChange={(theme) => onChange({ theme })}
+            width={166}
+          />
         </SettingsCard>
         <SettingsCard
           icon={<Blur20Regular />}
           title="Window material"
           description="Let your wallpaper show through the window. Needs Windows 11; Mica Alt and Acrylic need version 22H2 or later."
         >
-          <Dropdown
-            className={styles.dropdown}
-            value={backdropLabels[settings.backdrop]}
-            selectedOptions={[settings.backdrop]}
-            onOptionSelect={(_, d) => onChange({ backdrop: d.optionValue as Backdrop })}
-          >
-            {(Object.keys(backdropLabels) as Backdrop[]).map((b) => (
-              <Option key={b} value={b}>
-                {backdropLabels[b]}
-              </Option>
-            ))}
-          </Dropdown>
+          <WindowsDropdown
+            label="Window material"
+            value={settings.backdrop}
+            options={backdropLabels}
+            onChange={(backdrop) => onChange({ backdrop })}
+          />
         </SettingsCard>
       </div>
 
       <SectionHeader>Downloads</SectionHeader>
       <div className={styles.stack}>
         <SettingsCard
-          icon={<FolderIcon />}
+          icon={<Folder20Regular />}
           title="Default download folder"
           description={
             <span className={styles.path} title={folder}>
@@ -357,11 +346,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
           description="Capture downloads directly from Mozilla Firefox via Firefox Add-ons (AMO)"
         >
           <Button
-            appearance="secondary"
+            appearance="primary"
             icon={<ArrowDownload20Regular />}
             onClick={() => api.openAboutLink('extension-firefox')}
           >
-            Get Firefox add-on
+            Get add-on
           </Button>
         </SettingsCard>
         <SettingsCard

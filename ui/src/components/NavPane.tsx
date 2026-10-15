@@ -74,10 +74,13 @@ const useStyles = makeStyles({
     whiteSpace: 'nowrap',
     flexShrink: 0,
     transitionProperty: 'background-color, color',
-    transitionDuration: tokens.durationFaster,
-    transitionTimingFunction: tokens.curveEasyEase,
+    transitionDuration: `${tokens.durationFaster}, ${tokens.durationFaster}`,
+    transitionTimingFunction: `${tokens.curveEasyEase}, ${tokens.curveEasyEase}`,
     ':hover': { backgroundColor: 'var(--cfx-subtle-hover)' },
-    ':active': { backgroundColor: 'var(--cfx-subtle-pressed)', color: tokens.colorNeutralForeground2 },
+    ':active': {
+      backgroundColor: 'var(--cfx-subtle-pressed)',
+      color: tokens.colorNeutralForeground2,
+    },
     ':focus-visible': {
       outline: `2px solid ${tokens.colorStrokeFocus2}`,
       outlineOffset: '-2px',
@@ -96,15 +99,18 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorBrandBackground,
     pointerEvents: 'none',
     zIndex: 1,
-    transitionProperty: 'transform, opacity',
-    transitionDuration: `${tokens.durationGentle}, ${tokens.durationNormal}`,
-    transitionTimingFunction: `${tokens.curveDecelerateMax}, ${tokens.curveEasyEase}`,
+    transformOrigin: '50% 50%',
+    animationName: 'win11NavPill',
+    animationDuration: 'var(--cfx-nav-dur, 240ms)',
+    animationTimingFunction: 'cubic-bezier(0.1, 0.9, 0.2, 1.0)',
+    animationFillMode: 'forwards',
     '@media (prefers-reduced-motion: reduce)': {
-      transitionProperty: 'none',
+      animation: 'none',
+      transform: 'translate3d(0, var(--cfx-nav-to, 0px), 0)',
     },
   },
   indicatorImmediate: {
-    transitionProperty: 'none',
+    animation: 'none',
   },
   label: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' },
   count: {
@@ -130,13 +136,27 @@ interface NavPaneProps {
   onToggleCompact: () => void;
 }
 
+interface IndicatorState {
+  fromY: number;
+  toY: number;
+  stretch: number;
+  durationMs: number;
+  animKey: number;
+  ready: boolean;
+  animate: boolean;
+}
+
 export const NavPane: React.FC<NavPaneProps> = ({ view, onSelect, counts, compact, onToggleCompact }) => {
   const styles = useStyles();
   const navRef = React.useRef<HTMLElement | null>(null);
   const itemRefs = React.useRef<Partial<Record<ViewId, HTMLButtonElement | null>>>({});
   const isMountedRef = React.useRef(false);
-  const [indicatorPos, setIndicatorPos] = React.useState<{ y: number; ready: boolean; animate: boolean }>({
-    y: 0,
+  const [indicatorPos, setIndicatorPos] = React.useState<IndicatorState>({
+    fromY: 0,
+    toY: 0,
+    stretch: 1,
+    durationMs: 0,
+    animKey: 0,
     ready: false,
     animate: false,
   });
@@ -146,14 +166,40 @@ export const NavPane: React.FC<NavPaneProps> = ({ view, onSelect, counts, compac
       const button = itemRefs.current[view];
       if (!button) return;
       const targetY = button.offsetTop + Math.round((button.offsetHeight - 16) / 2);
+
       setIndicatorPos((prev) => {
-        if (prev.ready && prev.y === targetY && prev.animate === shouldAnimate) {
+        if (prev.ready && prev.toY === targetY && !shouldAnimate) {
           return prev;
         }
+        if (!shouldAnimate || !prev.ready) {
+          return {
+            fromY: targetY,
+            toY: targetY,
+            stretch: 1,
+            durationMs: 0,
+            animKey: prev.animKey,
+            ready: true,
+            animate: false,
+          };
+        }
+        if (prev.toY === targetY) {
+          return prev;
+        }
+
+        const distance = Math.abs(targetY - prev.toY);
+        // WinUI 3 stretch factor: scales with travel distance up to ~2.2x
+        const stretch = Math.min(1.0 + (distance / 36) * 0.45, 2.2);
+        // Fluent motion timing: 200ms for adjacent tabs, up to 270ms for distant tabs
+        const durationMs = distance < 50 ? 200 : 270;
+
         return {
-          y: targetY,
+          fromY: prev.toY,
+          toY: targetY,
+          stretch,
+          durationMs,
+          animKey: prev.animKey + 1,
           ready: true,
-          animate: shouldAnimate,
+          animate: true,
         };
       });
     },
@@ -212,11 +258,18 @@ export const NavPane: React.FC<NavPaneProps> = ({ view, onSelect, counts, compac
   return (
     <nav ref={navRef} className={mergeClasses(styles.root, compact ? styles.compact : styles.expanded)}>
       <div
+        key={indicatorPos.animKey}
         className={mergeClasses(styles.indicator, !indicatorPos.animate && styles.indicatorImmediate)}
-        style={{
-          transform: `translate3d(0, ${indicatorPos.y}px, 0)`,
-          opacity: indicatorPos.ready ? 1 : 0,
-        }}
+        style={
+          {
+            '--cfx-nav-from': `${indicatorPos.fromY}px`,
+            '--cfx-nav-to': `${indicatorPos.toY}px`,
+            '--cfx-nav-stretch': indicatorPos.stretch,
+            '--cfx-nav-dur': `${indicatorPos.durationMs}ms`,
+            opacity: indicatorPos.ready ? 1 : 0,
+            transform: !indicatorPos.animate ? `translate3d(0, ${indicatorPos.toY}px, 0)` : undefined,
+          } as React.CSSProperties
+        }
         aria-hidden="true"
       />
       <button

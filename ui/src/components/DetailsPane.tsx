@@ -12,6 +12,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Copy16Regular,
+  FolderOpen20Regular,
   Open20Regular,
   Pause20Regular,
   Play20Regular,
@@ -19,7 +20,7 @@ import {
 } from '@fluentui/react-icons';
 import type { AdapterInfo, DownloadTask } from '../types';
 import { formatBytes, formatDate, formatDuration, formatEta, formatSpeed, progressOf } from '../utils/formatters';
-import { FileIcon, FolderIcon } from './FileIcon';
+import { FileIcon } from './FileIcon';
 import { fileKind, fileTypeLabels } from '../utils/fileTypes';
 import { adapterColor, adapterProblem } from '../utils/adapters';
 import { StatusLabel } from './StatusLabel';
@@ -39,6 +40,13 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: '12px',
     '> *': { flexShrink: 0 },
+    animationName: 'win11PaneEntrance',
+    animationDuration: '200ms',
+    animationTimingFunction: 'cubic-bezier(0.1, 0.9, 0.2, 1.0)',
+    animationFillMode: 'both',
+    '@media (prefers-reduced-motion: reduce)': {
+      animation: 'none',
+    },
   },
   header: { display: 'flex', gap: '12px', alignItems: 'flex-start' },
   bigIcon: { fontSize: '48px', flexShrink: 0 },
@@ -181,7 +189,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = (p) => {
             Open
           </Button>
         )}
-        <Button icon={<FolderIcon />} onClick={() => p.onReveal(t)}>
+        <Button icon={<FolderOpen20Regular />} onClick={() => p.onReveal(t)}>
           Show in folder
         </Button>
       </div>

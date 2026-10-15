@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Folder20Regular } from '@fluentui/react-icons';
 import { fileKind, fileTypeLabels } from '../utils/fileTypes';
 import { fileExtension, shellIconUrl } from '../utils/shellIcons';
 
@@ -31,9 +32,13 @@ export const FileIcon: React.FC<{ filename: string; className?: string }> = Reac
 
 export const FolderIcon: React.FC<{ className?: string }> = React.memo(({ className }) => {
   const source = useShellIcon(null, true);
-  return <span className={className} aria-hidden="true"
-    style={{ width: 20, height: 20, display: 'inline-flex', flexShrink: 0, verticalAlign: 'middle' }}>
-    {source ? <img src={source} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-      : <span style={{ ...placeholder, width: 18, height: 13, margin: '4px 1px 3px', borderRadius: 3 }} />}
-  </span>;
+  if (source) {
+    return (
+      <span className={className} aria-hidden="true"
+        style={{ width: 20, height: 20, display: 'inline-flex', flexShrink: 0, verticalAlign: 'middle' }}>
+        <img src={source} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+      </span>
+    );
+  }
+  return <Folder20Regular className={className} aria-hidden="true" />;
 });

@@ -1,5 +1,4 @@
 import React from 'react';
-import { FolderIcon } from './FileIcon';
 import {
   Button,
   Menu,
@@ -23,6 +22,7 @@ import {
   Pause20Regular,
   Delete20Regular,
   Open20Regular,
+  FolderOpen20Regular,
   Link20Regular,
   MoreHorizontal20Regular,
   PanelRight20Regular,
@@ -109,7 +109,7 @@ export const CommandBar: React.FC<CommandBarProps> = (p) => {
         <Tooltip content="Show in folder" relationship="description">
           <ToolbarButton
             aria-label="Show in folder"
-            icon={<FolderIcon />}
+            icon={<FolderOpen20Regular />}
             disabled={!p.canReveal}
             onClick={p.onReveal}
           />

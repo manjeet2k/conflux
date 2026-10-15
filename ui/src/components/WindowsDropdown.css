@@ -1,0 +1,167 @@
+.cfx-windows-dropdown.fui-Dropdown {
+  height: 32px;
+  min-height: 32px;
+  border: 1px solid var(--cfx-control-stroke);
+  border-bottom-color: var(--cfx-control-bottom-stroke);
+  border-radius: 4px;
+  background-color: var(--cfx-control-fill);
+  transition: background-color 83ms linear;
+}
+
+.cfx-windows-dropdown.fui-Dropdown:hover {
+  background-color: var(--cfx-control-fill-hover);
+  border-color: var(--cfx-control-stroke);
+  border-bottom-color: var(--cfx-control-bottom-stroke);
+}
+
+.cfx-windows-dropdown.fui-Dropdown:active,
+.cfx-windows-dropdown.fui-Dropdown:has([aria-expanded='true']) {
+  background-color: var(--cfx-control-fill-pressed);
+  border-color: var(--cfx-control-stroke);
+}
+
+/* Keep the trigger's geometry, focus, and ARIA control while only its popup is painted. */
+.cfx-windows-dropdown.fui-Dropdown:has(.fui-Dropdown__button[aria-expanded='true']) {
+  opacity: 0;
+}
+
+/* A read-only WinUI ComboBox uses a keyboard focus ring, rather than an input underline. */
+.cfx-windows-dropdown.fui-Dropdown::after {
+  display: none;
+}
+
+.cfx-windows-dropdown.fui-Dropdown:has(.fui-Dropdown__button:focus-visible[aria-expanded='false']) {
+  outline: 2px solid var(--colorStrokeFocus2);
+  outline-offset: -3px;
+}
+
+.cfx-windows-dropdown .fui-Dropdown__button {
+  height: 30px;
+  min-height: 30px;
+  padding: 5px 11px;
+  column-gap: 12px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.cfx-windows-dropdown .fui-Dropdown__expandIcon {
+  margin: 0;
+  font-size: 12px;
+  color: var(--colorNeutralForeground2);
+  transition: translate 83ms cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+.cfx-windows-dropdown:active .fui-Dropdown__expandIcon {
+  translate: 0 2px;
+}
+
+.cfx-windows-dropdown.fui-Dropdown:has(.fui-Dropdown__button:disabled) {
+  background-color: var(--cfx-control-fill-disabled);
+  border-color: var(--cfx-control-stroke);
+}
+
+.cfx-windows-dropdown:has(.fui-Dropdown__button:disabled) .fui-Dropdown__expandIcon {
+  color: var(--colorNeutralForegroundDisabled);
+}
+
+body .cfx-windows-dropdown-listbox.fui-Listbox {
+  width: max-content;
+  min-width: var(--cfx-dropdown-min-width);
+  padding: var(--cfx-dropdown-padding) 0;
+  row-gap: 0;
+  border: 1px solid var(--cfx-flyout-stroke);
+  border-width: var(--cfx-dropdown-border);
+  border-radius: 8px;
+  outline: none;
+  background-color: var(--cfx-flyout-fill);
+  /* Fine monochrome grain is part of the recorded acrylic material. */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.045'/%3E%3C/svg%3E");
+  box-shadow: var(--cfx-flyout-shadow);
+  backdrop-filter: blur(30px) saturate(125%);
+  -webkit-backdrop-filter: blur(30px) saturate(125%);
+  /* Reveal both sides from the current row, preserving Floating UI's positioning transform. */
+  animation: cfx-combobox-open 200ms cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+body .cfx-windows-dropdown-listbox .fui-Option {
+  box-sizing: border-box;
+  height: var(--cfx-dropdown-row-height);
+  min-height: var(--cfx-dropdown-row-height);
+  flex-shrink: 0;
+  margin: var(--cfx-dropdown-margin-y) var(--cfx-dropdown-margin-x);
+  padding: var(--cfx-dropdown-item-padding);
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 20px;
+  column-gap: 0;
+  cursor: default;
+  background-color: transparent;
+  transition: background-color 83ms linear;
+}
+
+body .cfx-windows-dropdown-listbox .fui-Option[aria-selected='true'] {
+  background-color: var(--cfx-selected);
+}
+
+body .cfx-windows-dropdown-listbox .fui-Option:hover,
+body .cfx-windows-dropdown-listbox .fui-Option[data-activedescendant-focusvisible] {
+  background-color: var(--cfx-subtle-hover);
+}
+
+body .cfx-windows-dropdown-listbox .fui-Option[aria-selected='true']:hover,
+body .cfx-windows-dropdown-listbox .fui-Option[aria-selected='true'][data-activedescendant-focusvisible] {
+  background-color: var(--cfx-selected-hover);
+}
+
+body .cfx-windows-dropdown-listbox .fui-Option:active {
+  background-color: var(--cfx-subtle-pressed);
+}
+
+body .cfx-windows-dropdown-listbox .fui-Option[aria-selected='true']::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  top: calc(50% - 8px);
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background-color: var(--cfx-accent);
+}
+
+@keyframes cfx-combobox-open {
+  from {
+    clip-path: inset(var(--cfx-dropdown-reveal-top) 0 var(--cfx-dropdown-reveal-bottom) 0);
+  }
+  to {
+    clip-path: inset(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body .cfx-windows-dropdown-listbox.fui-Listbox {
+    animation: none;
+  }
+
+  .cfx-windows-dropdown.fui-Dropdown,
+  .cfx-windows-dropdown .fui-Dropdown__expandIcon,
+  body .cfx-windows-dropdown-listbox .fui-Option {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .cfx-windows-dropdown.fui-Dropdown,
+  body .cfx-windows-dropdown-listbox.fui-Listbox {
+    border-color: ButtonText;
+    background-color: Canvas;
+    background-image: none;
+    box-shadow: none;
+  }
+
+  body .cfx-windows-dropdown-listbox .fui-Option[aria-selected='true']::before {
+    background-color: Highlight;
+  }
+}

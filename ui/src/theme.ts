@@ -1,5 +1,5 @@
-import { createDarkTheme, createLightTheme } from '@fluentui/react-components';
-import type { BrandVariants, Theme } from '@fluentui/react-components';
+import { createDarkTheme, createLightTheme, mergeClasses } from '@fluentui/react-components';
+import type { BrandVariants, ButtonState, FluentProviderProps, Theme } from '@fluentui/react-components';
 import type { Backdrop } from './types';
 
 // Ramp around the Windows 11 default accent (#005FB8 light-mode accent fill at 80).
@@ -25,6 +25,21 @@ const windowsBlue: BrandVariants = {
 const fontFamilyBase =
   "'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif";
 const fontFamilyMonospace = "'Cascadia Mono', Consolas, 'Courier New', monospace";
+
+// Fluent's styling extension also covers buttons rendered in dialog and toast portals.
+export const windowsControlStyleHooks: NonNullable<FluentProviderProps['customStyleHooks_unstable']> = {
+  useButtonStyles_unstable: (baseState) => {
+    const state = baseState as ButtonState;
+    state.root.className = mergeClasses(
+      state.root.className,
+      'cfx-button',
+      `cfx-button-${state.appearance}`,
+      `cfx-button-${state.size}`,
+      state.iconOnly && 'cfx-button-icon-only',
+      (state.disabled || state.disabledFocusable) && 'cfx-button-disabled',
+    );
+  },
+};
 
 export const lightTheme: Theme = {
   ...createLightTheme(windowsBlue),
@@ -77,6 +92,15 @@ export function surfaceVars(dark: boolean, backdrop: Backdrop): Record<string, s
       '--cfx-subtle-pressed': 'rgba(255, 255, 255, 0.04)',
       '--cfx-track': 'rgba(255, 255, 255, 0.12)',
       '--cfx-accent': '#60CDFF',
+      '--cfx-control-fill': 'rgba(255, 255, 255, 0.0605)',
+      '--cfx-control-fill-hover': 'rgba(255, 255, 255, 0.0837)',
+      '--cfx-control-fill-pressed': 'rgba(255, 255, 255, 0.0326)',
+      '--cfx-control-fill-disabled': 'rgba(255, 255, 255, 0.0419)',
+      '--cfx-control-stroke': 'rgba(255, 255, 255, 0.0698)',
+      '--cfx-control-bottom-stroke': 'rgba(0, 0, 0, 0.20)',
+      '--cfx-flyout-fill': 'rgba(32, 32, 32, 0.96)',
+      '--cfx-flyout-stroke': 'rgba(0, 0, 0, 0.20)',
+      '--cfx-flyout-shadow': '0 8px 16px rgba(0, 0, 0, 0.26), 0 2px 4px rgba(0, 0, 0, 0.16)',
       '--cfx-header': material ? 'rgba(40, 40, 40, 0.60)' : '#272727',
       '--cfx-selected': 'rgba(255, 255, 255, 0.07)',
       '--cfx-selected-hover': 'rgba(255, 255, 255, 0.10)',
@@ -93,6 +117,15 @@ export function surfaceVars(dark: boolean, backdrop: Backdrop): Record<string, s
     '--cfx-subtle-pressed': 'rgba(0, 0, 0, 0.0241)',
     '--cfx-track': 'rgba(0, 0, 0, 0.10)',
     '--cfx-accent': '#005FB8',
+    '--cfx-control-fill': 'rgba(255, 255, 255, 0.70)',
+    '--cfx-control-fill-hover': 'rgba(249, 249, 249, 0.50)',
+    '--cfx-control-fill-pressed': 'rgba(249, 249, 249, 0.30)',
+    '--cfx-control-fill-disabled': 'rgba(249, 249, 249, 0.30)',
+    '--cfx-control-stroke': 'rgba(0, 0, 0, 0.0578)',
+    '--cfx-control-bottom-stroke': 'rgba(0, 0, 0, 0.1622)',
+    '--cfx-flyout-fill': 'rgba(252, 252, 252, 0.96)',
+    '--cfx-flyout-stroke': 'rgba(0, 0, 0, 0.0578)',
+    '--cfx-flyout-shadow': '0 8px 16px rgba(0, 0, 0, 0.14), 0 2px 4px rgba(0, 0, 0, 0.08)',
     '--cfx-header': material ? 'rgba(252, 252, 252, 0.70)' : '#F9F9F9',
     '--cfx-selected': 'rgba(0, 0, 0, 0.0373)',
     '--cfx-selected-hover': 'rgba(0, 0, 0, 0.0578)',

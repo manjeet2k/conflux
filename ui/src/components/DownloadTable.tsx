@@ -20,6 +20,7 @@ import {
 import {
   Add20Regular,
   Delete20Regular,
+  FolderOpen20Regular,
   Link20Regular,
   Open20Regular,
   Pause20Regular,
@@ -28,7 +29,7 @@ import {
 } from '@fluentui/react-icons';
 import type { DownloadTask } from '../types';
 import { formatBytes, formatDate, formatDuration, formatEta, formatSpeed, progressOf } from '../utils/formatters';
-import { FileIcon, FolderIcon } from './FileIcon';
+import { FileIcon } from './FileIcon';
 import { StatusLabel } from './StatusLabel';
 import { DownloadProgress } from './DownloadProgress';
 import type { SortKey, SortState } from '../utils/sort';
@@ -455,7 +456,7 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
               Open
             </MenuItem>
             <MenuItem
-              icon={<FolderIcon />}
+              icon={<FolderOpen20Regular />}
               disabled={!single}
               onClick={() => single && actions.onReveal(single)}
             >

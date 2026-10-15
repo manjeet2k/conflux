@@ -16,6 +16,9 @@ All notable changes to Conflux are documented here. The format follows
 - Clicking a download opens the details pane if it is closed.
 
 ### Changed
+- Buttons throughout the app share quick shading feedback and a smooth release, including toolbar, navigation, icon and dialog controls; text stays at its original size, and reduced-motion settings suppress transitions.
+- Push buttons use the reference's quiet filled surface, normal-weight text, and compact rounded sizing; dropdown triggers disappear while their popup is open and return on dismissal or selection.
+- Settings dropdowns follow the recorded Task Manager behavior: content-sized acrylic popups, device-pixel-rounded item spacing, a surface reveal around the current choice, and immediate dismissal.
 - Redesigned download progress bars: status-colored fill on a visible track, a moving sheen while running, and a one-decimal percentage.
 - Windows 11-style rounded row highlight in the download list; toolbar, column headers, rows and status bar now share one left edge.
 - Parallel downloads and block resume require verified ranges, a known size and a strong ETag. Other transfers restart as a complete single stream, including when a server loses range support.
@@ -24,6 +27,8 @@ All notable changes to Conflux are documented here. The format follows
 - Browser extension 0.2.2 waits for a desktop task to be accepted before cancelling an intercepted transfer. Dismissal, timeout and host failure retain the browser download.
 
 ### Fixed
+- Restored standard Fluent UI vector icons (`FolderOpen20Regular` and `Folder20Regular`) for folder action buttons, menus, and settings cards, and added a `Folder20Regular` fallback to `FolderIcon` when shell icons are unavailable.
+- Prevented Fluent's opaque pressed fill from turning neutral buttons black; button presses retain a subtle translucent fill without an inset shadow.
 - Retrieve native 256-pixel Shell icon frames for sharp file and folder icons at high display scaling, avoiding enlargement of 48-pixel icons.
 - The window material was never visible: the UI root painted an opaque background over it.
 - Blurry text and edges in the download list caused by rows sitting on half-pixel offsets.

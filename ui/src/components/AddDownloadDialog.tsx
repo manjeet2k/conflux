@@ -17,13 +17,13 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { Link20Regular } from '@fluentui/react-icons';
+import { Folder20Regular, Link20Regular } from '@fluentui/react-icons';
 import { open } from '@tauri-apps/plugin-dialog';
 import { downloadDir } from '@tauri-apps/api/path';
 import { api, errorText } from '../api';
 import type { ProbeResult, RequestHeaders } from '../types';
 import { formatBytes } from '../utils/formatters';
-import { FileIcon, FolderIcon } from './FileIcon';
+import { FileIcon } from './FileIcon';
 
 const useStyles = makeStyles({
   surface: { width: '560px', maxWidth: 'calc(100vw - 48px)' },
@@ -252,7 +252,7 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
                   placeholder="Choose a folder"
                   spellCheck={false}
                 />
-                <Button icon={<FolderIcon />} onClick={browse}>
+                <Button icon={<Folder20Regular />} onClick={browse}>
                   Browse
                 </Button>
               </div>

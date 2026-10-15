@@ -10,6 +10,9 @@ body,
 }
 
 body {
+  --cfx-button-press-duration: 83ms;
+  --cfx-button-release-duration: 167ms;
+  --cfx-button-release-curve: cubic-bezier(0.1, 0.9, 0.2, 1);
   user-select: none;
   /* No `text-rendering: geometricPrecision`: it turns hinting off and makes Segoe UI look soft. */
   -webkit-font-smoothing: auto;
@@ -38,22 +41,237 @@ body {
 }
 
 /*
- * Win11 flyouts (context menus, dropdown lists, popovers) are in-app acrylic: a translucent
- * fill over a blur of the window beneath. Portals carry the theme's token variables, so the
- * fill follows light/dark. `body` raises specificity above Fluent's atomic classes.
+ * =============================================================================
+ * Windows 11 Task Manager Native Motion & Fluent Design System
+ * =============================================================================
+ */
+
+/*
+ * 1. Tab Navigation Pill Animation:
+ * Squash-and-stretch capsule matching WinUI 3 NavigationView connected animation.
+ */
+@keyframes win11NavPill {
+  0% {
+    transform: translate3d(0, var(--cfx-nav-from, 0px), 0) scaleY(1);
+  }
+  42% {
+    transform: translate3d(0, calc(var(--cfx-nav-from, 0px) + (var(--cfx-nav-to, 0px) - var(--cfx-nav-from, 0px)) * 0.46), 0)
+      scaleY(var(--cfx-nav-stretch, 1.45));
+  }
+  82% {
+    transform: translate3d(0, calc(var(--cfx-nav-from, 0px) + (var(--cfx-nav-to, 0px) - var(--cfx-nav-from, 0px)) * 0.90), 0)
+      scaleY(1.08);
+  }
+  100% {
+    transform: translate3d(0, var(--cfx-nav-to, 0px), 0) scaleY(1);
+  }
+}
+
+/*
+ * 2. Page & View Content Entrance:
+ * WinUI EntranceNavigationTransitionInfo (subtle 6px upward slide + fade).
+ */
+@keyframes win11PageEntrance {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/*
+ * 3. Details Pane Entrance:
+ * Slide in from right with Fluent deceleration curve.
+ */
+@keyframes win11PaneEntrance {
+  0% {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/*
+ * 4. Dropdown & Context Menu Flyout Entrance:
+ * Pure opacity fade to strictly preserve Floating UI's translate3d positioning coordinates.
+ */
+@keyframes win11FlyoutFade {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes win11TooltipFade {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/*
+ * Win11 flyouts (context menus, dropdown lists, popovers):
+ * In-app acrylic translucent fill, Fluent elevation, and smooth fade entrance
+ * without interfering with Floating UI positioning coordinates.
  */
 body .fui-MenuPopover,
 body .fui-Listbox,
 body .fui-PopoverSurface {
-  background-color: color-mix(in srgb, var(--colorNeutralBackground1) 82%, transparent);
+  background-color: color-mix(in srgb, var(--colorNeutralBackground1) 85%, transparent);
   backdrop-filter: blur(30px) saturate(125%);
+  -webkit-backdrop-filter: blur(30px) saturate(125%);
+  animation: win11FlyoutFade 120ms cubic-bezier(0.1, 0.9, 0.2, 1.0);
 }
+
+/* Flyout and Dropdown Items */
 body .fui-MenuPopover .fui-MenuItem,
 body .fui-Listbox .fui-Option {
   background-color: transparent;
+  border-radius: 4px;
+  transition: background-color 100ms ease, color 100ms ease;
 }
+
 body .fui-MenuPopover .fui-MenuItem:hover,
 body .fui-MenuPopover .fui-MenuItem:focus-visible,
-body .fui-Listbox .fui-Option:hover {
+body .fui-Listbox .fui-Option:hover,
+body .fui-Listbox .fui-Option:focus-visible {
   background-color: var(--colorSubtleBackgroundHover);
+}
+
+body .fui-MenuPopover .fui-MenuItem:active,
+body .fui-Listbox .fui-Option:active {
+  background-color: var(--colorSubtleBackgroundPressed);
+}
+
+body .fui-MenuDivider {
+  margin: 4px 6px;
+  border-color: var(--cfx-divider);
+}
+
+/* WinUI push buttons: 32-DIP controls with normal-weight text and a quiet filled surface. */
+body .cfx-button {
+  border-radius: 4px;
+  font-weight: 400;
+  cursor: default;
+}
+
+body .cfx-button:hover {
+  cursor: default;
+}
+
+body .cfx-button-medium {
+  min-height: 32px;
+  min-width: 0;
+  padding: 5px 11px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+body .cfx-button-medium.cfx-button-icon-only {
+  min-width: 32px;
+  padding: 5px;
+}
+
+body .cfx-button-secondary {
+  background-color: var(--cfx-control-fill);
+  border: 1px solid var(--cfx-control-stroke);
+  color: var(--colorNeutralForeground1);
+}
+
+body .cfx-button-secondary:not(.cfx-button-disabled):hover {
+  background-color: var(--cfx-control-fill-hover);
+  border-color: var(--cfx-control-stroke);
+  color: var(--colorNeutralForeground1);
+}
+
+/* Fluent also applies :hover:active and :active:focus-visible; match those
+ * states so its opaque pressed fill cannot override this translucent fill. */
+body .cfx-button-secondary:not(.cfx-button-disabled):active,
+body .cfx-button-secondary:not(.cfx-button-disabled):hover:active,
+body .cfx-button-secondary:not(.cfx-button-disabled):active:focus-visible {
+  background-color: var(--cfx-control-fill-pressed);
+  border-color: var(--cfx-control-stroke);
+  color: var(--colorNeutralForeground2);
+}
+
+body .cfx-button-secondary.cfx-button-disabled,
+body .cfx-button-secondary.cfx-button-disabled:is(:hover, :active, :focus-visible) {
+  background-color: var(--cfx-control-fill-disabled);
+  border-color: var(--cfx-control-stroke);
+  color: var(--colorNeutralForegroundDisabled);
+}
+
+/* Animate the fill rather than scaling the text raster. Whole-button scaling
+ * makes glyphs change shape at fractional Windows display scaling.
+ * Native :active also follows a held Space key.
+ */
+body button:not(:disabled):not([aria-disabled='true']) {
+  transition:
+    background-color var(--cfx-button-release-duration) var(--cfx-button-release-curve),
+    border-color var(--cfx-button-release-duration) var(--cfx-button-release-curve),
+    color 83ms linear;
+}
+
+body button:not(:disabled):not([aria-disabled='true']):active {
+  transition-duration: var(--cfx-button-press-duration);
+  transition-timing-function: linear;
+}
+
+/* Native tooltip animation */
+body .fui-Tooltip {
+  animation: win11TooltipFade 120ms cubic-bezier(0.1, 0.9, 0.2, 1.0) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body button:not(:disabled):not([aria-disabled='true']),
+  body button:not(:disabled):not([aria-disabled='true']):active {
+    transition: none;
+  }
+
+  body .fui-MenuPopover,
+  body .fui-Listbox,
+  body .fui-PopoverSurface,
+  body .fui-Tooltip,
+  body .cfx-button,
+  body .fui-Button:active,
+  body .fui-ToolbarButton:active {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  body .cfx-button-secondary {
+    background-color: ButtonFace;
+    border-color: ButtonText;
+    color: ButtonText;
+  }
+
+  body .cfx-button-secondary:not(.cfx-button-disabled):hover,
+  body .cfx-button-secondary:not(.cfx-button-disabled):active,
+  body .cfx-button-secondary:not(.cfx-button-disabled):hover:active,
+  body .cfx-button-secondary:not(.cfx-button-disabled):active:focus-visible {
+    background-color: Highlight;
+    border-color: Highlight;
+    color: HighlightText;
+  }
+
+  body .cfx-button-secondary.cfx-button-disabled,
+  body .cfx-button-secondary.cfx-button-disabled:is(:hover, :active, :focus-visible) {
+    background-color: ButtonFace;
+    border-color: GrayText;
+    color: GrayText;
+  }
 }

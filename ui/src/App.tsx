@@ -25,7 +25,7 @@ import { listen } from '@tauri-apps/api/event';
 import { api, errorText } from './api';
 import type { AdapterInfo, DownloadTask, ExternalDownloadPayload, RequestHeaders, TaskStatus, UpdateInfo, ViewId } from './types';
 import { EXTERNAL_DOWNLOAD_EVENT, NETWORK_ADAPTERS_CHANGED_EVENT, UPDATE_AVAILABLE_EVENT } from './types';
-import { darkTheme, lightTheme, surfaceVars } from './theme';
+import { darkTheme, lightTheme, surfaceVars, windowsControlStyleHooks } from './theme';
 import { useDownloads } from './hooks/useDownloads';
 import { useSettings } from './hooks/useSettings';
 import { useWindowTheme } from './hooks/useWindowTheme';
@@ -49,6 +49,9 @@ import { advanceDownload, enqueueDownload, presentQueuedDownload } from './utils
 import type { DownloadQueue, DownloadRequest } from './utils/downloadQueue';
 
 const useStyles = makeStyles({
+  // Provider classes also reach portal roots; inline custom properties do not.
+  darkSurfaces: surfaceVars(true, 'none'),
+  lightSurfaces: surfaceVars(false, 'none'),
   root: {
     height: '100vh',
     display: 'flex',
@@ -69,6 +72,20 @@ const useStyles = makeStyles({
     borderLeft: '1px solid var(--cfx-stroke)',
     borderTopLeftRadius: tokens.borderRadiusXLarge,
     overflow: 'hidden',
+  },
+  viewContainer: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    animationName: 'win11PageEntrance',
+    animationDuration: '200ms',
+    animationTimingFunction: 'cubic-bezier(0.1, 0.9, 0.2, 1.0)',
+    animationFillMode: 'both',
+    '@media (prefers-reduced-motion: reduce)': {
+      animation: 'none',
+    },
   },
   content: { flex: 1, display: 'flex', minHeight: 0 },
   list: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' },
@@ -509,6 +526,8 @@ export const App: React.FC = () => {
     // material; the root below paints `--cfx-window` instead.
     <FluentProvider
       theme={dark ? darkTheme : lightTheme}
+      customStyleHooks_unstable={windowsControlStyleHooks}
+      className={dark ? styles.darkSurfaces : styles.lightSurfaces}
       style={{ ...surfaceVars(dark, backdrop), backgroundColor: 'transparent' }}
     >
       <div className={styles.root}>
@@ -525,97 +544,99 @@ export const App: React.FC = () => {
             onToggleCompact={() => setCompactNav((c) => !c)}
           />
           <main className={styles.layer}>
-            {isListView && (
-              <>
-                <CommandBar
-                  canResume={selectedTasks.some(isResumable)}
-                  canPause={selectedTasks.some(isRunning)}
-                  canRemove={selectedTasks.length > 0}
-                  canOpen={single?.status === 'completed'}
-                  canReveal={!!single}
-                  canCopyLink={selectedTasks.length > 0}
-                  anyPaused={tasks.some(isResumable)}
-                  anyActive={tasks.some(isRunning)}
-                  anyCompleted={counts.completed > 0}
-                  onAdd={() => openAdd()}
-                  onResume={() => resume(idsWhere(selectedTasks, isResumable))}
-                  onPause={() => pause(idsWhere(selectedTasks, isRunning))}
-                  onRemove={() => setRemoveIds(selectedTasks.map((t) => t.id))}
-                  onOpen={() => single && actions.onOpen(single)}
-                  onReveal={() => single && actions.onReveal(single)}
-                  onCopyLink={() => actions.onCopyLink(selectedTasks)}
-                  onResumeAll={() => resume(idsWhere(tasks, isResumable))}
-                  onPauseAll={() => pause(idsWhere(tasks, isRunning))}
-                  onClearCompleted={() =>
-                    remove(
-                      idsWhere(tasks, (t) => t.status === 'completed'),
-                      false
-                    )
-                  }
-                  search={search}
-                  onSearch={setSearch}
-                  searchRef={searchRef}
-                  detailsOpen={detailsOpen}
-                  onToggleDetails={() => setDetailsOpen((d) => !d)}
-                />
-                <div className={styles.content}>
-                  <div className={styles.list}>
-                    {visible.length === 0 ? (
-                      search.trim() ? (
-                        <EmptyState icon={Search48Regular} title="No matches" body={`Nothing matches "${search.trim()}".`} />
-                      ) : (
-                        <EmptyState
-                          {...empty}
-                          onAdd={view === 'all' || view === 'active' ? () => openAdd() : undefined}
-                        />
+            <div key={view} className={styles.viewContainer}>
+              {isListView && (
+                <>
+                  <CommandBar
+                    canResume={selectedTasks.some(isResumable)}
+                    canPause={selectedTasks.some(isRunning)}
+                    canRemove={selectedTasks.length > 0}
+                    canOpen={single?.status === 'completed'}
+                    canReveal={!!single}
+                    canCopyLink={selectedTasks.length > 0}
+                    anyPaused={tasks.some(isResumable)}
+                    anyActive={tasks.some(isRunning)}
+                    anyCompleted={counts.completed > 0}
+                    onAdd={() => openAdd()}
+                    onResume={() => resume(idsWhere(selectedTasks, isResumable))}
+                    onPause={() => pause(idsWhere(selectedTasks, isRunning))}
+                    onRemove={() => setRemoveIds(selectedTasks.map((t) => t.id))}
+                    onOpen={() => single && actions.onOpen(single)}
+                    onReveal={() => single && actions.onReveal(single)}
+                    onCopyLink={() => actions.onCopyLink(selectedTasks)}
+                    onResumeAll={() => resume(idsWhere(tasks, isResumable))}
+                    onPauseAll={() => pause(idsWhere(tasks, isRunning))}
+                    onClearCompleted={() =>
+                      remove(
+                        idsWhere(tasks, (t) => t.status === 'completed'),
+                        false
                       )
-                    ) : (
-                      <DownloadTable
-                        tasks={visible}
-                        sort={sort}
-                        onSort={setSort}
-                        selected={selected}
-                        onSelectionChange={setSelected}
-                        actions={actions}
-                        onRowClick={() => setDetailsOpen(true)}
+                    }
+                    search={search}
+                    onSearch={setSearch}
+                    searchRef={searchRef}
+                    detailsOpen={detailsOpen}
+                    onToggleDetails={() => setDetailsOpen((d) => !d)}
+                  />
+                  <div className={styles.content}>
+                    <div className={styles.list}>
+                      {visible.length === 0 ? (
+                        search.trim() ? (
+                          <EmptyState icon={Search48Regular} title="No matches" body={`Nothing matches "${search.trim()}".`} />
+                        ) : (
+                          <EmptyState
+                            {...empty}
+                            onAdd={view === 'all' || view === 'active' ? () => openAdd() : undefined}
+                          />
+                        )
+                      ) : (
+                        <DownloadTable
+                          tasks={visible}
+                          sort={sort}
+                          onSort={setSort}
+                          selected={selected}
+                          onSelectionChange={setSelected}
+                          actions={actions}
+                          onRowClick={() => setDetailsOpen(true)}
+                        />
+                      )}
+                    </div>
+                    {detailsOpen && (
+                      <DetailsPane
+                        selection={selectedTasks}
+                        adapters={adapters}
+                        dark={dark}
+                        chunkColors={chunkColors}
+                        onResume={(ids) => resume(ids)}
+                        onPause={(ids) => pause(ids)}
+                        onOpen={actions.onOpen}
+                        onReveal={actions.onReveal}
+                        onCopy={copy}
                       />
                     )}
                   </div>
-                  {detailsOpen && (
-                    <DetailsPane
-                      selection={selectedTasks}
-                      adapters={adapters}
-                      dark={dark}
-                      chunkColors={chunkColors}
-                      onResume={(ids) => resume(ids)}
-                      onPause={(ids) => pause(ids)}
-                      onOpen={actions.onOpen}
-                      onReveal={actions.onReveal}
-                      onCopy={copy}
-                    />
-                  )}
-                </div>
-                <StatusBar items={visible.length} selected={selectedTasks.length} active={counts.active} speed={totalSpeed} />
-              </>
-            )}
-            {view === 'network' && (
-              <NetworkPage
-                adapters={adapters}
-                tasks={tasks}
-                history={history}
-                dark={dark}
-                onRefresh={refreshAdapters}
-                onToggleAdapter={handleToggleAdapter}
-              />
-            )}
-            {view === 'settings' && (
-              <SettingsPage
-                settings={settings}
-                loaded={settingsLoaded}
-                onChange={updateSettings}
-                onError={onError}
-              />
-            )}
+                  <StatusBar items={visible.length} selected={selectedTasks.length} active={counts.active} speed={totalSpeed} />
+                </>
+              )}
+              {view === 'network' && (
+                <NetworkPage
+                  adapters={adapters}
+                  tasks={tasks}
+                  history={history}
+                  dark={dark}
+                  onRefresh={refreshAdapters}
+                  onToggleAdapter={handleToggleAdapter}
+                />
+              )}
+              {view === 'settings' && (
+                <SettingsPage
+                  settings={settings}
+                  loaded={settingsLoaded}
+                  onChange={updateSettings}
+                  onError={onError}
+                />
+              )}
+            </div>
           </main>
         </div>
       </div>
