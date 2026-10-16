@@ -59,3 +59,25 @@ export function lockVersions(text = read(P.cargoLock)) {
   }
   return out;
 }
+
+/**
+ * Computes next version under Conflux convention:
+ * - 10 patches per minor (.0 through .9), rollover to next minor .0 after .9
+ * - 10 minors per major (.0 through .9), rollover to next major .0.0 after .9.9
+ */
+export function getNextVersion(currentStr) {
+  const v = parseSemver(currentStr);
+  if (!v) throw new Error(`Invalid semver: ${currentStr}`);
+  let { major, minor, patch } = v;
+  if (patch >= 9) {
+    patch = 0;
+    minor += 1;
+    if (minor >= 10) {
+      minor = 0;
+      major += 1;
+    }
+  } else {
+    patch += 1;
+  }
+  return `${major}.${minor}.${patch}`;
+}

@@ -1,17 +1,20 @@
 #!/usr/bin/env node
-// Usage: node scripts/bump-version.mjs X.Y.Z[-pre] [--extension-version X.Y.Z]
+// Usage: node scripts/bump-version.mjs [X.Y.Z[-pre]|auto] [--extension-version X.Y.Z]
 // Rewrites Cargo.toml, tauri.conf.json, ui/package.json, Cargo.lock (workspace crates only,
 // no network) and ui/package-lock.json. Refuses non-semver or non-increasing versions.
 import { readFileSync, writeFileSync } from "node:fs";
-import { P, LOCK_CRATES, cargoVersion, compareSemver, parseSemver } from "./lib.mjs";
+import { P, LOCK_CRATES, cargoVersion, compareSemver, parseSemver, getNextVersion } from "./lib.mjs";
 
-const next = process.argv[2];
-if (!next || !parseSemver(next)) {
-  console.error("usage: bump-version.mjs X.Y.Z[-pre]  (valid semver required)");
+const current = cargoVersion();
+const arg = process.argv[2];
+let next = arg;
+if (!arg || arg === "auto" || arg === "--auto") {
+  next = getNextVersion(current);
+} else if (!parseSemver(next)) {
+  console.error("usage: bump-version.mjs [X.Y.Z[-pre]|auto]  (valid semver required)");
   process.exit(2);
 }
 const force = process.argv.includes("--force");
-const current = cargoVersion();
 const cmp = compareSemver(parseSemver(next), parseSemver(current));
 if (!force && cmp <= 0) {
   console.error(`refusing: ${next} is ${cmp === 0 ? "equal to" : "lower than"} current ${current} (use --force to override)`);

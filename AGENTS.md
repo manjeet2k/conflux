@@ -76,9 +76,12 @@ Before any commit:
 *(Note: Do not run bare `cargo test` without `-p conflux-core` on Linux/WSL2, as `conflux-desktop` targets Windows and requires cross-compilation).*
 
 ### Superpower 6: Version Incrementation on App Changes, Fixes, and Releases
-- Bump the version sequentially (e.g. `0.2.1`, `0.2.2`, `0.2.3`, ...) with every change, fix, or feature update to the application crates, desktop client, or extensions.
+- Bump the version sequentially with every change, fix, or feature update to the application crates, desktop client, or extensions.
+- **Version Rollover Convention**: Follow base-10 digit rollover (`MAJOR.MINOR.PATCH`):
+  - Each minor version has 10 patch releases (`X.Y.0` through `X.Y.9`). After 10 patches (`.9`), upgrade minor and reset patch to 0 (`X.(Y+1).0`).
+  - Each major version has 10 minor versions (`X.0.0` through `X.9.9`). After 10 minor versions (`.9.9`), upgrade major and reset minor and patch to 0 (`(X+1).0.0`).
 - **DO NOT bump the application version for documentation, script adjustments, or landing website (`site/`) changes.**
-- Always use `node scripts/bump-version.mjs <new-version>` (or `npm --prefix ui run version:bump -- <new-version>`) to synchronously update all version sources:
+- Always use `node scripts/bump-version.mjs [new-version|auto]` (or `npm --prefix ui run version:bump`) to synchronously update all version sources:
   - `Cargo.toml` (`[workspace.package.version]`)
   - `Cargo.lock` (workspace crates: `conflux-core`, `conflux-cli`, `conflux-desktop`)
   - `crates/conflux-desktop/tauri.conf.json` (`version`)
