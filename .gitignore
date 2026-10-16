@@ -54,6 +54,7 @@ updater*.key*
 
 # Local development scratchpad, notes, and developer-only tools
 /dev/
+/.tools/
 
 # Claude Code agent local settings, skills, and worktrees
 .claude/
