@@ -9,13 +9,19 @@ All notable changes to Conflux are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.23] - 2026-10-16
+
 ### Added
 - Native Windows Shell file and folder icons throughout download lists, details, dialogs and folder actions. Icons follow installed file associations, load without reading partial files, and are cached per extension.
 - **Window material setting:** choose Mica Alt (default), Mica, Acrylic or None under Settings → Appearance. Falls back to a weaker material where Windows lacks the requested one.
 - Context menus and dropdown lists use in-app acrylic like Windows 11 flyouts.
 - Clicking a download opens the details pane if it is closed.
+- **Speed Graph Sparklines & History Tracking:** Compact sparklines in SpeedGraph, independent per-task rolling speed histories, smooth sample animations, and real-time statistics.
+- **Download Duration & Average Speed:** Track and display total active transfer duration and accurate overall average download speed in download items and details pane.
 
 ### Changed
+- **Speed-Sized Chunks & Connection Reuse:** Dynamic chunk sizing adapts pieces to each adapter's measured throughput (~4s of data, 4 MiB to 256 MiB) with full keep-alive connection reuse and zero-copy write buffer handoffs.
+- **Adaptive Rate-Limit & Backoff Handling:** HTTP 429 and 503 (`Retry-After`) pause new requests across workers without consuming retry budgets, transitioning to paced requests and fair-share chunks.
 - Buttons throughout the app share quick shading feedback and a smooth release, including toolbar, navigation, icon and dialog controls; text stays at its original size, and reduced-motion settings suppress transitions.
 - Push buttons use the reference's quiet filled surface, normal-weight text, and compact rounded sizing; dropdown triggers disappear while their popup is open and return on dismissal or selection.
 - Settings dropdowns follow the recorded Task Manager behavior: content-sized acrylic popups, device-pixel-rounded item spacing, a surface reveal around the current choice, and immediate dismissal.
