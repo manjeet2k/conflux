@@ -9,6 +9,9 @@ All notable changes to Conflux are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Replaced the desktop, title bar, favicon, and browser extension app icons with the supplied bird/download v2 artwork, preserving transparency and size-specific small icons. Desktop version is now 0.3.1 and browser extension version is 0.2.3.
+
 ## [0.2.23] - 2026-10-16
 
 ### Added
