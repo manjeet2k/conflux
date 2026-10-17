@@ -264,6 +264,56 @@ function plug() {
   animateWhileVisible(grid, step);
 }
 
+/* ---------- Look: theme / window material / page screenshot switcher ---------- */
+function look() {
+  const screen = document.getElementById("look-screen");
+  if (!screen) return;
+  const buttons = [...document.querySelectorAll("[data-look]")];
+  const state = {};
+  buttons.forEach((b) => { if (b.getAttribute("aria-pressed") === "true") state[b.dataset.look] = b.dataset.value; });
+  const label = (key, value) => buttons.find((b) => b.dataset.look === key && b.dataset.value === value).textContent;
+  const file = (s) => `screens/${s.theme}-${s.page}-${s.material}.webp`;
+  const describe = (s) => `Conflux in ${s.theme} theme with ${label("material", s.material)}, showing the ${label("page", s.page)} page`;
+
+  // One <img> per screenshot, created on demand; the one in the HTML is the default.
+  const shots = new Map([[file(state), screen.querySelector("img")]]);
+  const shot = (s) => {
+    const src = file(s);
+    if (!shots.has(src)) {
+      const img = new Image(1560, 1022);
+      img.decoding = "async"; img.src = src; img.alt = describe(s);
+      screen.appendChild(img); shots.set(src, img);
+    }
+    return shots.get(src);
+  };
+
+  let current = shots.get(file(state));
+  const show = () => {
+    const next = shot(state);
+    if (next === current) return;
+    current = next;
+    // Keep the old screenshot up until the new one has decoded, so the frame never flashes empty.
+    next.decode().catch(() => {}).then(() => {
+      if (next !== current) return;
+      shots.forEach((img) => img.classList.toggle("on", img === next));
+    });
+  };
+
+  buttons.forEach((b) => b.addEventListener("click", () => {
+    state[b.dataset.look] = b.dataset.value;
+    buttons.forEach((o) => { if (o.dataset.look === b.dataset.look) o.setAttribute("aria-pressed", String(o === b)); });
+    show();
+  }));
+
+  // Fetch the rest once the section is near, so switching is instant (~60 KB each).
+  const io = new IntersectionObserver(([e]) => {
+    if (!e.isIntersecting) return;
+    io.disconnect();
+    for (const theme of ["light", "dark"]) for (const material of ["mica", "mica-alt", "acrylic"]) for (const page of ["download", "settings"]) shot({ theme, material, page });
+  }, { rootMargin: "400px 0px" });
+  io.observe(screen);
+}
+
 /* ---------- Copy buttons ---------- */
 function copyButtons() {
   document.querySelectorAll(".copy[data-copy]").forEach((b) => b.addEventListener("click", async () => {
@@ -348,4 +398,5 @@ glassTilt();
 magnetic();
 calculator();
 plug();
+look();
 copyButtons();

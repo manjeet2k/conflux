@@ -114,7 +114,7 @@ code { font: 0.92em ui-monospace, "Cascadia Code", Consolas, monospace; }
 .hero .lede { max-width: 36em; }
 /* Facts row along the bottom edge of the glass hero. */
 .facts { list-style: none; margin: 0; padding: 2em 0 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2em; border-top: 1px solid rgba(238, 237, 242, 0.18); }
-.facts li { display: grid; gap: 0.3em; }
+.facts li { display: grid; gap: 0.3em; text-shadow: 0 0.1em 1.2em rgba(13, 6, 40, 0.6); }
 .facts b { font: 700 2.6em/1 var(--display); letter-spacing: -0.04em; }
 .facts span { font: 700 0.82em var(--label); letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.7; }
 .eyebrow { font: 700 0.85em var(--label); letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.75; margin-bottom: 2.2em; }
@@ -128,7 +128,21 @@ code { font: 0.92em ui-monospace, "Cascadia Code", Consolas, monospace; }
 [data-tilt] { transform: perspective(1600px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) translate3d(0, var(--lift, 0px), 0); transform-style: preserve-3d; will-change: transform; }
 .glare { position: absolute; inset: 0; z-index: 0; border-radius: inherit; pointer-events: none; opacity: var(--glare, 0);
   background: radial-gradient(28em circle at var(--gx, 50%) var(--gy, 50%), rgba(238, 237, 242, 0.16), rgba(238, 237, 242, 0) 60%); }
-[data-tilt] > :not(.glare) { position: relative; z-index: 1; }
+[data-tilt] > :not(.glare, .hero-mark) { position: relative; z-index: 1; }
+
+/* The logo as the hero's backdrop, mirrored so the bird faces the text and peeping in from the
+   card's right edge: 30% of it hangs past the edge and is clipped. --mark is its size: the visible
+   70% fills the room right of the text column, capped at 38em, floored at 12em. The artwork's
+   arrow tip sits 10% above the image's bottom edge, so `bottom` puts the tip --tip above the
+   card's edge at every size. */
+.hero-glass { container-type: inline-size; overflow: clip; }
+.hero-mark { --mark: clamp(12em, (100cqw - 36em) / 0.7, 38em); --tip: 1.6em; position: absolute; z-index: 0;
+  right: calc(var(--mark) * -0.3); bottom: calc(var(--tip) - var(--mark) * 0.1);
+  width: var(--mark); height: var(--mark); pointer-events: none; }
+.hero-mark::before, .hero-mark::after { content: ""; position: absolute; }
+.hero-mark::before { inset: -12%; border-radius: 50%;
+  background: radial-gradient(circle at 55% 50%, rgba(56, 189, 248, 0.32), rgba(92, 49, 255, 0.28) 38%, rgba(92, 49, 255, 0) 68%); }
+.hero-mark::after { inset: 0; background: url("icon-256.png") center / contain no-repeat; transform: scaleX(-1); filter: drop-shadow(0 2.5em 5em rgba(92, 49, 255, 0.6)); }
 
 /* Text reveals: lines slide up out of a mask, letters rise in one by one. */
 .fade { overflow: hidden; }
@@ -177,6 +191,19 @@ input[type="range"]:disabled { opacity: 0.35; }
 .result.accent { background: var(--violet); color: var(--paper); border-color: var(--violet); }
 .result.accent .big { color: var(--paper); }
 .cta-box .button { margin-top: 0; }
+
+/* Look: real app screenshots, switched by pill segments (theme, window material, page). All
+   screenshots share one size, so they stack in the frame and crossfade without layout shift. */
+.look-controls { display: flex; flex-wrap: wrap; gap: 1em 1.6em; margin-bottom: 1.8em; }
+.seg { display: inline-flex; gap: 0.25em; padding: 0.3em; border: 1px solid rgba(238, 237, 242, 0.3); border-radius: 99px; background: rgba(13, 6, 40, 0.35); }
+.seg button { padding: 0.75em 1.4em; border: 0; border-radius: 99px; background: none; color: inherit; cursor: pointer; font: 700 0.85em/1 var(--label); letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; transition: background 0.35s var(--ease), color 0.35s var(--ease); }
+.seg button:hover { background: rgba(238, 237, 242, 0.12); }
+.seg button[aria-pressed="true"] { background: var(--paper); color: var(--ink); }
+.look-screen { position: relative; margin: 0; aspect-ratio: 1560 / 1022; border-radius: 1em; overflow: hidden;
+  border: 1px solid rgba(238, 237, 242, 0.22); background: rgba(13, 6, 40, 0.5); box-shadow: 0 50px 120px -50px rgba(0, 0, 0, 0.95); }
+.look-screen img { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 0.5s var(--ease); }
+.look-screen img.on { opacity: 1; }
+.look-screen + .sim-disclaimer { margin-top: 1em; }
 
 /* Pull the plug */
 .plug-in .head { grid-template-columns: 1fr; margin-bottom: 0; gap: 1.2em; }
@@ -513,6 +540,7 @@ input[type="range"]:disabled { opacity: 0.35; }
   section .container { padding-top: calc(3em + 20px); padding-bottom: calc(3em + 20px); }
   .plug-in, .extension-in { grid-template-columns: 1fr; gap: 2.2em; }
   .plug-in .head { order: -1; }
+  .hero-mark { --mark: clamp(12em, 100cqw - 40em, 38em); }
   .features { grid-template-columns: repeat(2, 1fr); }
 }
 /* Tablet */
@@ -522,6 +550,8 @@ input[type="range"]:disabled { opacity: 0.35; }
   section .container { padding-top: calc(2.6em + 20px); padding-bottom: calc(2.6em + 20px); }
   .head { grid-template-columns: 1fr; gap: 1.2em; margin-bottom: 2.2em; }
   .calc-grid { grid-template-columns: repeat(2, 1fr); }
+  /* No room beside the text on tablets and phones: the logo becomes a faint watermark. */
+  .hero-mark { --mark: 24em; --tip: 1.2em; opacity: 0.4; }
   /* inputs: size | connections, then the sliders full width; results side by side; then the button */
   .calc-grid > .box:nth-child(3), .calc-grid .cta-box { grid-column: 1 / -1; }
   .calc-grid .cta-box { min-height: 0; }
@@ -553,6 +583,10 @@ input[type="range"]:disabled { opacity: 0.35; }
   .box { min-height: 0; padding: 2.2em 1.4em; }
   .stepper { width: 100%; max-width: 16em; }
   .glass-panel { padding: 1.4em; border-radius: 1.4em; }
+  .hero-mark { --mark: 16em; --tip: 1em; }
+  .look-controls { gap: 0.7em; margin-bottom: 1.2em; }
+  .seg button { padding: 0.7em 0.95em; }
+  .look-screen { border-radius: 0.6em; }
   .chunks { grid-template-columns: repeat(16, 1fr); }
   #plug-progress { font-size: 2em; min-width: 0; }
   .plug-metrics { gap: 0.8em; }
@@ -575,7 +609,7 @@ input[type="range"]:disabled { opacity: 0.35; }
   html { scroll-behavior: auto; }
   .letters .ch { animation: none; opacity: 1; transform: none; }
   .reveal-ready .fade > span { transform: none; transition: none; }
-  .b-fill, .b-text, .arrow, .knob::after, .round, .f, .nav-link::after { transition: none; }
+  .b-fill, .b-text, .arrow, .knob::after, .round, .f, .nav-link::after, .seg button, .look-screen img { transition: none; }
   [data-tilt] { transform: none; }
   .glare { display: none; }
   .chunks span[class^="busy"] { animation: none; }

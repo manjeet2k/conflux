@@ -70,6 +70,7 @@
     <div class="container nav-in">
       <a class="logo" href="./" aria-label="Conflux home"><img src="icon-256.png" alt="" width="26" height="26"><span>Conflux</span></a>
       <nav aria-label="Main">
+        <a class="nav-link" href="#look"><span>Look</span></a>
         <a class="nav-link" href="#calc"><span>Speed</span></a>
         <a class="nav-link" href="#plug"><span>Try it</span></a>
         <a class="nav-link" href="#inside"><span>Inside</span></a>
@@ -86,6 +87,7 @@
       <div class="container">
        <div class="hero-in hero-glass" data-tilt="2.5">
         <i class="glare" aria-hidden="true"></i>
+        <i class="hero-mark" aria-hidden="true"></i>
         <div class="hero-left">
           <p class="eyebrow fade"><span>Windows 10/11 · Free &amp; open source · <a data-dl="notes" href="{{RELEASE_URL}}"><span data-dl="version">Beta {{VERSION}}</span></a></span></p>
           <h1 class="letters">One download.<br>Every connection.</h1>
@@ -103,6 +105,34 @@
         </ul>
 
        </div>
+      </div>
+    </section>
+
+    <section id="look" class="dark">
+      <div class="container">
+        <div class="head">
+          <h2 class="fade"><span>Light or dark.<br>Your wallpaper, too.</span></h2>
+          <p class="fade"><span>Conflux follows your Windows theme, or you pick one. Turn on Mica, Mica Alt or Acrylic and your wallpaper shows through, like the apps built into Windows 11.</span></p>
+        </div>
+        <div class="look-controls">
+          <div class="seg" role="group" aria-label="Theme">
+            <button type="button" data-look="theme" data-value="light" aria-pressed="false">Light</button>
+            <button type="button" data-look="theme" data-value="dark" aria-pressed="true">Dark</button>
+          </div>
+          <div class="seg" role="group" aria-label="Window material">
+            <button type="button" data-look="material" data-value="mica" aria-pressed="false">Mica</button>
+            <button type="button" data-look="material" data-value="mica-alt" aria-pressed="true">Mica Alt</button>
+            <button type="button" data-look="material" data-value="acrylic" aria-pressed="false">Acrylic</button>
+          </div>
+          <div class="seg" role="group" aria-label="Page">
+            <button type="button" data-look="page" data-value="download" aria-pressed="true">Downloads</button>
+            <button type="button" data-look="page" data-value="settings" aria-pressed="false">Settings</button>
+          </div>
+        </div>
+        <figure class="look-screen" id="look-screen">
+          <img class="on" src="screens/dark-download-mica-alt.webp" width="1560" height="1022" loading="lazy" decoding="async" alt="Conflux in dark theme with Mica Alt, showing the Downloads page">
+        </figure>
+        <p class="sim-disclaimer">Screenshots of Conflux on Windows 11. Window materials need Windows 11; Mica Alt and Acrylic need 22H2 or later.</p>
       </div>
     </section>
 

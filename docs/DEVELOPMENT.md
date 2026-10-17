@@ -201,6 +201,10 @@ touch it, after every Release run, and by hand (`gh workflow run pages.yml`).
   `DMSans[opsz,wght].ttf` from the google/fonts repository (`ofl/…`), and render with
   `new Resvg(svg, { fitTo: { mode: "width", value: 1200 }, font: { loadSystemFonts: false, fontFiles: [...], defaultFontFamily: "DM Sans" } }).render().asPng()`.
   Check previews with a social card validator after deploying.
+- App screenshots: `site/screens/{light,dark}-{download,settings}-{mica,mica-alt,acrylic}.webp`
+  feed the "Look" section switcher in `site/demo.js`. They are real Windows 11 captures, cropped to
+  the window edge and scaled to one 1560x1022 size (so they crossfade without layout shift), WebP
+  quality 0.86. Keep all twelve the same size when replacing them.
 - A README cannot embed the page (GitHub strips iframes and scripts); the README links to it with
   the banner image and badges instead.
 
