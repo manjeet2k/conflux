@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button,
   FluentProvider,
+  MessageBar,
+  MessageBarBody,
   Toast,
   ToastBody,
   ToastTitle,
@@ -24,7 +26,7 @@ import {
 import { listen } from '@tauri-apps/api/event';
 import { api, errorText } from './api';
 import type { AdapterInfo, DownloadTask, ExternalDownloadPayload, RequestHeaders, TaskStatus, UpdateInfo, ViewId } from './types';
-import { EXTERNAL_DOWNLOAD_EVENT, NETWORK_ADAPTERS_CHANGED_EVENT, UPDATE_AVAILABLE_EVENT } from './types';
+import { EXTERNAL_DOWNLOAD_EVENT, HISTORY_STATUS_EVENT, NETWORK_ADAPTERS_CHANGED_EVENT, UPDATE_AVAILABLE_EVENT } from './types';
 import { darkTheme, lightTheme, surfaceVars, windowsControlStyleHooks } from './theme';
 import { useDownloads } from './hooks/useDownloads';
 import { useSettings } from './hooks/useSettings';
@@ -91,11 +93,12 @@ const useStyles = makeStyles({
   list: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' },
 });
 
-const viewStatuses: Partial<Record<ViewId, TaskStatus>> = {
-  active: 'downloading',
-  paused: 'paused',
-  completed: 'completed',
-  failed: 'error',
+const viewStatuses: Partial<Record<ViewId, TaskStatus[]>> = {
+  active: ['downloading'],
+  // A stopping task is on its way to paused; it lists there while its engine winds down.
+  paused: ['paused', 'stopping'],
+  completed: ['completed'],
+  failed: ['error'],
 };
 
 const emptyStates = {
@@ -388,7 +391,7 @@ export const App: React.FC = () => {
     () => ({
       all: tasks.length,
       active: tasks.filter((t) => t.status === 'downloading').length,
-      paused: tasks.filter((t) => t.status === 'paused').length,
+      paused: tasks.filter((t) => t.status === 'paused' || t.status === 'stopping').length,
       completed: tasks.filter((t) => t.status === 'completed').length,
       failed: tasks.filter((t) => t.status === 'error').length,
     }),
@@ -396,11 +399,11 @@ export const App: React.FC = () => {
   );
 
   const visible = useMemo(() => {
-    const status = viewStatuses[view];
+    const statuses = viewStatuses[view];
     const q = search.trim().toLowerCase();
     const filtered = tasks.filter(
       (t) =>
-        (!status || t.status === status) &&
+        (!statuses || statuses.includes(t.status)) &&
         (!q || t.filename.toLowerCase().includes(q) || t.url.toLowerCase().includes(q))
     );
     return sortTasks(filtered, sort);
@@ -477,6 +480,16 @@ export const App: React.FC = () => {
       document.removeEventListener('contextmenu', onContext);
     };
   }, [addOpen, removeIds, openAdd, refreshAdapters, notify]);
+
+  // Download history could not be saved (e.g. disk full): shown until a save succeeds.
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  useEffect(() => {
+    const unlisten = listen<string | null>(HISTORY_STATUS_EVENT, (event) => setHistoryError(event.payload));
+    unlisten.catch((e) => console.error('Failed to listen for history status:', e));
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => undefined);
+    };
+  }, []);
 
   // ─── System tray context menu events ───
   useEffect(() => {
@@ -578,6 +591,11 @@ export const App: React.FC = () => {
                     detailsOpen={detailsOpen}
                     onToggleDetails={() => setDetailsOpen((d) => !d)}
                   />
+                  {historyError && (
+                    <MessageBar intent="warning" layout="multiline">
+                      <MessageBarBody>{historyError}</MessageBarBody>
+                    </MessageBar>
+                  )}
                   <div className={styles.content}>
                     <div className={styles.list}>
                       {visible.length === 0 ? (

@@ -7,7 +7,7 @@ export interface SortState {
   direction: 'ascending' | 'descending';
 }
 
-const statusOrder = { downloading: 0, paused: 1, error: 2, completed: 3 } as const;
+const statusOrder = { downloading: 0, stopping: 1, paused: 2, error: 3, completed: 4 } as const;
 
 function compare(a: DownloadTask, b: DownloadTask, key: SortKey): number {
   switch (key) {

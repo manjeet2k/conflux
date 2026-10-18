@@ -417,6 +417,7 @@ async fn removed_adapter_reports_drop_reason() {
             Some(adapter_rx),
             Some(progress_tx),
             cancel_rx,
+            None,
         )
         .await;
     assert_eq!(result.unwrap(), sha256_hex(&data));
@@ -918,6 +919,7 @@ async fn dynamic_adapter_joins_mid_download_and_aggregates_bandwidth() {
             Some(adapter_rx),
             Some(progress_tx),
             cancel_rx,
+            None,
         )
         .await;
 
@@ -954,7 +956,7 @@ async fn closed_adapter_updates_do_not_block_completion() {
 
     let result = tokio::time::timeout(
         Duration::from_secs(5),
-        engine.download_with_updates(&probe, &path, &[], Some(adapter_rx), None, cancel_rx),
+        engine.download_with_updates(&probe, &path, &[], Some(adapter_rx), None, cancel_rx, None),
     )
     .await
     .expect("closed adapter channel must not spin or hang")
@@ -1012,6 +1014,7 @@ async fn all_adapters_removed_falls_back_to_default_route_and_completes() {
             Some(adapter_rx),
             Some(progress_tx),
             cancel_rx,
+            None,
         )
         .await;
 
@@ -1082,6 +1085,7 @@ async fn adapter_interface_name_is_used_for_binding() {
             Some(adapter_rx),
             None,
             cancel_rx,
+            None,
         )
         .await;
     assert_eq!(result.unwrap(), sha256_hex(&data));
@@ -1354,6 +1358,7 @@ async fn failing_hot_added_adapter_keeps_default_route() {
             Some(adapter_rx),
             Some(progress_tx),
             cancel_rx,
+            None,
         )
         .await;
     assert_eq!(result.unwrap(), sha256_hex(&data));
@@ -1421,6 +1426,7 @@ async fn readded_adapter_keeps_separate_speed_stats() {
             Some(adapter_rx),
             Some(progress_tx),
             cancel_rx,
+            None,
         )
         .await;
     assert_eq!(result.unwrap(), sha256_hex(&data));
@@ -2184,4 +2190,189 @@ async fn resume_preserves_a_replacement_file_even_with_a_valid_sidecar() {
         .is_some());
     assert_eq!(std::fs::read(&path).unwrap(), *replacement);
     assert!(resume_sidecar_path(&path).exists());
+}
+
+fn is_ownership_changed(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<conflux_core::file_identity::FileOwnershipChanged>()
+        .is_some()
+}
+
+/// Claims `path` the way the desktop app does: an empty placeholder whose identity is kept.
+fn claim_placeholder(path: &Path) -> conflux_core::FileIdentity {
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .unwrap();
+    conflux_core::FileIdentity::of(&file).unwrap()
+}
+
+/// Moves our placeholder away and puts unrelated user data at its path.
+fn replace_with(path: &Path, contents: &[u8]) {
+    std::fs::rename(path, path.with_extension("moved")).unwrap();
+    std::fs::write(path, contents).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn owned_downloads_write_the_claimed_placeholder() {
+    for range_mode in [RangeMode::Honor, RangeMode::Ignore] {
+        let data = payload(CHUNK as usize * 3 + 17, 110);
+        let mut config = ServerConfig::new(Arc::clone(&data));
+        config.range_mode = range_mode;
+        let server = TestServer::start(config).await;
+        let engine = test_engine();
+        let probe = engine.probe(&server.url("/file.bin")).await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.bin");
+        let identity = claim_placeholder(&path);
+        let (_cancel, cancel_rx) = watch::channel(false);
+        let sha = engine
+            .download_with_updates(
+                &probe,
+                &path,
+                &[],
+                None,
+                None,
+                cancel_rx,
+                Some(identity.clone()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(sha, sha256_hex(&data));
+        assert_eq!(std::fs::read(&path).unwrap(), *data);
+        assert_eq!(conflux_core::FileIdentity::at(&path).unwrap(), identity);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn owned_download_never_truncates_a_replaced_placeholder() {
+    for range_mode in [RangeMode::Honor, RangeMode::Ignore] {
+        let data = payload(CHUNK as usize * 2, 111);
+        let mut config = ServerConfig::new(Arc::clone(&data));
+        config.range_mode = range_mode;
+        let server = TestServer::start(config).await;
+        let engine = test_engine();
+        let probe = engine.probe(&server.url("/file.bin")).await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.bin");
+        let identity = claim_placeholder(&path);
+        replace_with(&path, b"user data");
+        let (_cancel, cancel_rx) = watch::channel(false);
+        let error = engine
+            .download_with_updates(&probe, &path, &[], None, None, cancel_rx, Some(identity))
+            .await
+            .unwrap_err();
+        assert!(is_ownership_changed(&error), "{error:#}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"user data");
+        assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 0);
+    }
+}
+
+/// The single stream opens its output only after the response headers arrive. A file put at
+/// the path while the server is slow to answer must be detected on the handle, not truncated.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn single_stream_rechecks_ownership_after_slow_response_headers() {
+    let data = payload(64 * 1024, 112);
+    let mut config = ServerConfig::new(Arc::clone(&data));
+    config.range_mode = RangeMode::Ignore;
+    let server = TestServer::start(config.clone()).await;
+    let engine = test_engine();
+    let probe = engine.probe(&server.url("/file.bin")).await.unwrap();
+    assert!(!probe.supports_parallel());
+    config.full_head_delay = Some(Duration::from_millis(600));
+    server.replace_config(config);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("file.bin");
+    let identity = claim_placeholder(&path);
+    let (_cancel, cancel_rx) = watch::channel(false);
+    let download = {
+        let path = path.clone();
+        tokio::spawn(async move {
+            test_engine()
+                .download_with_updates(&probe, &path, &[], None, None, cancel_rx, Some(identity))
+                .await
+        })
+    };
+    // The pre-flight check has passed by now; the request is waiting for headers.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        server.stats.requests.load(Ordering::SeqCst),
+        2,
+        "probe + GET"
+    );
+    replace_with(&path, b"user data");
+
+    let error = download.await.unwrap().unwrap_err();
+    assert!(is_ownership_changed(&error), "{error:#}");
+    assert_eq!(std::fs::read(&path).unwrap(), b"user data");
+    assert_eq!(std::fs::read(path.with_extension("moved")).unwrap(), b"");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn owned_resume_without_usable_sidecar_never_truncates_a_replacement() {
+    for sidecar in [None, Some(&b"not json"[..])] {
+        let data = payload(CHUNK as usize * 2, 113);
+        let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+        let engine = test_engine();
+        let probe = engine.probe(&server.url("/file.bin")).await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.bin");
+        let identity = claim_placeholder(&path);
+        replace_with(&path, b"user data");
+        if let Some(contents) = sidecar {
+            std::fs::write(resume_sidecar_path(&path), contents).unwrap();
+        }
+        let (_cancel, cancel_rx) = watch::channel(false);
+        let error = engine
+            .resume_with_updates(&probe, &path, &[], None, None, cancel_rx, Some(identity))
+            .await
+            .unwrap_err();
+        assert!(is_ownership_changed(&error), "{error:#}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"user data");
+        assert_eq!(server.stats.chunk_requests.load(Ordering::SeqCst), 0);
+    }
+}
+
+/// A sidecar recording a different file (e.g. left behind by a download that was moved)
+/// must not be trusted for the claimed file: the resume restarts from zero, on our file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn owned_resume_ignores_a_sidecar_of_a_different_file() {
+    let data = payload(CHUNK as usize * 2, 114);
+    let server = TestServer::start(ServerConfig::new(Arc::clone(&data))).await;
+    let engine = test_engine();
+    let url = server.url("/file.bin");
+    let probe = engine.probe(&url).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let other = dir.path().join("other.bin");
+    std::fs::write(&other, vec![0xAA; data.len()]).unwrap();
+    let path = dir.path().join("file.bin");
+    std::fs::write(&path, vec![0x55; data.len()]).unwrap();
+    let identity = conflux_core::FileIdentity::at(&path).unwrap();
+    let saved = conflux_core::resume::ResumeState {
+        version: 1,
+        resource_id: Some(sha256_hex(url.as_bytes())),
+        file_identity: Some(conflux_core::FileIdentity::at(&other).unwrap()),
+        total_bytes: data.len() as u64,
+        chunk_size: CHUNK,
+        completed: "0-1".into(),
+        etag: probe.etag.clone(),
+        last_modified: None,
+        headers: None,
+        header_origin: None,
+    };
+    std::fs::write(
+        resume_sidecar_path(&path),
+        serde_json::to_vec(&saved).unwrap(),
+    )
+    .unwrap();
+    let (_cancel, cancel_rx) = watch::channel(false);
+    let sha = engine
+        .resume_with_updates(&probe, &path, &[], None, None, cancel_rx, Some(identity))
+        .await
+        .unwrap();
+    assert_eq!(sha, sha256_hex(&data));
+    assert_eq!(std::fs::read(&path).unwrap(), *data);
+    assert!(server.stats.chunk_requests.load(Ordering::SeqCst) > 0);
 }

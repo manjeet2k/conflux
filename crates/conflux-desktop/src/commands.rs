@@ -1,85 +1,58 @@
 use crate::adapters::{adapter_names, adapter_stat, AdapterInfo};
 use crate::browser_bridge::ExternalDownloadPayload;
-use crate::history::HistoryStore;
+use crate::controller::{
+    now_ms, remove_empty_placeholder, CommitError, ResumeStart, TaskController, TaskEvents,
+    WorkerChannels, WorkerExit,
+};
 use crate::redact::redact_error;
 use crate::settings::{self, Backdrop, Settings};
-use crate::state::{AppState, DownloadTaskState, TaskHandle, TaskStatus};
+use crate::state::{AppState, DownloadTaskState, TaskStatus};
 use conflux_core::{
-    discover_adapters as core_discover, remove_resume_sidecar, sanitize_filename, AdapterUpdate,
-    DownloadCancelled, DownloadEngine, DownloadProbe, NetworkAdapter, ProgressUpdate,
-    RequestHeaders,
+    discover_adapters as core_discover, sanitize_filename, AdapterUpdate, DownloadCancelled,
+    DownloadEngine, DownloadProbe, NetworkAdapter, ProgressUpdate, RequestHeaders,
 };
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, State, WebviewWindow};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
-use tokio::sync::{mpsc, watch, Mutex, RwLock};
+use tokio::sync::{mpsc, watch, RwLock};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 /// Event carrying a full `DownloadTaskState` snapshot after every state change.
 pub const PROGRESS_EVENT: &str = "download-progress";
 
-/// How long a stop request waits for the engine to wind down its workers
-/// before the task is forcibly aborted.
-const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+/// Event carrying the download-history save failure (`null` once saving works again).
+pub const HISTORY_STATUS_EVENT: &str = "history-save-status";
 
 /// How long to wait for the progress forwarder to drain after the engine returns.
 const FORWARDER_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Minimum interval between history saves caused by progress ticks alone.
-const HISTORY_SAVE_INTERVAL: Duration = Duration::from_secs(5);
+/// Minimum interval between history save requests caused by one task's progress ticks.
+/// The history writer additionally coalesces requests across all tasks.
+const HISTORY_SAVE_INTERVAL: Duration = crate::history::PROGRESS_SAVE_INTERVAL;
 
-/// Shared handles a running task needs; cloned out of `AppState`.
-#[derive(Clone)]
-struct Shared {
-    app: AppHandle,
-    tasks: Arc<RwLock<HashMap<String, DownloadTaskState>>>,
-    handles: Arc<Mutex<HashMap<String, TaskHandle>>>,
-    stopping_tasks: Arc<std::sync::Mutex<HashMap<String, watch::Receiver<bool>>>>,
-    reserved_paths: Arc<Mutex<HashSet<PathBuf>>>,
-    settings: Arc<RwLock<Settings>>,
-    history: Arc<HistoryStore>,
-    last_adapters: Arc<RwLock<Vec<NetworkAdapter>>>,
-}
+/// Forwards controller events to the webview, the tray and notifications.
+pub struct AppEvents(pub AppHandle);
 
-impl Shared {
-    fn new(app: &AppHandle, state: &AppState) -> Self {
-        Self {
-            app: app.clone(),
-            tasks: state.tasks.clone(),
-            handles: state.handles.clone(),
-            stopping_tasks: state.stopping_tasks.clone(),
-            reserved_paths: state.reserved_paths.clone(),
-            settings: state.settings.clone(),
-            history: state.history.clone(),
-            last_adapters: state.last_adapters.clone(),
-        }
+impl TaskEvents for AppEvents {
+    fn task_changed(&self, task: &DownloadTaskState, tasks: &HashMap<String, DownloadTaskState>) {
+        emit(&self.0, task);
+        crate::tray::update_tray_tooltip(&self.0, tasks);
     }
 
-    /// Applies `f` to the task and emits the resulting snapshot, both under the write lock
-    /// so events are emitted in exactly the order the changes happened.
-    /// Returns `None` (and emits nothing) if the task no longer exists.
-    async fn update(
-        &self,
-        task_id: &str,
-        f: impl FnOnce(&mut DownloadTaskState),
-    ) -> Option<DownloadTaskState> {
-        let mut tasks = self.tasks.write().await;
-        let task = tasks.get_mut(task_id)?;
-        f(task);
-        let snapshot = task.clone();
-        emit(&self.app, &snapshot);
-        crate::tray::update_tray_tooltip(&self.app, &tasks);
-        Some(snapshot)
+    fn task_removed(&self, tasks: &HashMap<String, DownloadTaskState>) {
+        crate::tray::update_tray_tooltip(&self.0, tasks);
     }
 
-    async fn save_history(&self) {
-        self.history.save(&self.tasks).await;
+    fn worker_finished(&self, task: &DownloadTaskState) {
+        let app = self.0.clone();
+        let task = task.clone();
+        tauri::async_runtime::spawn(async move { notify_finished(&app, &task).await });
     }
 }
 
@@ -200,7 +173,6 @@ pub async fn probe_url(
 // ─── 3. Start Download ─────────────────────────────────────
 #[tauri::command]
 pub async fn start_download(
-    app: AppHandle,
     state: State<'_, AppState>,
     url: String,
     save_dir: String,
@@ -227,15 +199,10 @@ pub async fn start_download(
         .map(|f| sanitize_filename(&f))
         .filter(|f| !f.is_empty())
         .unwrap_or_else(|| probe.suggested_filename.clone());
-    let claimed_paths: Vec<PathBuf> = state
+    let (output_path, file_identity) = state
         .tasks
-        .read()
-        .await
-        .values()
-        .map(|t| PathBuf::from(&t.save_path))
-        .collect();
-    let (output_path, file_identity) =
-        reserve_output_path(&state.reserved_paths, &claimed_paths, &dir, &requested_name).await?;
+        .reserve_new_output(&dir, &requested_name)
+        .await?;
     let save_path = output_path.to_string_lossy().to_string();
     let filename = output_path
         .file_name()
@@ -259,7 +226,7 @@ pub async fn start_download(
         filename,
         save_dir: dir.to_string_lossy().to_string(),
         save_path,
-        file_identity,
+        file_identity: file_identity.clone(),
         adapter_ids: vec![],
         total_bytes: probe.total_bytes,
         supports_ranges: probe.supports_parallel(),
@@ -278,33 +245,30 @@ pub async fn start_download(
         avg_speed_bytes_sec: None,
         adapters: Vec::new(),
         chunk_map: None,
+        lifecycle: Default::default(),
     };
-    {
-        let mut tasks = state.tasks.write().await;
-        tasks.insert(task_id.clone(), task.clone());
-        emit(&app, &task);
-        crate::tray::update_tray_tooltip(&app, &tasks);
-    }
-
-    let shared = Shared::new(&app, &state);
-    shared.save_history().await;
-    spawn_task(
-        shared,
-        task_id.clone(),
+    let generation = state.tasks.insert_new(task).await;
+    state.tasks.save_history();
+    let started = launch(
+        &state,
+        &task_id,
+        generation,
         engine,
         probe,
         output_path,
-        task.file_identity.clone(),
+        file_identity.clone(),
+        file_identity,
         false,
     )
     .await;
-    let running = state.handles.lock().await.contains_key(&task_id);
-    let accepted = state.tasks.read().await.get(&task_id).is_some_and(|task| {
-        task.status == TaskStatus::Completed || (running && task.status == TaskStatus::Downloading)
-    });
-    if !accepted {
-        return Err("Download was not started; the browser transfer was preserved".into());
-    }
+    let task = state
+        .tasks
+        .get(&task_id)
+        .await
+        .filter(|task| task.status == TaskStatus::Completed || started)
+        .ok_or_else(|| {
+            "Download was not started; the browser transfer was preserved".to_string()
+        })?;
     if let Some(id) = handoff_id {
         crate::browser_bridge::acknowledge_handoff(&id, true)
             .map_err(|_| "Download started, but browser acknowledgement failed".to_string())?;
@@ -314,59 +278,32 @@ pub async fn start_download(
 
 // ─── 4. Pause ───────────────────────────────────────────────
 /// Stops the download, keeping its partial file and resume sidecar. Returns the resulting
-/// snapshot (status `completed` if it finished before the stop took effect).
+/// snapshot: `paused`, `completed` if it finished before the stop took effect, or `stopping`
+/// if the engine has not exited within the stop timeout.
 #[tauri::command]
 pub async fn pause_download(
-    app: AppHandle,
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<DownloadTaskState, String> {
-    let shared = Shared::new(&app, &state);
-    let task = stop_task(&shared, &task_id)
+    state
+        .tasks
+        .stop(&task_id)
         .await
-        .ok_or_else(|| format!("Unknown task: {task_id}"))?;
-    shared.save_history().await;
-    Ok(task)
+        .ok_or_else(|| format!("Unknown task: {task_id}"))
 }
 
+/// Resumes a paused or failed task. Every await between checking the task and starting its
+/// engine (the probe, file checks) is guarded by a [`crate::controller::ResumeTicket`]: if
+/// anything else happened to the task meanwhile, this resume stands down.
 pub async fn resume_task_internal(
-    app: &AppHandle,
     state: &AppState,
     task_id: &str,
 ) -> Result<DownloadTaskState, String> {
-    // If the task is currently winding down in `stop_task`, wait for it to fully exit.
-    loop {
-        let maybe_notify = {
-            let stopping = state.stopping_tasks.lock().unwrap();
-            stopping.get(task_id).cloned()
-        };
-        if let Some(mut finished) = maybe_notify {
-            if tokio::time::timeout(STOP_TIMEOUT, finished.wait_for(|done| *done))
-                .await
-                .is_err()
-            {
-                return Err("Download is still stopping; try again in a moment".to_string());
-            }
-        } else {
-            break;
-        }
-    }
-
-    let task = state
-        .tasks
-        .read()
-        .await
-        .get(task_id)
-        .cloned()
-        .ok_or_else(|| format!("Unknown task: {task_id}"))?;
-    match task.status {
-        TaskStatus::Paused | TaskStatus::Error => {}
-        TaskStatus::Downloading => return Ok(task),
-        TaskStatus::Completed => return Err("Download is already complete".to_string()),
-    }
-    if state.handles.lock().await.contains_key(task_id) {
-        return Err("Download is still stopping; try again in a moment".to_string());
-    }
+    let ticket = match state.tasks.begin_resume(task_id).await? {
+        ResumeStart::Ready(ticket) => ticket,
+        ResumeStart::AlreadyRunning(task) => return Ok(task),
+    };
+    let task = ticket.task.clone();
 
     let dir = validate_save_dir(&task.save_dir)?;
     let settings = state.settings.read().await.clone();
@@ -391,100 +328,80 @@ pub async fn resume_task_internal(
     if output_path.parent() != Some(dir.as_path()) {
         warn!(task_id = %task_id, "Saved path is outside the saved folder; resuming anyway");
     }
-    {
-        let mut reserved = state.reserved_paths.lock().await;
-        if !reserved.insert(output_path.clone()) {
-            return Err(format!(
-                "{} is being written by another download",
-                task.save_path
-            ));
-        }
+    if !state.tasks.reserve_path(&output_path).await {
+        return Err(format!(
+            "{} is being written by another download",
+            task.save_path
+        ));
     }
-
     let (resume_existing, file_identity) =
         match prepare_resume_output(&output_path, task.file_identity.as_ref()) {
             Ok(output) => output,
             Err(error) => {
-                state.reserved_paths.lock().await.remove(&output_path);
+                state.tasks.release_path(&output_path).await;
                 return Err(error);
             }
         };
-    info!(task_id = %task_id, url = %probe.url, output = %task.save_path, "Resuming download");
-    let shared = Shared::new(app, state);
+    // A placeholder this resume created for a missing file; deleted if we stand down.
+    let placeholder = (!resume_existing).then(|| file_identity.clone()).flatten();
     let total_bytes = probe.total_bytes;
     let supports_ranges = probe.supports_parallel();
-    let snapshot = shared
-        .update(task_id, |t| {
-            t.status = TaskStatus::Downloading;
+    let committed = state
+        .tasks
+        .commit_resume(ticket, |t| {
             t.total_bytes = total_bytes;
             t.supports_ranges = supports_ranges;
             t.file_identity = file_identity.clone();
             t.error = None;
             t.sha256 = None;
             t.completed_at_ms = None;
-            t.clear_runtime();
         })
         .await;
-    let Some(snapshot) = snapshot else {
-        // Removed while we were probing.
-        if !resume_existing {
-            remove_empty_placeholder(&output_path, file_identity).await;
+    let (snapshot, generation) = match committed {
+        Ok(committed) => committed,
+        Err(stale) => {
+            remove_empty_placeholder(&output_path, placeholder).await;
+            state.tasks.release_path(&output_path).await;
+            return match stale {
+                CommitError::Removed => Err(format!("Unknown task: {task_id}")),
+                // Paused, resumed or finished by someone else meanwhile: report that state.
+                CommitError::Superseded(current) => {
+                    info!(task_id = %task_id, status = ?current.status, "Resume superseded by a newer change; not starting");
+                    Ok(*current)
+                }
+            };
         }
-        state.reserved_paths.lock().await.remove(&output_path);
-        return Err(format!("Unknown task: {task_id}"));
     };
-    shared.save_history().await;
-    spawn_task(
-        shared,
-        task_id.to_string(),
+    info!(task_id = %task_id, url = %probe.url, output = %task.save_path, "Resuming download");
+    state.tasks.save_history();
+    launch(
+        state,
+        task_id,
+        generation,
         engine,
         probe,
         output_path,
         snapshot.file_identity.clone(),
+        placeholder,
         resume_existing,
     )
     .await;
-    Ok(snapshot)
+    Ok(state.tasks.get(task_id).await.unwrap_or(snapshot))
 }
 
-pub async fn pause_all_internal(app: &AppHandle, state: &AppState) {
-    let running_ids: Vec<String> = {
-        let tasks = state.tasks.read().await;
-        tasks
-            .values()
-            .filter(|t| t.status == TaskStatus::Downloading)
-            .map(|t| t.id.clone())
-            .collect()
-    };
-    let shared = Shared::new(app, state);
-    // Stop concurrently: each stop may wait up to `STOP_TIMEOUT`, and quitting waits for this,
-    // so the total wait is bounded by one timeout rather than one per task.
-    let mut stops = tokio::task::JoinSet::new();
-    for id in running_ids {
-        let shared = shared.clone();
-        stops.spawn(async move {
-            stop_task(&shared, &id).await;
-        });
-    }
-    while let Some(result) = stops.join_next().await {
-        if let Err(e) = result {
-            warn!("Stopping a task failed: {e}");
-        }
-    }
-    shared.save_history().await;
+/// Pauses every running download (concurrently, bounded by one stop timeout in total) and
+/// waits for the history write.
+pub async fn pause_all_internal(state: &AppState) {
+    state.tasks.stop_all().await;
 }
 
-pub async fn resume_all_internal(app: &AppHandle, state: &AppState) {
-    let paused_ids: Vec<String> = {
-        let tasks = state.tasks.read().await;
-        tasks
-            .values()
-            .filter(|t| t.status == TaskStatus::Paused || t.status == TaskStatus::Error)
-            .map(|t| t.id.clone())
-            .collect()
-    };
+pub async fn resume_all_internal(state: &AppState) {
+    let paused_ids = state
+        .tasks
+        .ids_with_status(&[TaskStatus::Paused, TaskStatus::Error])
+        .await;
     for id in paused_ids {
-        if let Err(e) = resume_task_internal(app, state, &id).await {
+        if let Err(e) = resume_task_internal(state, &id).await {
             warn!(task_id = %id, "Failed to resume task in resume_all: {e}");
         }
     }
@@ -495,103 +412,43 @@ pub async fn resume_all_internal(app: &AppHandle, state: &AppState) {
 /// engine finds its resume data unusable).
 #[tauri::command]
 pub async fn resume_download(
-    app: AppHandle,
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<DownloadTaskState, String> {
-    resume_task_internal(&app, &state, &task_id).await
+    resume_task_internal(&state, &task_id).await
 }
 
 #[tauri::command]
-pub async fn pause_all(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    pause_all_internal(&app, &state).await;
+pub async fn pause_all(state: State<'_, AppState>) -> Result<(), String> {
+    pause_all_internal(&state).await;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn resume_all(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    resume_all_internal(&app, &state).await;
+pub async fn resume_all(state: State<'_, AppState>) -> Result<(), String> {
+    resume_all_internal(&state).await;
     Ok(())
 }
 
 // ─── 6. Remove ──────────────────────────────────────────────
 /// Stops the task if running and removes it from the list. An incomplete download's resume
 /// data and partial file are deleted only after verifying file identity. A completed
-/// file is deleted only if `delete_file`, with the same ownership check.
+/// file is deleted only if `delete_file`, with the same ownership check. Fails (keeping the
+/// task) while its engine is still stopping.
 #[tauri::command]
 pub async fn remove_download(
-    app: AppHandle,
     state: State<'_, AppState>,
     task_id: String,
     delete_file: bool,
 ) -> Result<(), String> {
-    let shared = Shared::new(&app, &state);
-    stop_task(&shared, &task_id).await;
-
-    let removed = state.tasks.write().await.remove(&task_id);
-    let Some(task) = removed else {
-        return Ok(());
-    };
-    {
-        let tasks = state.tasks.read().await;
-        crate::tray::update_tray_tooltip(&app, &tasks);
-    }
-    shared.save_history().await;
-
-    let completed = task.status == TaskStatus::Completed;
-    if completed && !delete_file {
-        return Ok(());
-    }
-
-    let path = PathBuf::from(&task.save_path);
-    // Never delete a file that another task now owns (e.g. this task stopped before the
-    // file was created on disk, and a later task was assigned the same path).
-    let reserved = state.reserved_paths.lock().await.contains(&path);
-    let owned_by_other_task = state
-        .tasks
-        .read()
-        .await
-        .values()
-        .any(|t| t.save_path == task.save_path);
-    if reserved || owned_by_other_task {
-        info!(task_id = %task_id, path = %task.save_path, "File is owned by another task; not deleting");
-        return Ok(());
-    }
-
-    let Some(identity) = task.file_identity else {
-        info!(task_id = %task_id, "File ownership is unknown; preserving output and resume data");
-        return Ok(());
-    };
-    let delete_path = path.clone();
-    match tokio::task::spawn_blocking(move || {
-        conflux_core::remove_owned_file(&delete_path, &identity)
-    })
-    .await
-    {
-        Ok(Ok(true)) => {
-            if let Err(error) = remove_resume_sidecar(&path) {
-                warn!(task_id = %task_id, "Failed to delete resume data: {error}");
-            }
-            info!(task_id = %task_id, "Deleted the owned file");
-        }
-        Ok(Ok(false)) => {
-            info!(task_id = %task_id, "File identity changed or file is missing; preserving resume data")
-        }
-        result => {
-            warn!(task_id = %task_id, "Could not safely delete owned file: {result:?}");
-            return Err("Removed from the list, but the file could not safely be deleted".into());
-        }
-    }
-    Ok(())
+    state.tasks.remove(&task_id, delete_file).await
 }
 
 // ─── 7. List Tasks ──────────────────────────────────────────
 /// All known tasks, newest first.
 #[tauri::command]
 pub async fn list_tasks(state: State<'_, AppState>) -> Result<Vec<DownloadTaskState>, String> {
-    let mut tasks: Vec<DownloadTaskState> = state.tasks.read().await.values().cloned().collect();
-    tasks.sort_by_key(|t| std::cmp::Reverse(t.created_at_ms));
-    Ok(tasks)
+    Ok(state.tasks.list().await)
 }
 
 // ─── 8. Settings ────────────────────────────────────────────
@@ -828,113 +685,123 @@ fn apply_backdrop(window: &WebviewWindow, dark: bool, requested: Backdrop) -> Ba
 }
 
 // ─── Running a task ─────────────────────────────────────────
-/// Spawns the engine for `task_id` and registers its handle. `output_path` must already be
-/// reserved; it is released when the task ends.
-async fn spawn_task(
-    shared: Shared,
-    task_id: String,
+/// Chooses the adapters and hands the engine to the controller, which starts it only if the
+/// task is still in `generation`. `output_path` must already be reserved. `expected_identity`
+/// is the file the engine may write (checked on its handle before any truncation);
+/// `placeholder` is an empty file this start created, deleted if the task stands down.
+#[allow(clippy::too_many_arguments)]
+async fn launch(
+    state: &AppState,
+    task_id: &str,
+    generation: u64,
     engine: DownloadEngine,
     probe: DownloadProbe,
     output_path: PathBuf,
     expected_identity: Option<conflux_core::FileIdentity>,
+    placeholder: Option<conflux_core::FileIdentity>,
     resume: bool,
-) {
+) -> bool {
+    let controller = &state.tasks;
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let (adapter_tx, adapter_rx) = if probe.supports_parallel() {
         let (tx, rx) = mpsc::channel(64);
         (
-            Some(crate::adapter_updates::ordered_sender(task_id.clone(), tx)),
+            Some(crate::adapter_updates::ordered_sender(
+                task_id.to_string(),
+                tx,
+            )),
             Some(rx),
         )
     } else {
         (None, None)
     };
-    let _adapter_snapshot = shared.last_adapters.read().await;
-    let adapters = match select_adapters(&*shared.settings.read().await) {
+    // Held until the handle is registered, so an adapter change in between is not missed.
+    let _adapter_snapshot = state.last_adapters.read().await;
+    let adapters = match select_adapters(&*state.settings.read().await) {
         Ok(adapters) => adapters,
         Err(message) => {
-            shared
-                .update(&task_id, |task| {
-                    task.status = TaskStatus::Error;
-                    task.error = Some(message.clone());
-                })
+            // Not started: record why through the normal exit path.
+            let names = Arc::new(RwLock::new(HashMap::new()));
+            let channels = WorkerChannels {
+                cancel_tx,
+                adapter_tx,
+                names,
+            };
+            let exit = WorkerExit {
+                status: TaskStatus::Error,
+                error: Some(message),
+                ..WorkerExit::paused()
+            };
+            controller
+                .spawn_worker(
+                    task_id,
+                    generation,
+                    output_path,
+                    placeholder,
+                    channels,
+                    async { exit },
+                )
                 .await;
-            shared.reserved_paths.lock().await.remove(&output_path);
-            shared.save_history().await;
-            return;
+            return false;
         }
     };
     let names = Arc::new(RwLock::new(adapter_names(&adapters)));
-    // Hold the handles lock across spawn + insert: the task removes its own handle when it
-    // finishes, and that removal must not run before the handle has been inserted.
-    let mut handles = shared.handles.lock().await;
-    // A pause or remove between marking the task Downloading and this point found no handle,
-    // and (under this same lock) paused or removed it. Starting the engine now would leave
-    // a download running that nothing can stop.
-    let still_wanted = shared
-        .tasks
-        .read()
-        .await
-        .get(&task_id)
-        .is_some_and(|t| t.status == TaskStatus::Downloading);
-    if !still_wanted {
-        info!(task_id = %task_id, "Task was paused or removed before it started; not starting the engine");
-        let removed = !shared.tasks.read().await.contains_key(&task_id);
-        drop(handles);
-        // `remove_download` skipped the file because it was still reserved by this task.
-        // A new download's placeholder is still empty and nobody else's: delete it.
-        if removed && !resume {
-            remove_empty_placeholder(&output_path, expected_identity).await;
-        }
-        shared.reserved_paths.lock().await.remove(&output_path);
-        return;
-    }
-    let join_handle = tokio::spawn(run_download(
-        shared.clone(),
-        task_id.clone(),
+    let worker = run_download(
+        Arc::clone(controller),
+        task_id.to_string(),
         engine,
         probe,
         output_path.clone(),
+        expected_identity,
         adapters,
         adapter_rx,
         names.clone(),
         cancel_rx,
         resume,
-    ));
-    handles.insert(
-        task_id,
-        TaskHandle {
-            cancel_tx,
-            adapter_tx,
-            names,
-            join_handle,
-            output_path,
-        },
     );
+    let channels = WorkerChannels {
+        cancel_tx,
+        adapter_tx,
+        names,
+    };
+    controller
+        .spawn_worker(
+            task_id,
+            generation,
+            output_path,
+            placeholder,
+            channels,
+            worker,
+        )
+        .await
 }
 
+/// The engine run of one task, with its progress forwarded to the controller. Returns how
+/// it ended; the controller records that and releases the task's handle and path.
 #[allow(clippy::too_many_arguments)]
 async fn run_download(
-    shared: Shared,
+    controller: Arc<TaskController>,
     task_id: String,
     engine: DownloadEngine,
     probe: DownloadProbe,
     output_path: PathBuf,
+    expected_identity: Option<conflux_core::FileIdentity>,
     adapters: Vec<NetworkAdapter>,
     adapter_rx: Option<mpsc::Receiver<AdapterUpdate>>,
     names: Arc<RwLock<HashMap<std::net::IpAddr, (String, String)>>>,
     cancel_rx: watch::Receiver<bool>,
     resume: bool,
-) {
+) -> WorkerExit {
     let (tx, mut rx) = mpsc::channel::<ProgressUpdate>(100);
     let session_start = Instant::now();
-    let initial_duration_ms = {
-        let tasks = shared.tasks.read().await;
-        tasks.get(&task_id).map(|t| t.duration_ms).unwrap_or(0)
-    };
+    let initial_duration_ms = controller
+        .get(&task_id)
+        .await
+        .map(|t| t.duration_ms)
+        .unwrap_or(0);
 
     let mut forwarder = {
-        let shared = shared.clone();
+        let controller = Arc::clone(&controller);
         let id = task_id.clone();
         let names = names.clone();
         tokio::spawn(async move {
@@ -946,13 +813,10 @@ async fn run_download(
                     .iter()
                     .map(|a| adapter_stat(a, &current_names))
                     .collect();
+                drop(current_names);
                 let elapsed_ms = initial_duration_ms + session_start.elapsed().as_millis() as u64;
-                let exists = shared
-                    .update(&id, |task| {
-                        // A late tick must never undo a final status set elsewhere.
-                        if task.status != TaskStatus::Downloading {
-                            return;
-                        }
+                let exists = controller
+                    .update_running(&id, |task| {
                         task.downloaded_bytes = p.downloaded_bytes;
                         if p.total_bytes > 0 {
                             task.total_bytes = p.total_bytes;
@@ -972,11 +836,10 @@ async fn run_download(
                             task.chunk_map = Some(map);
                         }
                     })
-                    .await
-                    .is_some();
+                    .await;
                 if exists && last_save.elapsed() >= HISTORY_SAVE_INTERVAL {
                     last_save = Instant::now();
-                    shared.save_history().await;
+                    controller.save_progress();
                 }
             }
         })
@@ -991,6 +854,7 @@ async fn run_download(
                 adapter_rx,
                 Some(tx),
                 cancel_rx.clone(),
+                expected_identity,
             )
             .await
     } else {
@@ -1002,6 +866,7 @@ async fn run_download(
                 adapter_rx,
                 Some(tx),
                 cancel_rx.clone(),
+                expected_identity,
             )
             .await
     };
@@ -1018,7 +883,7 @@ async fn run_download(
     }
 
     let stop_requested = *cancel_rx.borrow();
-    let (status, sha256, err_msg) = match result {
+    let (status, sha256, error) = match result {
         Ok(hash) => {
             info!(task_id = %task_id, sha256 = %hash, "Download completed");
             #[cfg(windows)]
@@ -1048,39 +913,18 @@ async fn run_download(
     } else {
         None
     };
-    let final_duration_ms = initial_duration_ms + session_start.elapsed().as_millis() as u64;
-    let final_task = shared
-        .update(&task_id, |task| {
-            task.status = status;
-            task.clear_runtime();
-            task.duration_ms = final_duration_ms;
-            if status == TaskStatus::Completed {
-                task.total_bytes =
-                    completed_length.unwrap_or_else(|| task.total_bytes.max(task.downloaded_bytes));
-                task.downloaded_bytes = task.total_bytes;
-                task.completed_chunks = task.total_chunks;
-                task.completed_at_ms = Some(now_ms());
-            }
-            if final_duration_ms > 0 && task.downloaded_bytes > 0 {
-                task.avg_speed_bytes_sec =
-                    Some((task.downloaded_bytes as f64) / (final_duration_ms as f64 / 1000.0));
-            }
-            task.sha256 = sha256;
-            task.error = err_msg;
-        })
-        .await;
-
-    shared.handles.lock().await.remove(&task_id);
-    shared.reserved_paths.lock().await.remove(&output_path);
-    shared.save_history().await;
-
-    if let Some(task) = final_task {
-        notify_finished(&shared, &task).await;
+    WorkerExit {
+        status,
+        sha256,
+        error,
+        completed_length,
+        duration_ms: Some(initial_duration_ms + session_start.elapsed().as_millis() as u64),
     }
 }
 
-async fn notify_finished(shared: &Shared, task: &DownloadTaskState) {
-    if !shared.settings.read().await.notify_on_complete {
+async fn notify_finished(app: &AppHandle, task: &DownloadTaskState) {
+    let state = app.state::<AppState>();
+    if !state.settings.read().await.notify_on_complete {
         return;
     }
     let (title, body) = match task.status {
@@ -1103,111 +947,11 @@ async fn notify_finished(shared: &Shared, task: &DownloadTaskState) {
                 redact_error(task.error.as_deref().unwrap_or("unknown error"))
             ),
         ),
-        TaskStatus::Paused | TaskStatus::Downloading => return,
+        TaskStatus::Paused | TaskStatus::Downloading | TaskStatus::Stopping => return,
     };
-    if let Err(e) = shared
-        .app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show()
-    {
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
         warn!(task_id = %task.id, "Failed to show notification: {e}");
     }
-}
-
-struct StoppingGuard {
-    stopping_tasks: Arc<std::sync::Mutex<HashMap<String, watch::Receiver<bool>>>>,
-    task_id: String,
-    finished: watch::Sender<bool>,
-}
-
-impl Drop for StoppingGuard {
-    fn drop(&mut self) {
-        if let Ok(mut map) = self.stopping_tasks.lock() {
-            map.remove(&self.task_id);
-        }
-        self.finished.send_replace(true);
-    }
-}
-
-/// Signals the task to stop, waits for it to wind down (aborting after `STOP_TIMEOUT`),
-/// and returns the task's resulting snapshot. `None` if the task id is unknown.
-async fn stop_task(shared: &Shared, task_id: &str) -> Option<DownloadTaskState> {
-    let mut handles = loop {
-        let handles = shared.handles.lock().await;
-        let stopping = { shared.stopping_tasks.lock().unwrap().get(task_id).cloned() };
-        if let Some(mut finished) = stopping {
-            drop(handles);
-            let _ = finished.wait_for(|done| *done).await;
-        } else {
-            break handles;
-        }
-    };
-    let Some(TaskHandle {
-        cancel_tx,
-        mut join_handle,
-        output_path,
-        ..
-    }) = handles.remove(task_id)
-    else {
-        // No engine yet: a start or resume may be about to spawn one. Pausing while still
-        // holding `handles` guarantees `spawn_task` sees the new status and stands down.
-        let snapshot = pause_if_downloading(shared, task_id).await;
-        drop(handles);
-        return snapshot;
-    };
-
-    let (finished, receiver) = watch::channel(false);
-    if let Ok(mut map) = shared.stopping_tasks.lock() {
-        map.insert(task_id.to_string(), receiver);
-    }
-    let guard = StoppingGuard {
-        stopping_tasks: shared.stopping_tasks.clone(),
-        task_id: task_id.to_string(),
-        finished,
-    };
-
-    // Release the lock before awaiting: the task itself locks `handles` during cleanup.
-    drop(handles);
-
-    let _ = cancel_tx.send(true);
-    if tokio::time::timeout(STOP_TIMEOUT, &mut join_handle)
-        .await
-        .is_err()
-    {
-        warn!(
-            task_id,
-            "Download did not stop within {:?}; aborting", STOP_TIMEOUT
-        );
-        join_handle.abort();
-        let _ = join_handle.await;
-    }
-    // Normally released by the task itself; required if it was aborted.
-    shared.reserved_paths.lock().await.remove(&output_path);
-    drop(cancel_tx);
-
-    // The task records its own final status unless it was aborted.
-    let snapshot = pause_if_downloading(shared, task_id).await;
-    drop(guard);
-    snapshot
-}
-
-/// Marks a `Downloading` task `Paused` and returns its snapshot; `None` if the id is unknown.
-async fn pause_if_downloading(shared: &Shared, task_id: &str) -> Option<DownloadTaskState> {
-    let current = shared.tasks.read().await.get(task_id).cloned()?;
-    if current.status != TaskStatus::Downloading {
-        return Some(current);
-    }
-    shared
-        .update(task_id, |task| {
-            if task.status == TaskStatus::Downloading {
-                task.status = TaskStatus::Paused;
-                task.clear_runtime();
-            }
-        })
-        .await
 }
 
 /// Dynamically aggregates newly joined network adapters into active downloads,
@@ -1217,24 +961,7 @@ pub async fn handle_network_change(
     added: &[NetworkAdapter],
     removed: &[NetworkAdapter],
 ) {
-    let targets = {
-        let handles = state.handles.lock().await;
-        let tasks = state.tasks.read().await;
-        handles
-            .iter()
-            .filter_map(|(task_id, handle)| {
-                let task = tasks.get(task_id)?;
-                if task.status != TaskStatus::Downloading {
-                    return None;
-                }
-                Some((
-                    task_id.clone(),
-                    handle.adapter_tx.clone(),
-                    handle.names.clone(),
-                ))
-            })
-            .collect::<Vec<_>>()
-    };
+    let targets = state.tasks.adapter_targets().await;
 
     let updates = crate::adapter_updates::adapter_updates(added, removed);
     for (task_id, tx, names) in targets {
@@ -1376,54 +1103,6 @@ fn validate_save_dir(save_dir: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// Picks `dir/filename` or the first free `dir/"name (n).ext"`, claims it on disk by creating
-/// an empty placeholder file, and reserves it for this process.
-///
-/// The claim uses `create_new`, so it is atomic across processes (e.g. the desktop app and
-/// the CLI can never pick the same file). This mirrors `conflux_core::claim_unique_path`,
-/// but additionally skips paths reserved by running tasks: a resumed task's file may be
-/// missing on disk while its engine is about to recreate it.
-async fn reserve_output_path(
-    reserved: &Mutex<HashSet<PathBuf>>,
-    claimed_paths: &[PathBuf],
-    dir: &Path,
-    filename: &str,
-) -> Result<(PathBuf, Option<conflux_core::FileIdentity>), String> {
-    let mut reserved = reserved.lock().await;
-    let mut n: u32 = 0;
-    loop {
-        let candidate = if n == 0 {
-            dir.join(filename)
-        } else {
-            dir.join(numbered_filename(filename, n))
-        };
-        n += 1;
-        if reserved.contains(&candidate) || claimed_paths.iter().any(|p| p == &candidate) {
-            continue;
-        }
-        let sidecar = conflux_core::resume_sidecar_path(&candidate);
-        if sidecar.exists() {
-            continue;
-        }
-        let created = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate);
-        match created {
-            Ok(file) => {
-                let identity = conflux_core::FileIdentity::of(&file).ok();
-                reserved.insert(candidate.clone());
-                return Ok((candidate, identity));
-            }
-            // Taken on disk (possibly a moment ago by another process): try the next name.
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => {
-                return Err(format!("Cannot create {}: {e}", candidate.display()));
-            }
-        }
-    }
-}
-
 /// Contents of the `Zone.Identifier` stream marking a file as downloaded from the Internet
 /// (zone 3), so SmartScreen and Office Protected View treat it as untrusted. Credentials in
 /// the URL are dropped and CR/LF removed so the URL cannot inject extra lines.
@@ -1452,16 +1131,6 @@ async fn write_mark_of_the_web(path: &Path, url: &str) {
         Ok(()) => info!(path = %path.display(), "Wrote Mark-of-the-Web"),
         Err(e) => warn!(path = %path.display(), "Failed to write Mark-of-the-Web: {e}"),
     }
-}
-
-/// Deletes only our unchanged empty placeholder, using an exclusive identity-checked handle.
-async fn remove_empty_placeholder(path: &Path, identity: Option<conflux_core::FileIdentity>) {
-    let Some(identity) = identity else { return };
-    let path = path.to_path_buf();
-    let _ = tokio::task::spawn_blocking(move || {
-        conflux_core::remove_owned_empty_file(&path, &identity)
-    })
-    .await;
 }
 
 fn prepare_resume_output(
@@ -1496,47 +1165,9 @@ fn prepare_resume_output(
     }
 }
 
-/// "name.ext" -> "name (n).ext"; "name" -> "name (n)"; ".hidden" -> ".hidden (n)".
-fn numbered_filename(filename: &str, n: u32) -> String {
-    match filename.rfind('.') {
-        Some(idx) if idx > 0 => format!("{} ({}){}", &filename[..idx], n, &filename[idx..]),
-        _ => format!("{} ({})", filename, n),
-    }
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn stop_completion_is_not_lost_before_a_waiter_starts() {
-        let stopping_tasks = Arc::new(std::sync::Mutex::new(HashMap::new()));
-        let (finished, mut receiver) = watch::channel(false);
-        stopping_tasks
-            .lock()
-            .unwrap()
-            .insert("t".into(), receiver.clone());
-        let guard = StoppingGuard {
-            stopping_tasks: stopping_tasks.clone(),
-            task_id: "t".into(),
-            finished,
-        };
-        drop(guard);
-        assert!(stopping_tasks.lock().unwrap().is_empty());
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), receiver.wait_for(|done| *done))
-                .await
-                .unwrap()
-                .is_ok()
-        );
-    }
 
     #[test]
     fn resume_claims_missing_files_and_preserves_replacements() {
@@ -1557,98 +1188,12 @@ mod tests {
     }
 
     #[test]
-    fn numbered_filename_inserts_counter_before_extension() {
-        assert_eq!(numbered_filename("file.iso", 1), "file (1).iso");
-        assert_eq!(numbered_filename("archive.tar.gz", 2), "archive.tar (2).gz");
-        assert_eq!(numbered_filename("README", 3), "README (3)");
-        assert_eq!(numbered_filename(".bashrc", 1), ".bashrc (1)");
-    }
-
-    #[test]
     fn validate_save_dir_rejects_empty_and_relative() {
         assert!(validate_save_dir("").is_err());
         assert!(validate_save_dir("   ").is_err());
         assert!(validate_save_dir("Downloads").is_err());
         let tmp = std::env::temp_dir();
         assert_eq!(validate_save_dir(tmp.to_str().unwrap()).unwrap(), tmp);
-    }
-
-    #[tokio::test]
-    async fn reserved_paths_never_collide() {
-        let dir = std::env::temp_dir().join(format!("conflux-reserve-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let reserved = Mutex::new(HashSet::new());
-
-        let a = reserve_output_path(&reserved, &[], &dir, "file.bin")
-            .await
-            .unwrap()
-            .0;
-        let b = reserve_output_path(&reserved, &[], &dir, "file.bin")
-            .await
-            .unwrap()
-            .0;
-        let c = reserve_output_path(&reserved, &[], &dir, "file.bin")
-            .await
-            .unwrap()
-            .0;
-
-        assert_eq!(a, dir.join("file.bin"));
-        assert_eq!(b, dir.join("file (1).bin"));
-        assert_eq!(c, dir.join("file (2).bin"));
-        assert_eq!(reserved.lock().await.len(), 3);
-        // Each name is claimed on disk with an empty placeholder.
-        for p in [&a, &b, &c] {
-            assert_eq!(std::fs::metadata(p).unwrap().len(), 0);
-        }
-
-        // A file created by someone else (another process) is skipped, even unreserved.
-        std::fs::write(dir.join("other.bin"), b"keep").unwrap();
-        let d = reserve_output_path(&reserved, &[], &dir, "other.bin")
-            .await
-            .unwrap()
-            .0;
-        assert_eq!(d, dir.join("other (1).bin"));
-        assert_eq!(std::fs::read(dir.join("other.bin")).unwrap(), b"keep");
-
-        // A reserved path missing on disk (running task) is skipped too.
-        let resumed = dir.join("resumed.bin");
-        reserved.lock().await.insert(resumed.clone());
-        let e = reserve_output_path(&reserved, &[], &dir, "resumed.bin")
-            .await
-            .unwrap()
-            .0;
-        assert_eq!(e, dir.join("resumed (1).bin"));
-        assert!(!resumed.exists());
-
-        // A claimed path from an inactive/paused task (missing on disk) is skipped.
-        let paused_path = dir.join("paused.bin");
-        let f = reserve_output_path(
-            &reserved,
-            std::slice::from_ref(&paused_path),
-            &dir,
-            "paused.bin",
-        )
-        .await
-        .unwrap()
-        .0;
-        assert_eq!(f, dir.join("paused (1).bin"));
-
-        // A candidate with an existing resume sidecar is skipped.
-        let sidecar_target = dir.join("with_sidecar.bin");
-        std::fs::write(conflux_core::resume_sidecar_path(&sidecar_target), b"{}").unwrap();
-        let g = reserve_output_path(&reserved, &[], &dir, "with_sidecar.bin")
-            .await
-            .unwrap()
-            .0;
-        assert_eq!(g, dir.join("with_sidecar (1).bin"));
-
-        assert!(
-            reserve_output_path(&reserved, &[], &dir.join("missing"), "x.bin")
-                .await
-                .is_err()
-        );
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     fn adapter(name: &str, ip: &str, enabled: bool) -> NetworkAdapter {

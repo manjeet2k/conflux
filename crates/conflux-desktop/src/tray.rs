@@ -67,7 +67,10 @@ pub fn format_tray_tooltip(tasks: &HashMap<String, DownloadTaskState>) -> String
         } else {
             format!("Conflux - Downloading ({} active)", active.len())
         }
-    } else if tasks.values().any(|t| t.status == TaskStatus::Paused) {
+    } else if tasks
+        .values()
+        .any(|t| matches!(t.status, TaskStatus::Paused | TaskStatus::Stopping))
+    {
         "Conflux - Paused".to_string()
     } else {
         "Conflux".to_string()
@@ -138,14 +141,14 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             let app_clone = app.clone();
             tauri::async_runtime::spawn(async move {
                 let state = app_clone.state::<AppState>();
-                commands::pause_all_internal(&app_clone, &state).await;
+                commands::pause_all_internal(&state).await;
             });
         }
         "resume_all" => {
             let app_clone = app.clone();
             tauri::async_runtime::spawn(async move {
                 let state = app_clone.state::<AppState>();
-                commands::resume_all_internal(&app_clone, &state).await;
+                commands::resume_all_internal(&state).await;
             });
         }
         "settings" => {
@@ -187,6 +190,7 @@ mod tests {
             avg_speed_bytes_sec: None,
             adapters: vec![],
             chunk_map: None,
+            lifecycle: Default::default(),
         }
     }
 

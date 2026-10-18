@@ -22,7 +22,8 @@ export interface AdapterInfo {
 }
 
 // Matches Rust TaskStatus (serde rename_all = "lowercase")
-export type TaskStatus = 'downloading' | 'paused' | 'completed' | 'error';
+// 'stopping': a pause was requested but the engine has not exited yet; it still owns its file.
+export type TaskStatus = 'downloading' | 'stopping' | 'paused' | 'completed' | 'error';
 
 // Matches Rust ProbeResult (returned by probe_url)
 export interface ProbeResult {
@@ -160,6 +161,8 @@ export const PROGRESS_EVENT = 'download-progress';
 export const UPDATE_AVAILABLE_EVENT = 'update-available';
 export const NETWORK_ADAPTERS_CHANGED_EVENT = 'network-adapters-changed';
 export const EXTERNAL_DOWNLOAD_EVENT = 'external-download';
+/** Payload: why download history cannot be saved, or `null` once it can again. */
+export const HISTORY_STATUS_EVENT = 'history-save-status';
 
 export interface RequestHeaders {
   cookie?: string | null;

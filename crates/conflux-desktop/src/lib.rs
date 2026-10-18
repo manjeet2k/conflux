@@ -2,6 +2,7 @@ mod adapter_updates;
 mod adapters;
 pub mod browser_bridge;
 mod commands;
+mod controller;
 mod diagnostics;
 mod fileutil;
 mod history;
@@ -52,7 +53,7 @@ pub(crate) fn quit_gracefully(app: &tauri::AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
-        commands::pause_all_internal(&app, &state).await;
+        commands::pause_all_internal(&state).await;
         app.exit(0);
     });
 }
@@ -121,14 +122,20 @@ pub fn run() {
             };
             info!(?settings_path, ?history_path, "Resolved storage paths");
 
-            let (settings, settings_notice) = settings_path
-                .as_deref()
-                .map(settings::load)
-                .unwrap_or_default();
+            let (settings, settings_notice, settings_path) = match settings_path {
+                Some(path) => {
+                    let loaded = settings::load(&path);
+                    // A file from a newer version is never overwritten: run without saving.
+                    let path = (!loaded.read_only).then_some(path);
+                    (loaded.settings, loaded.notice, path)
+                }
+                None => (settings::Settings::default(), None, None),
+            };
             let history = HistoryStore::new(history_path);
             let (tasks, history_notice) = history.load();
             info!(restored = tasks.len(), "Loaded download history");
-            app.manage(AppState::new(settings, settings_path, history, tasks));
+            let events = std::sync::Arc::new(commands::AppEvents(app.handle().clone()));
+            app.manage(AppState::new(settings, settings_path, history, tasks, events));
             app.manage(updater::PendingUpdate::default());
             for notice in [settings_notice, history_notice].into_iter().flatten() {
                 app.state::<AppState>().push_notice(notice);
@@ -148,6 +155,22 @@ pub fn run() {
                     tray::update_tray_tooltip(app.handle(), &tasks);
                 };
             }
+
+            // Surface history write failures (e.g. a full disk) to the UI until they clear.
+            let status_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = status_handle.state::<AppState>();
+                let mut status = state.tasks.history_status();
+                loop {
+                    let current = status.borrow_and_update().clone();
+                    if let Err(e) = status_handle.emit(commands::HISTORY_STATUS_EVENT, &current) {
+                        warn!("Failed to emit history status: {e}");
+                    }
+                    if status.changed().await.is_err() {
+                        break;
+                    }
+                }
+            });
 
             // Start background non-polling network adapter watcher inside Tokio runtime context
             let app_handle = app.handle().clone();

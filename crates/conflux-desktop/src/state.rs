@@ -1,15 +1,20 @@
+use crate::controller::{TaskController, TaskEvents};
 use crate::settings::Settings;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{watch, Mutex, RwLock};
+use tokio::sync::RwLock;
 
 /// Lifecycle status of a download task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskStatus {
     Downloading,
+    /// A stop was requested but the engine has not exited yet (e.g. a disk write is stuck on
+    /// a stalled USB drive). The task still owns its file: it cannot be resumed or removed
+    /// until the engine is gone, and then becomes `Paused` (or its final status).
+    Stopping,
     /// Stopped by the user (or by quitting the app); resumable from its sidecar.
     Paused,
     Completed,
@@ -74,6 +79,20 @@ pub struct DownloadTaskState {
     /// Last chunk map reported by the engine (see `conflux_core::ProgressUpdate::chunk_map`).
     #[serde(default)]
     pub chunk_map: Option<String>,
+    /// In-process bookkeeping of [`TaskController`]; never serialized.
+    #[serde(skip)]
+    pub lifecycle: Lifecycle,
+}
+
+/// Per-task transition bookkeeping, only changed by [`TaskController`] under its task lock.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Lifecycle {
+    /// Bumped by every lifecycle transition (start, resume, stop request, engine exit,
+    /// removal). An operation that awaited something (a probe) commits only if the
+    /// generation it started from is still current, so stale operations cannot act.
+    pub generation: u64,
+    /// A removal is in progress: no new operation may start on the task.
+    pub removing: bool,
 }
 
 impl DownloadTaskState {
@@ -92,24 +111,12 @@ impl DownloadTaskState {
     }
 }
 
-pub struct TaskHandle {
-    pub cancel_tx: watch::Sender<bool>,
-    pub adapter_tx: Option<tokio::sync::mpsc::UnboundedSender<Vec<conflux_core::AdapterUpdate>>>,
-    pub names: Arc<RwLock<HashMap<std::net::IpAddr, (String, String)>>>,
-    pub join_handle: tokio::task::JoinHandle<()>,
-    pub output_path: PathBuf,
-}
-
 pub struct AppState {
-    pub tasks: Arc<RwLock<HashMap<String, DownloadTaskState>>>,
-    pub handles: Arc<Mutex<HashMap<String, TaskHandle>>>,
-    /// Output paths claimed by running tasks, so two concurrent downloads never
-    /// resolve to the same file before either has created it on disk.
-    pub reserved_paths: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Every download task: lifecycle transitions, engine handles and output paths.
+    pub tasks: Arc<TaskController>,
     pub settings: Arc<RwLock<Settings>>,
     /// `None` when the config dir could not be resolved (settings are then not saved).
     pub settings_path: Option<PathBuf>,
-    pub history: Arc<crate::history::HistoryStore>,
     /// Last known snapshot of network adapters with user overrides applied,
     /// shared between background NetworkWatcher and UI toggle commands.
     pub last_adapters: Arc<RwLock<Vec<conflux_core::NetworkAdapter>>>,
@@ -117,9 +124,6 @@ pub struct AppState {
     /// `refresh_adapters` (under the `last_adapters` lock), read when building UI records.
     /// A plain mutex, never held across an await.
     pub adapter_defaults: std::sync::Mutex<HashMap<String, bool>>,
-    /// Tasks currently winding down in `stop_task`, with a notifier that wakes waiters
-    /// when the engine task has fully exited and status has been updated.
-    pub stopping_tasks: Arc<std::sync::Mutex<HashMap<String, watch::Receiver<bool>>>>,
     /// One-shot messages for the UI (e.g. a data file was reset), drained by the UI once.
     notices: std::sync::Mutex<Vec<String>>,
     /// Pending external download from browser extension or command line on cold start.
@@ -132,19 +136,14 @@ impl AppState {
         settings_path: Option<PathBuf>,
         history: crate::history::HistoryStore,
         tasks: Vec<DownloadTaskState>,
+        events: Arc<dyn TaskEvents>,
     ) -> Self {
         Self {
-            tasks: Arc::new(RwLock::new(
-                tasks.into_iter().map(|t| (t.id.clone(), t)).collect(),
-            )),
-            handles: Arc::new(Mutex::new(HashMap::new())),
-            reserved_paths: Arc::new(Mutex::new(HashSet::new())),
+            tasks: Arc::new(TaskController::new(tasks, Arc::new(history), events)),
             settings: Arc::new(RwLock::new(settings)),
             settings_path,
-            history: Arc::new(history),
             last_adapters: Arc::new(RwLock::new(Vec::new())),
             adapter_defaults: std::sync::Mutex::new(HashMap::new()),
-            stopping_tasks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             notices: std::sync::Mutex::new(Vec::new()),
             pending_download: std::sync::Mutex::new(None),
         }
@@ -199,6 +198,7 @@ mod tests {
             None,
             crate::history::HistoryStore::new(None),
             vec![],
+            Arc::new(crate::controller::NoEvents),
         );
         assert!(state.take_notices().is_empty());
         state.push_notice("a".into());
@@ -235,6 +235,10 @@ mod tests {
             avg_speed_bytes_sec: None,
             adapters: vec![],
             chunk_map: None,
+            lifecycle: Lifecycle {
+                generation: 7,
+                removing: true,
+            },
         };
         let json = serde_json::to_value(&task).unwrap();
         let mut keys: Vec<&str> = json
@@ -275,6 +279,7 @@ mod tests {
         assert_eq!(json["status"], "paused");
         for (status, name) in [
             (TaskStatus::Downloading, "downloading"),
+            (TaskStatus::Stopping, "stopping"),
             (TaskStatus::Completed, "completed"),
             (TaskStatus::Error, "error"),
         ] {

@@ -128,24 +128,75 @@ impl Settings {
     }
 }
 
+/// Result of [`load`].
+#[derive(Debug, PartialEq)]
+pub struct Loaded {
+    pub settings: Settings,
+    /// One-line message for the UI (file reset, or left alone because it is newer).
+    pub notice: Option<String>,
+    /// The file was written by a newer version: it must never be overwritten.
+    pub read_only: bool,
+}
+
 /// Loads settings. A missing file yields defaults. An unparseable file is renamed to
-/// `settings.json.corrupt-<timestamp>` (at most 3 kept), defaults are used, and the second
-/// value is a notice for the UI. Never fatal.
-pub fn load(path: &Path) -> (Settings, Option<String>) {
-    match std::fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str::<Settings>(&text) {
-            Ok(s) => (s.normalized(), None),
-            Err(e) => {
-                warn!("Invalid settings file, using defaults: {e}");
-                let notice = crate::fileutil::quarantine_with_notice(path, "settings");
-                (Settings::default(), Some(notice))
-            }
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Settings::default(), None),
+/// `settings.json.corrupt-<timestamp>` (at most 3 kept), defaults are used, and a notice is
+/// returned for the UI. A file from a newer version (`schema_version` above ours) is not
+/// interpreted and not touched: defaults are used and `read_only` is set. Never fatal.
+pub fn load(path: &Path) -> Loaded {
+    let loaded = |settings, notice, read_only| Loaded {
+        settings,
+        notice,
+        read_only,
+    };
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return loaded(Settings::default(), None, false)
+        }
         Err(e) => {
             warn!("Cannot read settings file, using defaults: {e}");
-            (Settings::default(), None)
+            return loaded(Settings::default(), None, false);
         }
+    };
+    let corrupt = |reason: &dyn std::fmt::Display| {
+        warn!("Invalid settings file, using defaults: {reason}");
+        let notice = crate::fileutil::quarantine_with_notice(path, "settings");
+        loaded(Settings::default(), Some(notice), false)
+    };
+    // Read the version before interpreting anything else: fields of a newer layout may mean
+    // something different, and normalizing would otherwise relabel the file as ours.
+    let value: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(e) => return corrupt(&e),
+    };
+    let Some(object) = value.as_object() else {
+        return corrupt(&"not a settings object");
+    };
+    let version = match object.get("schema_version") {
+        None => u64::from(legacy_schema_version()),
+        Some(v) => match v.as_u64() {
+            Some(version) => version,
+            None => return corrupt(&"invalid schema_version"),
+        },
+    };
+    if version > u64::from(SCHEMA_VERSION) {
+        warn!(
+            version,
+            supported = SCHEMA_VERSION,
+            "Settings are from a newer version; using defaults and leaving the file untouched"
+        );
+        return loaded(
+            Settings::default(),
+            Some(format!(
+                "Your settings were saved by a newer version of Conflux (format {version}). \
+Defaults are used for now; the file was left unchanged and changes made here will not be saved."
+            )),
+            true,
+        );
+    }
+    match serde_json::from_value::<Settings>(value) {
+        Ok(s) => loaded(s.normalized(), None, false),
+        Err(e) => corrupt(&e),
     }
 }
 
@@ -230,8 +281,12 @@ mod tests {
             br#"{"adapter_overrides":{"Wi-Fi:192.168.1.5":false,"Ethernet:fe80::1":true}}"#,
         )
         .unwrap();
-        let (s, notice) = load(&path);
-        assert!(notice.is_none());
+        let Loaded {
+            settings: s,
+            notice,
+            read_only,
+        } = load(&path);
+        assert!(notice.is_none() && !read_only);
         assert_eq!(s.adapter_overrides.len(), 2);
         assert_eq!(s.adapter_overrides.get("Wi-Fi"), Some(&false));
         assert_eq!(s.adapter_overrides.get("Ethernet"), Some(&true));
@@ -274,7 +329,12 @@ mod tests {
     fn save_and_load_roundtrip() {
         let dir = std::env::temp_dir().join(format!("conflux-settings-{}", uuid::Uuid::new_v4()));
         let path = dir.join("settings.json");
-        assert_eq!(load(&path), (Settings::default(), None));
+        let fresh = |settings| Loaded {
+            settings,
+            notice: None,
+            read_only: false,
+        };
+        assert_eq!(load(&path), fresh(Settings::default()));
         let mut overrides = std::collections::HashMap::new();
         overrides.insert("eth0".into(), false);
         overrides.insert("wlan0".into(), true);
@@ -284,7 +344,7 @@ mod tests {
             ..Settings::default()
         };
         save(&path, &s).unwrap();
-        assert_eq!(load(&path), (s, None));
+        assert_eq!(load(&path), fresh(s));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -294,8 +354,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("settings.json");
         std::fs::write(&path, b"{garbage").unwrap();
-        let (s, notice) = load(&path);
+        let Loaded {
+            settings: s,
+            notice,
+            read_only,
+        } = load(&path);
         assert_eq!(s, Settings::default());
+        assert!(!read_only);
         assert!(notice.unwrap().contains("settings.json.corrupt-"));
         assert!(!path.exists(), "bad file moved away");
         let backups: Vec<_> = std::fs::read_dir(&dir)
@@ -326,7 +391,7 @@ mod tests {
         save(&path, &Settings::default()).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"schema_version\": 1"));
-        assert_eq!(load(&path).0.schema_version, 1);
+        assert_eq!(load(&path).settings.schema_version, 1);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -361,5 +426,81 @@ mod tests {
             ..Settings::default()
         };
         assert!(current.apply_update(bad_update).is_err());
+    }
+
+    #[test]
+    fn newer_settings_are_not_adopted_or_relabelled() {
+        let dir = std::env::temp_dir().join(format!("conflux-settings-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let newer = format!(
+            r#"{{"schema_version":{},"theme":"dark","connections_per_adapter":{{"wifi":8}}}}"#,
+            SCHEMA_VERSION + 1
+        );
+        std::fs::write(&path, &newer).unwrap();
+        let loaded = load(&path);
+        assert!(loaded.read_only);
+        assert_eq!(
+            loaded.settings,
+            Settings::default(),
+            "unknown meaning: not interpreted"
+        );
+        assert!(loaded.notice.unwrap().contains("newer version"));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            newer,
+            "file untouched"
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "not quarantined"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn legacy_and_invalid_versions() {
+        let dir = std::env::temp_dir().join(format!("conflux-settings-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        // Upgrade: version 0 (no field) is migrated and stamped current.
+        std::fs::write(&path, br#"{"theme":"light","schema_version":0}"#).unwrap();
+        let upgraded = load(&path);
+        assert!(!upgraded.read_only && upgraded.notice.is_none());
+        assert_eq!(upgraded.settings.theme, ThemePreference::Light);
+        assert_eq!(upgraded.settings.schema_version, SCHEMA_VERSION);
+        // A version that is not a number is corrupt, not "newer".
+        for bad in [&br#"{"schema_version":"2"}"#[..], b"[1,2]"] {
+            std::fs::write(&path, bad).unwrap();
+            let loaded = load(&path);
+            assert!(!loaded.read_only);
+            assert!(loaded.notice.unwrap().contains(".corrupt-"));
+            assert!(!path.exists());
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Disk full / permission errors: `save` reports the failure and leaves the previous
+    /// file intact, so the caller can keep its in-memory copy unchanged.
+    #[test]
+    fn failed_save_reports_error_and_keeps_the_old_file() {
+        let dir = std::env::temp_dir().join(format!("conflux-settings-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("settings.json");
+        save(&path, &Settings::default()).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        // A directory where the temp file goes makes the write fail like a full disk would.
+        let mut tmp = path.clone();
+        tmp.as_mut_os_string().push(".tmp");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let changed = Settings {
+            theme: ThemePreference::Dark,
+            ..Settings::default()
+        };
+        assert!(save(&path, &changed)
+            .unwrap_err()
+            .starts_with("Failed to save settings"));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

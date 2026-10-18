@@ -20,6 +20,18 @@ pub struct SparseFileWriter {
 impl SparseFileWriter {
     /// Creates (truncating) a file at `path`, immediately pre-allocating its total size to `total_bytes`.
     pub async fn create<P: AsRef<Path>>(path: P, total_bytes: u64) -> Result<Self> {
+        Self::create_owned(path, total_bytes, None).await
+    }
+
+    /// Like [`create`](Self::create), but when `expected` is set the file must already exist
+    /// as exactly that file: identity is checked on the opened handle *before* truncating,
+    /// and that same handle is used for every write. A missing or replaced file fails with
+    /// [`FileOwnershipChanged`](crate::file_identity::FileOwnershipChanged) and is left untouched.
+    pub async fn create_owned<P: AsRef<Path>>(
+        path: P,
+        total_bytes: u64,
+        expected: Option<crate::FileIdentity>,
+    ) -> Result<Self> {
         let path_buf = path.as_ref().to_path_buf();
 
         if let Some(parent) = path_buf.parent() {
@@ -32,13 +44,7 @@ impl SparseFileWriter {
 
         let open_path = path_buf.clone();
         let file = tokio::task::spawn_blocking(move || -> Result<File> {
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&open_path)
-                .with_context(|| format!("Failed to create output file {:?}", open_path))?;
+            let file = open_owned_for_rewrite(&open_path, expected.as_ref(), true)?;
             // NTFS files are not sparse by default: `set_len` alone only moves EndOfFile, and a
             // write far past the valid data length then zero-fills everything before it
             // synchronously. Marking the file sparse first avoids that. Best effort only.
@@ -173,6 +179,48 @@ impl SparseFileWriter {
     }
 }
 
+/// Opens `path` for rewriting from zero and returns the handle, already truncated to 0.
+///
+/// Without `expected` this is a plain create-or-truncate. With `expected`, the file is opened
+/// without creating or truncating, its identity is compared on that handle, and only then is
+/// it truncated, so a file that replaced ours at the same path is never modified.
+pub(crate) fn open_owned_for_rewrite(
+    path: &Path,
+    expected: Option<&crate::FileIdentity>,
+    read: bool,
+) -> Result<File> {
+    let Some(expected) = expected else {
+        return OpenOptions::new()
+            .read(read)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .with_context(|| format!("Failed to create output file {:?}", path));
+    };
+    let file = match OpenOptions::new().read(read).write(true).open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(anyhow::Error::new(
+                crate::file_identity::FileOwnershipChanged,
+            ))
+        }
+        Err(e) => {
+            return Err(e).with_context(|| format!("Failed to open output file {:?}", path));
+        }
+    };
+    let actual = crate::FileIdentity::of(&file)
+        .with_context(|| format!("Failed to read the identity of {:?}", path))?;
+    if actual != *expected {
+        return Err(anyhow::Error::new(
+            crate::file_identity::FileOwnershipChanged,
+        ));
+    }
+    file.set_len(0)
+        .with_context(|| format!("Failed to truncate {:?}", path))?;
+    Ok(file)
+}
+
 /// Sets the NTFS sparse attribute (`FSCTL_SET_SPARSE`) on an open, writable file.
 #[cfg(windows)]
 fn mark_sparse(file: &File) -> io::Result<()> {
@@ -250,6 +298,59 @@ mod tests {
 
         let contents = tokio::fs::read(&file_path).await?;
         assert_eq!(contents, b"ABCDEFGHIJKL");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_owned_rewrites_only_the_claimed_file() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("claimed.bin");
+        std::fs::write(&path, b"stale contents")?;
+        let identity = crate::FileIdentity::at(&path)?;
+
+        let writer = SparseFileWriter::create_owned(&path, 8, Some(identity.clone())).await?;
+        assert_eq!(
+            writer.identity()?,
+            identity,
+            "writes go to the claimed file"
+        );
+        writer.write_at(0, b"abcd".to_vec()).await?;
+        writer.sync().await?;
+        drop(writer);
+        assert_eq!(
+            std::fs::read(&path)?,
+            b"abcd\0\0\0\0",
+            "old bytes truncated away"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_owned_preserves_a_replacement_and_a_missing_file() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("claimed.bin");
+        std::fs::write(&path, b"")?;
+        let identity = crate::FileIdentity::at(&path)?;
+        std::fs::rename(&path, dir.path().join("moved.bin"))?;
+
+        let missing = SparseFileWriter::create_owned(&path, 8, Some(identity.clone()))
+            .await
+            .err()
+            .expect("a missing claimed file must not be recreated");
+        assert!(missing
+            .downcast_ref::<crate::file_identity::FileOwnershipChanged>()
+            .is_some());
+        assert!(!path.exists());
+
+        std::fs::write(&path, b"user data")?;
+        let replaced = SparseFileWriter::create_owned(&path, 8, Some(identity))
+            .await
+            .err()
+            .expect("a replacement must not be truncated");
+        assert!(replaced
+            .downcast_ref::<crate::file_identity::FileOwnershipChanged>()
+            .is_some());
+        assert_eq!(std::fs::read(&path)?, b"user data");
         Ok(())
     }
 

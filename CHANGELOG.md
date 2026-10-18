@@ -9,6 +9,17 @@ All notable changes to Conflux are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-18
+
+### Fixed
+- **Pausing never hands a file over while a write is still in flight.** A download that does not stop within 10 seconds (e.g. a write stuck on a stalled USB drive) is no longer force-aborted. It shows **Stopping…** and keeps its file until the engine has really exited, then becomes Paused. Resume and Remove wait until then, so a restart can no longer be overwritten by the old session's late write.
+- **Downloads never truncate a file that replaced theirs.** The engine checks the claimed file's identity on the very handle it then truncates and writes. This covers new downloads, single-stream servers that are slow to send headers, and resumes whose resume data is missing or invalid.
+- **Pause, resume and remove can no longer race each other.** A resume that was still probing stands down if the download was paused, removed, resumed again or finished meanwhile. A removal can no longer leave a hidden download running.
+
+### Changed
+- Download history is saved by a single writer that coalesces requests (at most one progress save per 5 seconds, however many downloads run) and is flushed on quit. If it cannot be saved (e.g. disk full), a banner says so until saving works again.
+- Settings and download history written by a newer version of Conflux are left untouched instead of being reinterpreted or overwritten. Defaults are used for that session, with a notice.
+
 ## [0.3.1] - 2026-10-16
 
 ### Changed

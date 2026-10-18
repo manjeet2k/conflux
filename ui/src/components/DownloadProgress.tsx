@@ -22,6 +22,7 @@ const useStyles = makeStyles({
     transitionTimingFunction: 'linear',
   },
   downloading: { backgroundColor: tokens.colorCompoundBrandBackground },
+  stopping: { backgroundColor: tokens.colorPaletteMarigoldBackground3 },
   paused: { backgroundColor: tokens.colorPaletteMarigoldBackground3 },
   completed: { backgroundColor: tokens.colorPaletteGreenBackground3 },
   error: { backgroundColor: tokens.colorPaletteRedBackground3 },

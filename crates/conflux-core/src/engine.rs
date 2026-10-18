@@ -877,12 +877,28 @@ impl DownloadEngine {
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         cancel: watch::Receiver<bool>,
     ) -> Result<String> {
-        self.download_with_updates(probe, output_path, adapters, None, progress_tx, cancel)
-            .await
+        self.download_with_updates(
+            probe,
+            output_path,
+            adapters,
+            None,
+            progress_tx,
+            cancel,
+            None,
+        )
+        .await
     }
 
     /// Like [`download`](Self::download), but accepts an optional receiver of [`AdapterUpdate`]s
     /// allowing newly connected adapters to be hot-plugged mid-download into active chunk workers.
+    ///
+    /// `expected_identity` is the identity of the file the caller claimed at `output_path`
+    /// (e.g. an empty placeholder). When set, the output is never created or truncated by
+    /// path: the existing file is opened, its identity is checked on that handle, and only
+    /// then is it truncated and written through that same handle. A missing or replaced
+    /// file fails with [`FileOwnershipChanged`](crate::file_identity::FileOwnershipChanged)
+    /// and is left untouched.
+    #[allow(clippy::too_many_arguments)]
     pub async fn download_with_updates(
         &self,
         probe: &DownloadProbe,
@@ -891,6 +907,7 @@ impl DownloadEngine {
         adapter_rx: Option<mpsc::Receiver<AdapterUpdate>>,
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         cancel: watch::Receiver<bool>,
+        expected_identity: Option<crate::FileIdentity>,
     ) -> Result<String> {
         self.run(
             probe,
@@ -900,6 +917,7 @@ impl DownloadEngine {
             progress_tx,
             cancel,
             false,
+            expected_identity,
         )
         .await
     }
@@ -916,12 +934,25 @@ impl DownloadEngine {
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         cancel: watch::Receiver<bool>,
     ) -> Result<String> {
-        self.resume_with_updates(probe, output_path, adapters, None, progress_tx, cancel)
-            .await
+        self.resume_with_updates(
+            probe,
+            output_path,
+            adapters,
+            None,
+            progress_tx,
+            cancel,
+            None,
+        )
+        .await
     }
 
     /// Like [`resume`](Self::resume), but accepts an optional receiver of [`AdapterUpdate`]s
     /// allowing newly connected adapters to be hot-plugged mid-download into active chunk workers.
+    ///
+    /// `expected_identity` works as in [`download_with_updates`](Self::download_with_updates)
+    /// and also guards the restart-from-zero fallback (missing or unusable sidecar), so that
+    /// path can never truncate a file that replaced ours.
+    #[allow(clippy::too_many_arguments)]
     pub async fn resume_with_updates(
         &self,
         probe: &DownloadProbe,
@@ -930,6 +961,7 @@ impl DownloadEngine {
         adapter_rx: Option<mpsc::Receiver<AdapterUpdate>>,
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         cancel: watch::Receiver<bool>,
+        expected_identity: Option<crate::FileIdentity>,
     ) -> Result<String> {
         self.run(
             probe,
@@ -939,6 +971,7 @@ impl DownloadEngine {
             progress_tx,
             cancel,
             true,
+            expected_identity,
         )
         .await
     }
@@ -953,15 +986,38 @@ impl DownloadEngine {
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         mut cancel: watch::Receiver<bool>,
         resume: bool,
+        expected_identity: Option<crate::FileIdentity>,
     ) -> Result<String> {
         if *cancel.borrow_and_update() {
             return Err(cancelled_error());
+        }
+        // Fail before touching anything (e.g. deleting a stale sidecar) if the claimed file
+        // is already gone or replaced. Not sufficient on its own: the authoritative check is
+        // repeated on the handle that is then truncated and written.
+        if let Some(expected) = expected_identity.clone() {
+            let path = output_path.to_path_buf();
+            tokio::task::spawn_blocking(move || -> Result<()> {
+                match crate::FileIdentity::at(&path) {
+                    Ok(actual) if actual == expected => Ok(()),
+                    Ok(_) => Err(anyhow::Error::new(
+                        crate::file_identity::FileOwnershipChanged,
+                    )),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(
+                        anyhow::Error::new(crate::file_identity::FileOwnershipChanged),
+                    ),
+                    Err(error) => Err(error.into()),
+                }
+            })
+            .await
+            .context("Output ownership check failed")??;
         }
 
         if probe.supports_ranges && probe.total_bytes > 0 {
             Self::check_chunk_plan(probe.total_bytes, self.block_size_for(probe.total_bytes))?;
         }
-        if resume {
+        // Without a caller-claimed identity, the sidecar's recorded identity is the only
+        // evidence of which file is ours.
+        if resume && expected_identity.is_none() {
             if let Some(expected) = read_sidecar(&resume_sidecar_path(output_path))
                 .ok()
                 .and_then(|saved| saved.file_identity)
@@ -993,7 +1049,14 @@ impl DownloadEngine {
                 format!("Failed to remove stale resume data for {:?}", output_path)
             })?;
             return self
-                .download_single_stream(probe, output_path, &targets[0], progress_tx, cancel)
+                .download_single_stream(
+                    probe,
+                    output_path,
+                    &targets[0],
+                    progress_tx,
+                    cancel,
+                    expected_identity,
+                )
                 .await;
         }
 
@@ -1005,6 +1068,7 @@ impl DownloadEngine {
             progress_tx,
             cancel,
             resume,
+            expected_identity,
         )
         .await
     }
@@ -1015,12 +1079,19 @@ impl DownloadEngine {
         &self,
         probe: &DownloadProbe,
         output_path: &Path,
+        expected_identity: Option<&crate::FileIdentity>,
     ) -> Result<(Vec<Chunk>, u64, SparseFileWriter, Option<RequestHeaders>)> {
         let state = read_sidecar(&resume_sidecar_path(output_path))?;
+        if let (Some(expected), Some(recorded)) = (expected_identity, &state.file_identity) {
+            if expected != recorded {
+                // The sidecar describes some other file: its chunk map is meaningless here.
+                bail!("Resume data belongs to a different file");
+            }
+        }
         let writer = SparseFileWriter::open_existing_verified(
             output_path,
             probe.total_bytes,
-            state.file_identity.clone(),
+            expected_identity.cloned().or(state.file_identity.clone()),
         )
         .await?;
         validate(&state, probe)?;
@@ -1045,6 +1116,7 @@ impl DownloadEngine {
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         mut cancel: watch::Receiver<bool>,
         resume: bool,
+        expected_identity: Option<crate::FileIdentity>,
     ) -> Result<String> {
         let mut initial_states = Vec::new();
         for target in targets {
@@ -1059,7 +1131,10 @@ impl DownloadEngine {
         let adapter_states = Arc::new(RwLock::new(initial_states));
 
         let resumed = if resume {
-            match self.open_for_resume(probe, output_path).await {
+            match self
+                .open_for_resume(probe, output_path, expected_identity.as_ref())
+                .await
+            {
                 Ok(r) => Some(r),
                 Err(e)
                     if e.downcast_ref::<crate::file_identity::FileOwnershipChanged>()
@@ -1095,7 +1170,12 @@ impl DownloadEngine {
                         block_size
                     );
                 }
-                let writer = SparseFileWriter::create(output_path, probe.total_bytes).await?;
+                let writer = SparseFileWriter::create_owned(
+                    output_path,
+                    probe.total_bytes,
+                    expected_identity.clone(),
+                )
+                .await?;
                 (chunks, block_size, writer, None)
             }
         };
@@ -1445,6 +1525,7 @@ impl DownloadEngine {
         target: &BindTarget,
         progress_tx: Option<mpsc::Sender<ProgressUpdate>>,
         mut cancel: watch::Receiver<bool>,
+        expected_identity: Option<crate::FileIdentity>,
     ) -> Result<String> {
         let adapter = self.new_adapter_state(target)?;
         let label = adapter.label.clone();
@@ -1502,9 +1583,16 @@ impl DownloadEngine {
                 })?;
             }
         }
-        let mut file = tokio::fs::File::create(output_path)
+        // Opened only now, after the response headers arrived: with `expected_identity` the
+        // check and the truncation happen on this one handle, however long the server took.
+        let open_path = output_path.to_path_buf();
+        let mut file = tokio::fs::File::from_std(
+            tokio::task::spawn_blocking(move || {
+                crate::writer::open_owned_for_rewrite(&open_path, expected_identity.as_ref(), false)
+            })
             .await
-            .with_context(|| format!("Failed to create output file {:?}", output_path))?;
+            .context("Output open task panicked")??,
+        );
 
         let start_time = Instant::now();
         let counters = Arc::new(Counters::default());

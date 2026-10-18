@@ -455,7 +455,6 @@ pub async fn check_for_update(
 }
 
 struct RealSteps<'a> {
-    app: &'a AppHandle,
     state: &'a AppState,
     update: &'a Update,
     bytes: &'a [u8],
@@ -472,7 +471,7 @@ impl InstallSteps for RealSteps<'_> {
                 .map(|t| t.id.clone())
                 .collect()
         };
-        commands::pause_all_internal(self.app, self.state).await;
+        commands::pause_all_internal(self.state).await;
         running
     }
 
@@ -494,7 +493,7 @@ impl InstallSteps for RealSteps<'_> {
             let _ = std::fs::remove_file(path);
         }
         for id in ids {
-            if let Err(e) = commands::resume_task_internal(self.app, self.state, id).await {
+            if let Err(e) = commands::resume_task_internal(self.state, id).await {
                 warn!(task_id = %id, "Could not resume after a failed update: {e}");
             }
         }
@@ -522,7 +521,6 @@ pub async fn install_update(
         .await
         .map_err(|e| format!("Downloading the update failed: {e}"))?;
     let mut steps = RealSteps {
-        app: &app,
         state: &state,
         update: &update,
         bytes: &bytes,
@@ -547,12 +545,11 @@ pub async fn resume_after_update(app: &AppHandle) {
     );
     let state = app.state::<AppState>();
     struct Live<'a> {
-        app: &'a AppHandle,
         state: &'a AppState,
     }
     impl Resumer for Live<'_> {
         async fn resume(&mut self, id: &str) -> Result<(), String> {
-            commands::resume_task_internal(self.app, self.state, id)
+            commands::resume_task_internal(self.state, id)
                 .await
                 .map(|_| ())
         }
@@ -561,13 +558,8 @@ pub async fn resume_after_update(app: &AppHandle) {
         }
     }
     // The file stays on disk until each id is resumed or given up on.
-    let given_up = resume_with_retry(
-        &path,
-        ids,
-        &RESUME_BACKOFF,
-        &mut Live { app, state: &state },
-    )
-    .await;
+    let given_up =
+        resume_with_retry(&path, ids, &RESUME_BACKOFF, &mut Live { state: &state }).await;
     if !given_up.is_empty() {
         warn!(
             count = given_up.len(),

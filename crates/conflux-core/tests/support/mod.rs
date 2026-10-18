@@ -82,6 +82,8 @@ pub struct ServerConfig {
     pub overlong_tail_delay: Option<Duration>,
     pub required_referer: Option<String>,
     pub required_user_agent: Option<String>,
+    /// Wait this long before sending the headers of a full (200) GET response.
+    pub full_head_delay: Option<Duration>,
 }
 
 /// A new version of the resource, served from the `after_chunks`-th chunk request on
@@ -127,6 +129,7 @@ impl ServerConfig {
             overlong_tail_delay: None,
             required_referer: None,
             required_user_agent: None,
+            full_head_delay: None,
         }
     }
 
@@ -399,6 +402,9 @@ async fn send_full(
         headers.push(("Content-Disposition".to_string(), cd.clone()));
     }
     version.validator_headers(&mut headers);
+    if let (true, Some(delay)) = (with_body, config.full_head_delay) {
+        tokio::time::sleep(delay).await;
+    }
     write_head(sock, config.full_status, &headers).await?;
     if with_body {
         write_body(sock, data, config, stats).await?;
