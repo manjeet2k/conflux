@@ -31,6 +31,6 @@ if [[ $which == desktop || $which == all ]]; then
   (cd "$tmp" && x86_64-w64-mingw32-windres test.rc -O coff -o test_manifest.o)
   # --lib only: a plain `cargo test` also links the crate's cdylib, which exceeds the 65535
   # exports limit of the MinGW linker.
-  CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS="-C link-arg=$tmp/test_manifest.o" \
+  CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS="-C link-arg=$tmp/test_manifest.o -C link-arg=-Wl,--stack,0x800000" \
     cargo test -p conflux-desktop --lib --target $target
 fi

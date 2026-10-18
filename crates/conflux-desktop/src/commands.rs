@@ -153,21 +153,24 @@ pub async fn probe_url(
     url: String,
     headers: Option<RequestHeaders>,
 ) -> Result<ProbeResult, String> {
-    let url = url.trim().to_string();
-    if url.is_empty() {
-        return Err("Download URL is empty".to_string());
-    }
-    let probe = DownloadEngine::default()
-        .probe_with_headers(&url, headers)
-        .await
-        .map_err(|e| redact_error(&format!("{e:#}")))?;
-    let supports_ranges = probe.supports_parallel();
-    Ok(ProbeResult {
-        url: probe.url,
-        filename: probe.suggested_filename,
-        total_bytes: probe.total_bytes,
-        supports_ranges,
+    Box::pin(async move {
+        let url = url.trim().to_string();
+        if url.is_empty() {
+            return Err("Download URL is empty".to_string());
+        }
+        let probe = DownloadEngine::default()
+            .probe_with_headers(&url, headers)
+            .await
+            .map_err(|e| redact_error(&format!("{e:#}")))?;
+        let supports_ranges = probe.supports_parallel();
+        Ok(ProbeResult {
+            url: probe.url,
+            filename: probe.suggested_filename,
+            total_bytes: probe.total_bytes,
+            supports_ranges,
+        })
     })
+    .await
 }
 
 // ─── 3. Start Download ─────────────────────────────────────
@@ -180,100 +183,103 @@ pub async fn start_download(
     headers: Option<RequestHeaders>,
     handoff_id: Option<String>,
 ) -> Result<DownloadTaskState, String> {
-    let url = url.trim().to_string();
-    if url.is_empty() {
-        return Err("Download URL is empty".to_string());
-    }
-    let dir = validate_save_dir(&save_dir)?;
-    let settings = state.settings.read().await.clone();
-    let adapters = select_adapters(&settings)?;
-    let engine = engine_from_settings(&settings)?;
+    Box::pin(async move {
+        let url = url.trim().to_string();
+        if url.is_empty() {
+            return Err("Download URL is empty".to_string());
+        }
+        let dir = validate_save_dir(&save_dir)?;
+        let settings = state.settings.read().await.clone();
+        let adapters = select_adapters(&settings)?;
+        let engine = engine_from_settings(&settings)?;
 
-    // Probe exactly once; the same probe is handed to the engine.
-    let probe = engine
-        .probe_with_headers(&url, headers)
-        .await
-        .map_err(|e| format!("Probe failed: {}", redact_error(&format!("{e:#}"))))?;
+        // Probe exactly once; the same probe is handed to the engine.
+        let probe = engine
+            .probe_with_headers(&url, headers)
+            .await
+            .map_err(|e| format!("Probe failed: {}", redact_error(&format!("{e:#}"))))?;
 
-    let requested_name = filename
-        .map(|f| sanitize_filename(&f))
-        .filter(|f| !f.is_empty())
-        .unwrap_or_else(|| probe.suggested_filename.clone());
-    let (output_path, file_identity) = state
-        .tasks
-        .reserve_new_output(&dir, &requested_name)
-        .await?;
-    let save_path = output_path.to_string_lossy().to_string();
-    let filename = output_path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or(requested_name);
+        let requested_name = filename
+            .map(|f| sanitize_filename(&f))
+            .filter(|f| !f.is_empty())
+            .unwrap_or_else(|| probe.suggested_filename.clone());
+        let (output_path, file_identity) = state
+            .tasks
+            .reserve_new_output(&dir, &requested_name)
+            .await?;
+        let save_path = output_path.to_string_lossy().to_string();
+        let filename = output_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or(requested_name);
 
-    let task_id = Uuid::new_v4().to_string();
-    info!(
-        task_id = %task_id,
-        url = %probe.url,
-        total_bytes = probe.total_bytes,
-        supports_ranges = probe.supports_ranges,
-        output = %save_path,
-        adapters = ?enabled_ids(&adapters),
-        "Starting download"
-    );
+        let task_id = Uuid::new_v4().to_string();
+        info!(
+            task_id = %task_id,
+            url = %probe.url,
+            total_bytes = probe.total_bytes,
+            supports_ranges = probe.supports_ranges,
+            output = %save_path,
+            adapters = ?enabled_ids(&adapters),
+            "Starting download"
+        );
 
-    let task = DownloadTaskState {
-        id: task_id.clone(),
-        url,
-        filename,
-        save_dir: dir.to_string_lossy().to_string(),
-        save_path,
-        file_identity: file_identity.clone(),
-        adapter_ids: vec![],
-        total_bytes: probe.total_bytes,
-        supports_ranges: probe.supports_parallel(),
-        downloaded_bytes: 0,
-        status: TaskStatus::Downloading,
-        speed_bytes_sec: 0.0,
-        eta_seconds: 0,
-        active_chunks: 0,
-        completed_chunks: 0,
-        total_chunks: 0,
-        sha256: None,
-        error: None,
-        created_at_ms: now_ms(),
-        completed_at_ms: None,
-        duration_ms: 0,
-        avg_speed_bytes_sec: None,
-        adapters: Vec::new(),
-        chunk_map: None,
-        lifecycle: Default::default(),
-    };
-    let generation = state.tasks.insert_new(task).await;
-    state.tasks.save_history();
-    let started = launch(
-        &state,
-        &task_id,
-        generation,
-        engine,
-        probe,
-        output_path,
-        file_identity.clone(),
-        file_identity,
-        false,
-    )
-    .await;
-    let task = state
-        .tasks
-        .get(&task_id)
-        .await
-        .filter(|task| task.status == TaskStatus::Completed || started)
-        .ok_or_else(|| {
-            "Download was not started; the browser transfer was preserved".to_string()
-        })?;
-    if let Some(id) = handoff_id {
-        crate::browser_bridge::acknowledge_handoff(&id, true)
-            .map_err(|_| "Download started, but browser acknowledgement failed".to_string())?;
-    }
-    Ok(task)
+        let task = DownloadTaskState {
+            id: task_id.clone(),
+            url,
+            filename,
+            save_dir: dir.to_string_lossy().to_string(),
+            save_path,
+            file_identity: file_identity.clone(),
+            adapter_ids: vec![],
+            total_bytes: probe.total_bytes,
+            supports_ranges: probe.supports_parallel(),
+            downloaded_bytes: 0,
+            status: TaskStatus::Downloading,
+            speed_bytes_sec: 0.0,
+            eta_seconds: 0,
+            active_chunks: 0,
+            completed_chunks: 0,
+            total_chunks: 0,
+            sha256: None,
+            error: None,
+            created_at_ms: now_ms(),
+            completed_at_ms: None,
+            duration_ms: 0,
+            avg_speed_bytes_sec: None,
+            adapters: Vec::new(),
+            chunk_map: None,
+            lifecycle: Default::default(),
+        };
+        let generation = state.tasks.insert_new(task).await;
+        state.tasks.save_history();
+        let started = launch(
+            &state,
+            &task_id,
+            generation,
+            engine,
+            probe,
+            output_path,
+            file_identity.clone(),
+            file_identity,
+            false,
+        )
+        .await;
+        let task = state
+            .tasks
+            .get(&task_id)
+            .await
+            .filter(|task| task.status == TaskStatus::Completed || started)
+            .ok_or_else(|| {
+                "Download was not started; the browser transfer was preserved".to_string()
+            })?;
+        if let Some(id) = handoff_id {
+            crate::browser_bridge::acknowledge_handoff(&id, true)
+                .map_err(|_| "Download started, but browser acknowledgement failed".to_string())?;
+        }
+        Ok(task)
+    })
+    .await
 }
 
 // ─── 4. Pause ───────────────────────────────────────────────
@@ -299,94 +305,97 @@ pub async fn resume_task_internal(
     state: &AppState,
     task_id: &str,
 ) -> Result<DownloadTaskState, String> {
-    let ticket = match state.tasks.begin_resume(task_id).await? {
-        ResumeStart::Ready(ticket) => ticket,
-        ResumeStart::AlreadyRunning(task) => return Ok(task),
-    };
-    let task = ticket.task.clone();
-
-    let dir = validate_save_dir(&task.save_dir)?;
-    let settings = state.settings.read().await.clone();
-    select_adapters(&settings)?;
-    let engine = engine_from_settings(&settings)?;
-    let output_path = PathBuf::from(&task.save_path);
-    if output_path.exists()
-        && task.file_identity.as_ref().is_none_or(|identity| {
-            conflux_core::FileIdentity::at(&output_path).as_ref().ok() != Some(identity)
-        })
-    {
-        return Err("The saved file's ownership cannot be verified. It was preserved; start a new download to a new filename.".into());
-    }
-    let headers = conflux_core::read_resume_headers(&output_path, &task.url)
-        .ok()
-        .flatten();
-    let probe = engine
-        .probe_with_headers(&task.url, headers)
-        .await
-        .map_err(|e| format!("Probe failed: {}", redact_error(&format!("{e:#}"))))?;
-
-    if output_path.parent() != Some(dir.as_path()) {
-        warn!(task_id = %task_id, "Saved path is outside the saved folder; resuming anyway");
-    }
-    if !state.tasks.reserve_path(&output_path).await {
-        return Err(format!(
-            "{} is being written by another download",
-            task.save_path
-        ));
-    }
-    let (resume_existing, file_identity) =
-        match prepare_resume_output(&output_path, task.file_identity.as_ref()) {
-            Ok(output) => output,
-            Err(error) => {
-                state.tasks.release_path(&output_path).await;
-                return Err(error);
-            }
+    Box::pin(async move {
+        let ticket = match state.tasks.begin_resume(task_id).await? {
+            ResumeStart::Ready(ticket) => ticket,
+            ResumeStart::AlreadyRunning(task) => return Ok(task),
         };
-    // A placeholder this resume created for a missing file; deleted if we stand down.
-    let placeholder = (!resume_existing).then(|| file_identity.clone()).flatten();
-    let total_bytes = probe.total_bytes;
-    let supports_ranges = probe.supports_parallel();
-    let committed = state
-        .tasks
-        .commit_resume(ticket, |t| {
-            t.total_bytes = total_bytes;
-            t.supports_ranges = supports_ranges;
-            t.file_identity = file_identity.clone();
-            t.error = None;
-            t.sha256 = None;
-            t.completed_at_ms = None;
-        })
-        .await;
-    let (snapshot, generation) = match committed {
-        Ok(committed) => committed,
-        Err(stale) => {
-            remove_empty_placeholder(&output_path, placeholder).await;
-            state.tasks.release_path(&output_path).await;
-            return match stale {
-                CommitError::Removed => Err(format!("Unknown task: {task_id}")),
-                // Paused, resumed or finished by someone else meanwhile: report that state.
-                CommitError::Superseded(current) => {
-                    info!(task_id = %task_id, status = ?current.status, "Resume superseded by a newer change; not starting");
-                    Ok(*current)
+        let task = ticket.task.clone();
+
+        let dir = validate_save_dir(&task.save_dir)?;
+        let settings = state.settings.read().await.clone();
+        select_adapters(&settings)?;
+        let engine = engine_from_settings(&settings)?;
+        let output_path = PathBuf::from(&task.save_path);
+        if output_path.exists()
+            && task.file_identity.as_ref().is_none_or(|identity| {
+                conflux_core::FileIdentity::at(&output_path).as_ref().ok() != Some(identity)
+            })
+        {
+            return Err("The saved file's ownership cannot be verified. It was preserved; start a new download to a new filename.".into());
+        }
+        let headers = conflux_core::read_resume_headers(&output_path, &task.url)
+            .ok()
+            .flatten();
+        let probe = engine
+            .probe_with_headers(&task.url, headers)
+            .await
+            .map_err(|e| format!("Probe failed: {}", redact_error(&format!("{e:#}"))))?;
+
+        if output_path.parent() != Some(dir.as_path()) {
+            warn!(task_id = %task_id, "Saved path is outside the saved folder; resuming anyway");
+        }
+        if !state.tasks.reserve_path(&output_path).await {
+            return Err(format!(
+                "{} is being written by another download",
+                task.save_path
+            ));
+        }
+        let (resume_existing, file_identity) =
+            match prepare_resume_output(&output_path, task.file_identity.as_ref()) {
+                Ok(output) => output,
+                Err(error) => {
+                    state.tasks.release_path(&output_path).await;
+                    return Err(error);
                 }
             };
-        }
-    };
-    info!(task_id = %task_id, url = %probe.url, output = %task.save_path, "Resuming download");
-    state.tasks.save_history();
-    launch(
-        state,
-        task_id,
-        generation,
-        engine,
-        probe,
-        output_path,
-        snapshot.file_identity.clone(),
-        placeholder,
-        resume_existing,
-    )
-    .await;
-    Ok(state.tasks.get(task_id).await.unwrap_or(snapshot))
+        // A placeholder this resume created for a missing file; deleted if we stand down.
+        let placeholder = (!resume_existing).then(|| file_identity.clone()).flatten();
+        let total_bytes = probe.total_bytes;
+        let supports_ranges = probe.supports_parallel();
+        let committed = state
+            .tasks
+            .commit_resume(ticket, |t| {
+                t.total_bytes = total_bytes;
+                t.supports_ranges = supports_ranges;
+                t.file_identity = file_identity.clone();
+                t.error = None;
+                t.sha256 = None;
+                t.completed_at_ms = None;
+            })
+            .await;
+        let (snapshot, generation) = match committed {
+            Ok(committed) => committed,
+            Err(stale) => {
+                remove_empty_placeholder(&output_path, placeholder).await;
+                state.tasks.release_path(&output_path).await;
+                return match stale {
+                    CommitError::Removed => Err(format!("Unknown task: {task_id}")),
+                    // Paused, resumed or finished by someone else meanwhile: report that state.
+                    CommitError::Superseded(current) => {
+                        info!(task_id = %task_id, status = ?current.status, "Resume superseded by a newer change; not starting");
+                        Ok(*current)
+                    }
+                };
+            }
+        };
+        info!(task_id = %task_id, url = %probe.url, output = %task.save_path, "Resuming download");
+        state.tasks.save_history();
+        launch(
+            state,
+            task_id,
+            generation,
+            engine,
+            probe,
+            output_path,
+            snapshot.file_identity.clone(),
+            placeholder,
+            resume_existing,
+        )
+        .await;
+        Ok(state.tasks.get(task_id).await.unwrap_or(snapshot))
+    })
+    .await
 }
 
 /// Pauses every running download (concurrently, bounded by one stop timeout in total) and
@@ -746,7 +755,7 @@ async fn launch(
         }
     };
     let names = Arc::new(RwLock::new(adapter_names(&adapters)));
-    let worker = run_download(
+    let worker = Box::pin(run_download(
         Arc::clone(controller),
         task_id.to_string(),
         engine,
@@ -758,7 +767,7 @@ async fn launch(
         names.clone(),
         cancel_rx,
         resume,
-    );
+    ));
     let channels = WorkerChannels {
         cancel_tx,
         adapter_tx,
