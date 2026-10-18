@@ -21,7 +21,7 @@ body .cfx-speed-units::before {
   left: 3px;
   top: 3px;
   box-sizing: border-box;
-  width: 60px;
+  width: 44px;
   height: 26px;
   border: 1px solid var(--cfx-control-stroke);
   border-bottom-color: var(--cfx-control-bottom-stroke);
@@ -35,7 +35,7 @@ body .cfx-speed-units::before {
 }
 
 body .cfx-speed-units[data-speed-unit='bits']::before {
-  transform: translateX(62px);
+  transform: translateX(46px);
 }
 
 body .cfx-speed-units:has(.fui-Button[aria-pressed='true']:hover)::before {
@@ -52,9 +52,9 @@ body .cfx-speed-units .fui-Button {
   box-sizing: border-box;
   height: 26px;
   min-height: 26px;
-  width: 60px;
-  min-width: 60px;
-  padding: 2px 8px;
+  width: 44px;
+  min-width: 44px;
+  padding: 2px 4px;
   border: 1px solid transparent;
   border-radius: 4px;
   background-color: transparent;
@@ -83,92 +83,75 @@ body .cfx-speed-units .fui-Button:hover:active {
   background-color: var(--cfx-control-fill-pressed);
 }
 
-/* One outlined control, with a separate dropdown hit area and a quiet hover border. */
-body .cfx-slow-mode.fui-SplitButton {
+/* Bare tortoise toggle on the status bar: no labels, no button borders/background */
+body .cfx-slow-mode-tortoise {
   box-sizing: border-box;
-  height: 34px;
-  border: 1px solid var(--cfx-control-stroke);
-  border-bottom-color: var(--cfx-control-bottom-stroke);
-  border-radius: 4px;
-  background-color: var(--cfx-control-fill);
-  color: var(--colorNeutralForeground1);
-  transition: border-color var(--cfx-button-release-duration) var(--cfx-button-release-curve);
-}
-
-body .cfx-slow-mode.fui-SplitButton:hover,
-body .cfx-slow-mode.fui-SplitButton:has([aria-expanded='true']) {
-  border-color: color-mix(in srgb, var(--colorNeutralStroke1Hover) 25%, var(--cfx-control-stroke));
-}
-
-/* Hover keeps the fill steady; pressing either action only affects that action. */
-body .cfx-slow-mode.fui-SplitButton > button,
-body .cfx-slow-mode.fui-SplitButton > button:is(:hover, :active, :focus-visible) {
-  box-sizing: border-box;
-  height: 32px;
-  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 6px;
   border: 0;
-  border-radius: 3px;
+  border-radius: 6px;
   background-color: transparent;
-  color: inherit;
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 20px;
+  color: var(--colorNeutralForeground2);
+  cursor: pointer;
+  outline: none;
+  transition: transform 120ms var(--cfx-button-release-curve), opacity 120ms ease-out;
 }
 
-body .cfx-slow-mode.fui-SplitButton > .fui-SplitButton__primaryActionButton {
-  padding: 2px 10px;
-  border-radius: 3px 0 0 3px;
+body .cfx-slow-mode-tortoise:hover {
+  transform: none;
 }
 
-body .cfx-slow-mode.fui-SplitButton > .fui-SplitButton__menuButton {
-  position: relative;
-  min-width: 32px;
-  padding: 0;
-  border-radius: 0 3px 3px 0;
+body .cfx-slow-mode-tortoise:active {
+  transform: scale(0.92);
 }
 
-body .cfx-slow-mode.fui-SplitButton > .fui-SplitButton__menuButton::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 7px;
-  bottom: 7px;
-  width: 1px;
-  background-color: var(--colorNeutralStroke1);
+body .cfx-slow-mode-tortoise:focus-visible {
+  outline: 2px solid var(--colorStrokeFocus2);
+  outline-offset: 2px;
+}
+
+body .cfx-slow-mode-tortoise:disabled {
+  opacity: 0.35;
+  cursor: default;
   pointer-events: none;
 }
 
-body .cfx-slow-mode.fui-SplitButton > .fui-SplitButton__menuButton:is(:hover, [aria-expanded='true'])::before {
-  background-color: var(--colorNeutralStroke1Hover);
+/* Turtle icon spring animation on tap: scale down a little and spring back */
+body .cfx-slow-mode-tortoise .cfx-slow-mode-icon {
+  display: block;
+  transform-origin: center;
+  will-change: transform;
 }
 
-body .cfx-slow-mode.fui-SplitButton > button:enabled:active {
-  background-color: var(--cfx-subtle-pressed);
+body .cfx-slow-mode-tortoise .cfx-slow-mode-spring {
+  animation: cfxSlowModeSpring 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-body .cfx-slow-mode.fui-SplitButton > .fui-SplitButton__menuButton[aria-expanded='true'] {
-  background-color: var(--cfx-subtle-hover);
-}
-
-body .cfx-slow-mode .fui-MenuButton__menuIcon {
-  font-size: 12px;
-  transition: transform 120ms ease-out;
-}
-
-body .cfx-slow-mode [aria-expanded='true'] .fui-MenuButton__menuIcon {
-  transform: rotate(180deg);
-}
-
-body .cfx-slow-mode.fui-SplitButton:has(button:disabled) {
-  background-color: var(--cfx-control-fill-disabled);
-  border-color: var(--cfx-control-stroke);
-  color: var(--colorNeutralForegroundDisabled);
+@keyframes cfxSlowModeSpring {
+  0% {
+    transform: scale(1);
+  }
+  28% {
+    transform: scale(0.84);
+  }
+  60% {
+    transform: scale(1.10);
+  }
+  82% {
+    transform: scale(0.97);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   body .cfx-speed-units::before,
-  body .cfx-slow-mode.fui-SplitButton,
-  body .cfx-slow-mode .fui-MenuButton__menuIcon {
+  body .cfx-slow-mode-tortoise,
+  body .cfx-slow-mode-tortoise .cfx-slow-mode-spring {
+    animation: none;
     transition: none;
   }
 }
@@ -198,20 +181,11 @@ body .cfx-slow-mode.fui-SplitButton:has(button:disabled) {
     box-shadow: none;
   }
 
-  body .cfx-slow-mode.fui-SplitButton,
-  body .cfx-slow-mode.fui-SplitButton:hover,
-  body .cfx-slow-mode.fui-SplitButton:has([aria-expanded='true']) {
-    border-color: ButtonText;
-    background-color: ButtonFace;
+  body .cfx-slow-mode-tortoise {
     color: ButtonText;
   }
 
-  body .cfx-slow-mode.fui-SplitButton > .fui-SplitButton__menuButton::before {
-    background-color: ButtonText;
-  }
-
-  body .cfx-slow-mode.fui-SplitButton:has(button:disabled) {
-    border-color: GrayText;
+  body .cfx-slow-mode-tortoise:disabled {
     color: GrayText;
   }
 }

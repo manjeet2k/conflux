@@ -1,8 +1,5 @@
 import React from 'react';
-import {
-  Button, Menu, MenuItemRadio, MenuList, MenuPopover, MenuTrigger,
-  SplitButton, makeStyles, tokens,
-} from '@fluentui/react-components';
+import { Button, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowDown12Regular } from '@fluentui/react-icons';
 import { formatSpeed } from '../utils/formatters';
 import type { SpeedUnit } from '../utils/formatters';
@@ -39,6 +36,7 @@ interface StatusBarProps {
   settings: Settings;
   loaded: boolean;
   onChange: (patch: Partial<Settings>) => void;
+  dark?: boolean;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -50,15 +48,18 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   settings,
   loaded,
   onChange,
+  dark,
 }) => {
   const styles = useStyles();
-  const limits: Record<string, string> = Object.fromEntries(
-    [128, 256, 500, 1024, 2048, 5120, 10240, settings.slow_mode_limit_kib]
-      .sort((a, b) => a - b)
-      .map((limit) => [String(limit), formatSpeed(limit * 1024, speedUnit)])
-  );
+  const [springCount, setSpringCount] = React.useState(0);
+
+  const handleToggleSlowMode = () => {
+    setSpringCount((c) => c + 1);
+    onChange({ slow_mode: !settings.slow_mode });
+  };
+
   return (
-    <footer className={styles.root}>
+    <footer className={styles.root} data-theme={dark ? 'dark' : 'light'}>
       <div className={styles.metrics} role="group" aria-label="Download metrics">
         <span>{active} downloading</span>
         {queued > 0 && <span>{queued} queued</span>}
@@ -86,48 +87,24 @@ export const StatusBar: React.FC<StatusBarProps> = ({
             Mb/s
           </Button>
         </div>
-        <Menu
-          positioning={{ position: 'above', align: 'end' }}
-          checkedValues={{ speed: [String(settings.slow_mode_limit_kib)] }}
+        <button
+          type="button"
+          className={`cfx-slow-mode-tortoise${settings.slow_mode ? ' cfx-slow-mode-active' : ''}`}
+          data-active={settings.slow_mode}
+          disabled={!loaded}
+          aria-label="Slow mode"
+          aria-pressed={settings.slow_mode}
+          title={`Turn slow mode ${settings.slow_mode ? 'off' : 'on'}`}
+          onClick={handleToggleSlowMode}
         >
-          <MenuTrigger disableButtonEnhancement>
-            {(triggerProps) => (
-              <SplitButton
-                className="cfx-slow-mode"
-                appearance="transparent"
-                icon={{ children: <TurtleIcon active={settings.slow_mode} />, style: { width: 32, height: 26 } }}
-                disabled={!loaded}
-                primaryActionButton={{
-                  'aria-label': 'Slow mode',
-                  'aria-pressed': settings.slow_mode,
-                  title: `Turn slow mode ${settings.slow_mode ? 'off' : 'on'}`,
-                  onClick: () => onChange({ slow_mode: !settings.slow_mode }),
-                }}
-                menuButton={{
-                  ...triggerProps,
-                  'aria-label': 'Slow mode speed limit across all downloads',
-                  title: 'Choose slow mode speed limit',
-                }}
-              >
-                Slow mode
-              </SplitButton>
-            )}
-          </MenuTrigger>
-          <MenuPopover>
-            <MenuList>
-              {Object.entries(limits).map(([value, label]) => (
-                <MenuItemRadio
-                  key={value}
-                  name="speed"
-                  value={value}
-                  onClick={() => onChange({ slow_mode_limit_kib: Number(value) })}
-                >
-                  {label}
-                </MenuItemRadio>
-              ))}
-            </MenuList>
-          </MenuPopover>
-        </Menu>
+          <TurtleIcon
+            key={springCount}
+            active={settings.slow_mode}
+            width={34}
+            height={28}
+            className={`cfx-slow-mode-icon${springCount > 0 ? ' cfx-slow-mode-spring' : ''}`}
+          />
+        </button>
       </div>
     </footer>
   );

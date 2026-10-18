@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Badge, Button, SpinButton, Spinner, Switch, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Badge, Button, Input, SpinButton, Spinner, Switch, Text, makeStyles, tokens } from '@fluentui/react-components';
 import {
   Alert20Regular,
   Blur20Regular,
@@ -20,6 +20,7 @@ import { api, errorText } from '../api';
 import type { Backdrop, Settings, ThemePreference, UpdateInfo } from '../types';
 import { Page, SectionHeader, SettingsCard } from '../components/Page';
 import { WindowsDropdown } from '../components/WindowsDropdown';
+import { TurtleIcon } from '../components/TurtleIcon';
 import chromeLogo from '../assets/browsers/chrome.svg';
 import firefoxLogo from '../assets/browsers/firefox.svg';
 
@@ -89,6 +90,30 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
   const [upToDate, setUpToDate] = useState(false);
   const [browserHostRegistered, setBrowserHostRegistered] = useState<boolean | null>(null);
   const [registeringHost, setRegisteringHost] = useState(false);
+  const [editingMbStr, setEditingMbStr] = useState<string | null>(null);
+  const currentMb = Math.round((settings.slow_mode_limit_kib / 1024) * 100) / 100;
+  const slowModeMbStr = editingMbStr ?? String(currentMb);
+
+  const handleSlowModeMbChange = (raw: string) => {
+    setEditingMbStr(raw);
+    const parsed = parseFloat(raw);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      const kib = Math.max(16, Math.min(1024 * 1024, Math.round(parsed * 1024)));
+      onChange({ slow_mode_limit_kib: kib });
+    }
+  };
+
+  const handleSlowModeMbBlur = () => {
+    if (editingMbStr !== null) {
+      const parsed = parseFloat(editingMbStr);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        const clampedMb = Math.max(0.02, Math.min(1024, parsed));
+        const kib = Math.max(16, Math.min(1024 * 1024, Math.round(clampedMb * 1024)));
+        onChange({ slow_mode_limit_kib: kib });
+      }
+      setEditingMbStr(null);
+    }
+  };
 
   useEffect(() => {
     let current = true;
@@ -262,6 +287,24 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ settings, loaded, on
               const v = d.value ?? parseInt(d.displayValue ?? '', 10);
               if (Number.isFinite(v)) onChange({ connections_per_adapter: Math.min(16, Math.max(1, Math.round(v))) });
             }}
+          />
+        </SettingsCard>
+        <SettingsCard
+          icon={<TurtleIcon active={false} width={24} height={20} />}
+          title="Slow mode speed limit"
+          description="Maximum download speed across all active transfers when slow mode is active"
+        >
+          <Input
+            type="number"
+            min={0.1}
+            max={1024}
+            step={0.5}
+            value={slowModeMbStr}
+            onChange={(_, d) => handleSlowModeMbChange(d.value)}
+            onBlur={handleSlowModeMbBlur}
+            contentAfter="MB/s"
+            style={{ width: 120 }}
+            aria-label="Slow mode speed limit in MB/s"
           />
         </SettingsCard>
         <Text size={200} style={{ color: tokens.colorNeutralForeground3, padding: '4px 2px' }}>

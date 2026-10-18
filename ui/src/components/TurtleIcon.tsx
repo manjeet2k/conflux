@@ -1,8 +1,30 @@
 import React from 'react';
 
+export interface TurtleIconProps {
+  active?: boolean;
+  width?: string | number;
+  height?: string | number;
+  className?: string;
+  style?: React.CSSProperties;
+}
+
 /** Outlined at full speed; warm shell and green body when slow mode is on. */
-export const TurtleIcon: React.FC<{ active: boolean }> = ({ active }) => (
-  <svg width="32" height="26" viewBox="0 0 80 60" fill="none" aria-hidden="true">
+export const TurtleIcon: React.FC<TurtleIconProps> = ({
+  active = false,
+  width = 32,
+  height = 26,
+  className,
+  style,
+}) => (
+  <svg
+    width={width}
+    height={height}
+    viewBox="0 0 80 60"
+    fill="none"
+    aria-hidden="true"
+    className={className}
+    style={{ display: 'block', flexShrink: 0, ...style }}
+  >
     <g stroke={active ? '#20251b' : 'currentColor'} strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
       <path
         d="M12 35 5 38 7 32 14 29 M14 37C8 42 7 47 7 54H15L18 45H24L23 54H31L34 43H45L46 54H54L55 41C61 37 64 32 66 26C74 25 78 20 77 14C76 6 69 3 63 5C56 7 54 12 53 18L43 22 16 27Z"

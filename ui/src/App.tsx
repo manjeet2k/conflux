@@ -668,6 +668,7 @@ export const App: React.FC = () => {
               settings={settings}
               loaded={settingsLoaded}
               onChange={updateSettings}
+              dark={dark}
             />
           </main>
         </div>
