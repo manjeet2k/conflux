@@ -158,6 +158,8 @@ pub struct PendingRange {
     pub end_block: usize,
     pub attempts: u32,
     pub not_before: Option<Instant>,
+    /// Optional label of the worker/adapter that last failed on this range.
+    pub avoid_worker: Option<String>,
 }
 
 /// Tracking state for an active segment.
@@ -224,6 +226,7 @@ impl SegmentScheduler {
                     end_block: idx,
                     attempts: 0,
                     not_before: None,
+                    avoid_worker: None,
                 });
             }
         }
@@ -233,6 +236,7 @@ impl SegmentScheduler {
                 end_block: blocks.len(),
                 attempts: 0,
                 not_before: None,
+                avoid_worker: None,
             });
         }
 
@@ -307,23 +311,40 @@ impl SegmentScheduler {
             return Claim::Wait(at - now);
         }
 
-        let mut best_pending_idx = None;
+        let mut best_preferred_idx = None;
+        let mut best_fallback_idx = None;
         let mut soonest_backoff: Option<Duration> = None;
+
         for (idx, range) in self.pending.iter().enumerate() {
             let ready_in = range
                 .not_before
                 .map(|t| t.saturating_duration_since(now))
                 .unwrap_or(Duration::ZERO);
+
             if ready_in.is_zero() {
-                let lower = best_pending_idx
-                    .is_none_or(|b: usize| range.start_block < self.pending[b].start_block);
-                if lower {
-                    best_pending_idx = Some(idx);
+                let is_avoided_by_caller = worker_label.is_some()
+                    && range.avoid_worker.is_some()
+                    && range.avoid_worker == worker_label;
+
+                if !is_avoided_by_caller {
+                    let lower = best_preferred_idx
+                        .is_none_or(|b: usize| range.start_block < self.pending[b].start_block);
+                    if lower {
+                        best_preferred_idx = Some(idx);
+                    }
+                } else {
+                    let lower = best_fallback_idx
+                        .is_none_or(|b: usize| range.start_block < self.pending[b].start_block);
+                    if lower {
+                        best_fallback_idx = Some(idx);
+                    }
                 }
             } else {
                 soonest_backoff = Some(soonest_backoff.map_or(ready_in, |s| s.min(ready_in)));
             }
         }
+
+        let best_pending_idx = best_preferred_idx.or(best_fallback_idx);
 
         let lease = match best_pending_idx {
             Some(idx) => Some(self.claim_piece(now, idx, conn_rate, worker_label)),
@@ -614,6 +635,7 @@ impl SegmentScheduler {
             end_block: seg.end_block,
             attempts: seg.attempts,
             not_before: None,
+            avoid_worker: None,
         });
         FailOutcome::Retry { after: until - now }
     }
@@ -622,7 +644,10 @@ impl SegmentScheduler {
     /// count so that it can be fetched as one request instead of several.
     fn push_pending(&mut self, mut range: PendingRange) {
         let mergeable = |a: &PendingRange, b: &PendingRange| {
-            a.attempts == b.attempts && a.not_before.is_none() && b.not_before.is_none()
+            a.attempts == b.attempts
+                && a.not_before.is_none()
+                && b.not_before.is_none()
+                && a.avoid_worker == b.avoid_worker
         };
         while let Some(i) = self.pending.iter().position(|p| {
             mergeable(p, &range)
@@ -653,6 +678,7 @@ impl SegmentScheduler {
                     end_block: seg.end_block,
                     attempts: seg.attempts,
                     not_before: None,
+                    avoid_worker: None,
                 });
             }
         }
@@ -691,6 +717,7 @@ impl SegmentScheduler {
                 end_block: seg.end_block,
                 attempts: 0,
                 not_before: None,
+                avoid_worker: None,
             });
             FailOutcome::Retry {
                 after: Duration::ZERO,
@@ -709,6 +736,7 @@ impl SegmentScheduler {
                     end_block: seg.end_block,
                     attempts,
                     not_before: Some(now + backoff),
+                    avoid_worker: seg.worker_label,
                 });
                 FailOutcome::Retry { after: backoff }
             }
@@ -736,6 +764,7 @@ impl SegmentScheduler {
                 end_block: seg.end_block,
                 attempts: seg.attempts,
                 not_before: None,
+                avoid_worker: None,
             });
         }
     }
@@ -1568,5 +1597,60 @@ mod tests {
             }
         }
         (steals, throttles)
+    }
+
+    #[test]
+    fn test_scheduler_avoids_failing_worker_after_backoff() {
+        let now = Instant::now();
+
+        // Both ranges must be ready to exercise worker preference instead of backoff.
+        let blocks = plan_chunks(8 * 1024 * 1024, 1024 * 1024);
+        let mut scheduler = SegmentScheduler::new(blocks, 2, Duration::from_millis(500));
+        let Claim::Segment(w1) = scheduler.claim(now, None, Some("wifi".to_string())) else {
+            panic!("expected w1");
+        };
+        assert_eq!(w1.start, 0);
+        scheduler.fail(w1.id, now);
+        let ready_at = now + Duration::from_millis(500);
+
+        // Wi-Fi prefers the fresh range even though its failed range is ready too.
+        let Claim::Segment(w2) = scheduler.claim(ready_at, None, Some("wifi".to_string())) else {
+            panic!("expected w2");
+        };
+        assert_eq!(w2.start, 4 * 1024 * 1024);
+
+        // Ethernet can take the failed range at the same instant.
+        let Claim::Segment(w_eth) = scheduler.claim(ready_at, None, Some("ethernet".to_string()))
+        else {
+            panic!("expected ethernet to claim");
+        };
+        assert_eq!(w_eth.start, 0);
+        assert_eq!(w_eth.worker_label.as_deref(), Some("ethernet"));
+    }
+
+    #[test]
+    fn test_scheduler_retries_avoided_range_with_only_one_worker() {
+        let now = Instant::now();
+        let blocks = plan_chunks(4 * 1024 * 1024, 1024 * 1024);
+        let mut scheduler = SegmentScheduler::new(blocks, 2, Duration::from_millis(500));
+        let Claim::Segment(first) = scheduler.claim(now, None, Some("wifi".to_string())) else {
+            panic!("expected initial segment");
+        };
+        assert_eq!(
+            scheduler.fail(first.id, now),
+            FailOutcome::Retry {
+                after: Duration::from_millis(500)
+            }
+        );
+        let Claim::Segment(retry) = scheduler.claim(
+            now + Duration::from_millis(500),
+            None,
+            Some("wifi".to_string()),
+        ) else {
+            panic!("expected the sole worker to retry its failed range");
+        };
+        assert_eq!(retry.start, first.start);
+        assert_eq!(retry.end_at_request, first.end_at_request);
+        assert_eq!(retry.attempts, 1);
     }
 }

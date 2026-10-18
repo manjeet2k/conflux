@@ -141,6 +141,148 @@ fn decode_ext_value(value: &str) -> Option<String> {
     }
 }
 
+/// Decodes canonical, padded Base64 for an RFC 2047 encoded-word.
+fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    let trimmed = input.trim_end_matches('=');
+    let padding = input.len() - trimmed.len();
+    if trimmed.is_empty() || !input.len().is_multiple_of(4) || padding > 2 {
+        return None;
+    }
+
+    let mut val = 0u32;
+    let mut valb = -8;
+    let mut out = Vec::new();
+    for c in trimmed.chars() {
+        let d = match c {
+            'A'..='Z' => c as u32 - 'A' as u32,
+            'a'..='z' => c as u32 - 'a' as u32 + 26,
+            '0'..='9' => c as u32 - '0' as u32 + 52,
+            '+' => 62,
+            '/' => 63,
+            _ => return None,
+        };
+        val = (val << 6) | d;
+        valb += 6;
+        if valb >= 0 {
+            out.push(((val >> valb) & 0xFF) as u8);
+            valb -= 8;
+        }
+    }
+    // Padded sextets must not hide nonzero bits beyond the decoded bytes.
+    if (padding == 2 && val & 0x0F != 0) || (padding == 1 && val & 0x03 != 0) {
+        return None;
+    }
+    Some(out)
+}
+
+/// Decodes an RFC 2047 Q-encoded string (`_` is space, `=XX` is hex byte).
+fn q_decode(input: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'_' {
+            out.push(b' ');
+            i += 1;
+        } else if bytes[i] == b'=' {
+            if i + 2 >= bytes.len() {
+                return None;
+            }
+            let h = char::from(bytes[i + 1]).to_digit(16)? as u8;
+            let l = char::from(bytes[i + 2]).to_digit(16)? as u8;
+            out.push((h << 4) | l);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    Some(out)
+}
+
+/// Decodes a single RFC 2047 encoded-word (`=?charset?encoding?encoded_text?=`).
+fn decode_rfc2047_word(word: &str) -> Option<String> {
+    let word = word.trim();
+    if !word.starts_with("=?") || !word.ends_with("?=") || word.len() < 8 {
+        return None;
+    }
+    let inner = &word[2..word.len() - 2];
+    let mut parts = inner.splitn(3, '?');
+    let charset = parts.next()?;
+    let encoding = parts.next()?;
+    let text = parts.next()?;
+
+    let bytes = if encoding.eq_ignore_ascii_case("b") {
+        base64_decode(text)?
+    } else if encoding.eq_ignore_ascii_case("q") {
+        q_decode(text)?
+    } else {
+        return None;
+    };
+
+    if charset.eq_ignore_ascii_case("utf-8") || charset.eq_ignore_ascii_case("us-ascii") {
+        String::from_utf8(bytes).ok()
+    } else if charset.eq_ignore_ascii_case("iso-8859-1") || charset.eq_ignore_ascii_case("latin1") {
+        Some(bytes.into_iter().map(char::from).collect())
+    } else {
+        None
+    }
+}
+
+/// Decodes RFC 2047 encoded-words inside a filename parameter.
+pub(crate) fn decode_rfc2047_filename(name: &str) -> String {
+    let trimmed = name.trim();
+    if !trimmed.contains("=?") || !trimmed.contains("?=") {
+        return name.to_string();
+    }
+    let mut tokens: Vec<(&str, bool)> = Vec::new();
+    let chars: Vec<(usize, char)> = trimmed.char_indices().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let start = chars[i].0;
+        let is_ws = chars[i].1.is_whitespace();
+        while i < chars.len() && chars[i].1.is_whitespace() == is_ws {
+            i += 1;
+        }
+        let end = if i < chars.len() {
+            chars[i].0
+        } else {
+            trimmed.len()
+        };
+        tokens.push((&trimmed[start..end], is_ws));
+    }
+
+    let is_encoded = |s: &str| decode_rfc2047_word(s).is_some();
+    let mut out = String::new();
+    let mut saw_encoded = false;
+
+    for idx in 0..tokens.len() {
+        let (tok, is_ws) = tokens[idx];
+        if is_ws {
+            let prev_enc = idx > 0 && is_encoded(tokens[idx - 1].0);
+            let next_enc = idx + 1 < tokens.len() && is_encoded(tokens[idx + 1].0);
+            if prev_enc && next_enc {
+                // RFC 2047 §6.2: linear whitespace between adjacent encoded-words is ignored.
+                continue;
+            }
+            out.push_str(tok);
+        } else if let Some(decoded) = decode_rfc2047_word(tok) {
+            saw_encoded = true;
+            out.push_str(&decoded);
+        } else if tok.starts_with("=?") && tok.ends_with("?=") {
+            return name.to_string();
+        } else {
+            out.push_str(tok);
+        }
+    }
+
+    if saw_encoded {
+        out
+    } else {
+        name.to_string()
+    }
+}
+
 /// Extracts the raw (unsanitized) file name from a Content-Disposition header value.
 /// `filename*` (RFC 5987/6266) takes precedence over `filename`.
 pub fn parse_content_disposition_filename(header: &str) -> Option<String> {
@@ -158,7 +300,7 @@ pub fn parse_content_disposition_filename(header: &str) -> Option<String> {
     params
         .into_iter()
         .find(|(name, _)| name == "filename")
-        .map(|(_, value)| value)
+        .map(|(_, value)| decode_rfc2047_filename(&value))
         .filter(|v| !v.trim().is_empty())
 }
 
@@ -647,5 +789,77 @@ mod tests {
         // Directories count as taken too.
         std::fs::create_dir(d.join("folder")).unwrap();
         assert_eq!(unique_path(d, "folder"), d.join("folder (1)"));
+    }
+
+    #[test]
+    fn test_cd_rfc2047_encoded_words() {
+        // Base64 encoded UTF-8 filename
+        assert_eq!(
+            parse_content_disposition_filename(
+                "attachment; filename=\"=?UTF-8?B?cmVwb3J0LnBkZg==?=\""
+            ),
+            Some("report.pdf".into())
+        );
+
+        // Q-encoded UTF-8 filename
+        assert_eq!(
+            parse_content_disposition_filename(
+                "attachment; filename=\"=?utf-8?q?na=C3=AFve=2Ebin?=\""
+            ),
+            Some("na\u{ef}ve.bin".into())
+        );
+
+        // Q-encoded ISO-8859-1 filename
+        assert_eq!(
+            parse_content_disposition_filename(
+                "attachment; filename=\"=?ISO-8859-1?Q?caf=E9.txt?=\""
+            ),
+            Some("caf\u{e9}.txt".into())
+        );
+
+        // Multiple adjacent encoded words with whitespace (RFC 2047 §6.2)
+        assert_eq!(
+            parse_content_disposition_filename(
+                "attachment; filename=\"=?UTF-8?B?aGVsbG8=?=   =?UTF-8?B?X3dvcmxkLnR4dA==?=\""
+            ),
+            Some("hello_world.txt".into())
+        );
+
+        // Malformed encoded word falls back safely to original text
+        assert_eq!(
+            parse_content_disposition_filename("attachment; filename=\"=?UTF-8?X?invalid?=\""),
+            Some("=?UTF-8?X?invalid?=".into())
+        );
+    }
+
+    #[test]
+    fn test_cd_rfc2047_malformed_base64_preserves_original() {
+        for encoded in [
+            "a", "YQ===", "YQ", "YQ=", "YWJj=", "YR==", "YWJ=", "Y=Q=", "YQ$=", "", "====",
+        ] {
+            let word = format!("=?UTF-8?B?{encoded}?=");
+            let header = format!("attachment; filename=\"{word}\"");
+            assert_eq!(
+                parse_content_disposition_filename(&header),
+                Some(word),
+                "malformed Base64: {encoded:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_cd_rfc2047_base64_padding_variants() {
+        for (encoded, expected) in [
+            ("YQ==", "a"),
+            ("YWI=", "ab"),
+            ("YWJj", "abc"),
+            ("YWJjZA==", "abcd"),
+        ] {
+            let header = format!("attachment; filename=\"=?UTF-8?B?{encoded}?=\"");
+            assert_eq!(
+                parse_content_disposition_filename(&header),
+                Some(expected.to_string())
+            );
+        }
     }
 }

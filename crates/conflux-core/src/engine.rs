@@ -1957,7 +1957,8 @@ async fn fetch_segment(
 
     let retry_after = retry_after_header(resp.headers());
     if status == StatusCode::TOO_MANY_REQUESTS
-        || (status == StatusCode::SERVICE_UNAVAILABLE && retry_after.is_some())
+        || ((status == StatusCode::SERVICE_UNAVAILABLE || status.is_server_error())
+            && retry_after.is_some())
     {
         return Err(AttemptError::Throttled {
             status,
