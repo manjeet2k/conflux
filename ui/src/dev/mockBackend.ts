@@ -34,6 +34,8 @@ let settings: Settings = {
   backdrop: 'mica_alt',
   default_save_dir: null,
   connections_per_adapter: 4,
+  slow_mode: false,
+  slow_mode_limit_kib: 1024,
   notify_on_complete: true,
   close_to_tray: true,
   auto_aggregate_adapters: true,
@@ -98,12 +100,15 @@ tasks[3].chunk_map = map(tasks[3], 850).replace(/^(.{871})./, '$1!');
 tasks[2].chunk_map = map(tasks[2], tasks[2].total_chunks);
 
 function tick() {
+  const activeCount = tasks.filter((t) => t.status === 'downloading').length;
   for (const t of tasks) {
     if (t.status !== 'downloading') continue;
     const jitter = () => 0.8 + Math.random() * 0.4;
     t.adapters = adapters.slice(0, 3).map((a, i) => {
       const prev = t.adapters[i]?.downloaded_bytes ?? 0;
-      const speed = speeds[i] * jitter();
+      const speed = settings.slow_mode
+        ? settings.slow_mode_limit_kib * 1024 / activeCount * speeds[i] / speeds.reduce((s, v) => s + v, 0)
+        : speeds[i] * jitter();
       return {
         adapter_id: a.id,
         name: a.name,
@@ -184,6 +189,7 @@ export function installMockBackend() {
           settings = {
             ...next,
             connections_per_adapter: clamp(next.connections_per_adapter, MIN_CONNECTIONS, MAX_CONNECTIONS),
+            slow_mode_limit_kib: clamp(next.slow_mode_limit_kib, 16, 1024 * 1024),
             default_save_dir: dir ? dir : null,
             adapter_overrides: settings.adapter_overrides,
           };

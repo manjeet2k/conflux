@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod bandwidth;
 pub mod checksum;
 pub mod chunk;
 pub mod engine;
@@ -12,6 +13,7 @@ pub mod writer;
 pub use adapter::{
     build_bound_http_client, discover_adapters, is_link_local, looks_virtual, NetworkAdapter,
 };
+pub use bandwidth::BandwidthLimiter;
 pub use checksum::compute_sha256;
 pub use chunk::{plan_chunks, Chunk, ChunkStatus};
 pub use engine::{

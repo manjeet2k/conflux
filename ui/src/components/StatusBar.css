@@ -1,0 +1,107 @@
+/* One outlined control, with a separate dropdown hit area and a quiet hover border. */
+body .cfx-slow-mode.fui-SplitButton {
+  box-sizing: border-box;
+  height: 34px;
+  border: 1px solid var(--cfx-control-stroke);
+  border-bottom-color: var(--cfx-control-bottom-stroke);
+  border-radius: 4px;
+  background-color: var(--cfx-control-fill);
+  color: var(--colorNeutralForeground1);
+  transition: border-color var(--cfx-button-release-duration) var(--cfx-button-release-curve);
+}
+
+body .cfx-slow-mode.fui-SplitButton:hover,
+body .cfx-slow-mode.fui-SplitButton:has([aria-expanded='true']) {
+  border-color: color-mix(in srgb, var(--colorNeutralStroke1Hover) 45%, var(--cfx-control-stroke));
+}
+
+/* Hover keeps the fill steady; pressing either action only affects that action. */
+body .cfx-slow-mode.fui-SplitButton > button,
+body .cfx-slow-mode.fui-SplitButton > button:is(:hover, :active, :focus-visible) {
+  box-sizing: border-box;
+  height: 32px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 3px;
+  background-color: transparent;
+  color: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+body .cfx-slow-mode.fui-SplitButton > .fui-SplitButton__primaryActionButton {
+  padding: 2px 10px;
+  border-radius: 3px 0 0 3px;
+}
+
+body .cfx-slow-mode.fui-SplitButton > .fui-SplitButton__menuButton {
+  position: relative;
+  min-width: 32px;
+  padding: 0;
+  border-radius: 0 3px 3px 0;
+}
+
+body .cfx-slow-mode.fui-SplitButton > .fui-SplitButton__menuButton::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 1px;
+  background-color: var(--colorNeutralStroke1);
+  pointer-events: none;
+}
+
+body .cfx-slow-mode.fui-SplitButton > .fui-SplitButton__menuButton:is(:hover, [aria-expanded='true'])::before {
+  background-color: var(--colorNeutralStroke1Hover);
+}
+
+body .cfx-slow-mode.fui-SplitButton > button:enabled:active {
+  background-color: var(--cfx-subtle-pressed);
+}
+
+body .cfx-slow-mode.fui-SplitButton > .fui-SplitButton__menuButton[aria-expanded='true'] {
+  background-color: var(--cfx-subtle-hover);
+}
+
+body .cfx-slow-mode .fui-MenuButton__menuIcon {
+  font-size: 12px;
+  transition: transform 120ms ease-out;
+}
+
+body .cfx-slow-mode [aria-expanded='true'] .fui-MenuButton__menuIcon {
+  transform: rotate(180deg);
+}
+
+body .cfx-slow-mode.fui-SplitButton:has(button:disabled) {
+  background-color: var(--cfx-control-fill-disabled);
+  border-color: var(--cfx-control-stroke);
+  color: var(--colorNeutralForegroundDisabled);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body .cfx-slow-mode.fui-SplitButton,
+  body .cfx-slow-mode .fui-MenuButton__menuIcon {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  body .cfx-slow-mode.fui-SplitButton,
+  body .cfx-slow-mode.fui-SplitButton:hover,
+  body .cfx-slow-mode.fui-SplitButton:has([aria-expanded='true']) {
+    border-color: ButtonText;
+    background-color: ButtonFace;
+    color: ButtonText;
+  }
+
+  body .cfx-slow-mode.fui-SplitButton > .fui-SplitButton__menuButton::before {
+    background-color: ButtonText;
+  }
+
+  body .cfx-slow-mode.fui-SplitButton:has(button:disabled) {
+    border-color: GrayText;
+    color: GrayText;
+  }
+}

@@ -99,6 +99,9 @@ export interface Settings {
   /** null = the OS Downloads folder. */
   default_save_dir: string | null;
   connections_per_adapter: number;
+  slow_mode: boolean;
+  /** Aggregate limit across downloads and adapters, in KiB/s. */
+  slow_mode_limit_kib: number;
   notify_on_complete: boolean;
   close_to_tray: boolean;
   auto_aggregate_adapters: boolean;

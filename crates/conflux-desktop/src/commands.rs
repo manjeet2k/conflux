@@ -191,7 +191,8 @@ pub async fn start_download(
         let dir = validate_save_dir(&save_dir)?;
         let settings = state.settings.read().await.clone();
         let adapters = select_adapters(&settings)?;
-        let engine = engine_from_settings(&settings)?;
+        let engine = engine_from_settings(&settings)?
+            .with_bandwidth_limiter(Arc::clone(&state.bandwidth_limiter));
 
         // Probe exactly once; the same probe is handed to the engine.
         let probe = engine
@@ -320,7 +321,8 @@ pub async fn resume_task_internal(
         let dir = validate_save_dir(&task.save_dir)?;
         let settings = state.settings.read().await.clone();
         select_adapters(&settings)?;
-        let engine = engine_from_settings(&settings)?;
+        let engine = engine_from_settings(&settings)?
+            .with_bandwidth_limiter(Arc::clone(&state.bandwidth_limiter));
         let output_path = PathBuf::from(&task.save_path);
         if output_path.exists()
             && task.file_identity.as_ref().is_none_or(|identity| {
@@ -577,7 +579,8 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String
 }
 
 /// Validates, clamps, saves and applies settings. New values apply to downloads started
-/// or resumed afterwards. Returns the settings as stored.
+/// or resumed afterwards, except slow mode, which applies live to every worker.
+/// Returns the settings as stored.
 #[tauri::command]
 pub async fn update_settings(
     state: State<'_, AppState>,
@@ -590,6 +593,9 @@ pub async fn update_settings(
     if let Some(path) = &state.settings_path {
         settings::save(path, &settings)?;
     }
+    state
+        .bandwidth_limiter
+        .set_limit(settings.bandwidth_limit());
     *current = settings.clone();
     info!(?settings, "Settings updated");
     Ok(settings)

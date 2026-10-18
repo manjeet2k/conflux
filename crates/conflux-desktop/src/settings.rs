@@ -43,6 +43,9 @@ pub struct Settings {
     /// `None` = the OS Downloads folder.
     pub default_save_dir: Option<String>,
     pub connections_per_adapter: u32,
+    pub slow_mode: bool,
+    /// Shared across all downloads, in KiB/s (shown as KB/s in the UI).
+    pub slow_mode_limit_kib: u32,
     pub notify_on_complete: bool,
     pub close_to_tray: bool,
     pub auto_aggregate_adapters: bool,
@@ -68,6 +71,8 @@ impl Default for Settings {
             backdrop: Backdrop::MicaAlt,
             default_save_dir: None,
             connections_per_adapter: 4,
+            slow_mode: false,
+            slow_mode_limit_kib: 1024,
             notify_on_complete: true,
             close_to_tray: true,
             auto_aggregate_adapters: true,
@@ -78,11 +83,20 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn bandwidth_limit(&self) -> u64 {
+        if self.slow_mode {
+            u64::from(self.slow_mode_limit_kib) * 1024
+        } else {
+            0
+        }
+    }
+
     /// Clamps numeric fields into their supported ranges, normalizes an empty folder to `None`
     /// and migrates legacy `"<name>:<ip>"` adapter override keys to interface names.
     pub fn normalized(mut self) -> Self {
         // Migrations for older `schema_version`s would run here, oldest first.
         self.schema_version = SCHEMA_VERSION;
+        self.slow_mode_limit_kib = self.slow_mode_limit_kib.clamp(16, 1024 * 1024);
         self.adapter_overrides = crate::adapters::migrate_overrides(self.adapter_overrides);
         self.connections_per_adapter = self
             .connections_per_adapter
@@ -235,6 +249,25 @@ mod tests {
         .normalized();
         assert_eq!(s.connections_per_adapter, 1);
         assert_eq!(s.default_save_dir, None);
+    }
+
+    #[test]
+    fn slow_mode_defaults_limits_and_roundtrip() {
+        let legacy: Settings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
+        assert!(!legacy.slow_mode);
+        assert_eq!(legacy.slow_mode_limit_kib, 1024);
+        assert_eq!(legacy.bandwidth_limit(), 0);
+        for (requested, expected) in [(0, 16_u32), (500, 500), (u32::MAX, 1024 * 1024)] {
+            let settings = Settings {
+                slow_mode: true,
+                slow_mode_limit_kib: requested,
+                ..Settings::default()
+            }
+            .normalized();
+            assert_eq!(settings.bandwidth_limit(), u64::from(expected) * 1024);
+            let json = serde_json::to_string(&settings).unwrap();
+            assert_eq!(serde_json::from_str::<Settings>(&json).unwrap(), settings);
+        }
     }
 
     #[test]

@@ -7,6 +7,8 @@ export const DEFAULT_SETTINGS: Settings = {
   backdrop: 'mica_alt',
   default_save_dir: null,
   connections_per_adapter: 4,
+  slow_mode: false,
+  slow_mode_limit_kib: 1024,
   notify_on_complete: true,
   close_to_tray: true,
   auto_aggregate_adapters: true,

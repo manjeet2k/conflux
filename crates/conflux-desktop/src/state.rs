@@ -152,6 +152,7 @@ pub struct AppState {
     /// Every download task: lifecycle transitions, engine handles and output paths.
     pub tasks: Arc<TaskController>,
     pub settings: Arc<RwLock<Settings>>,
+    pub bandwidth_limiter: Arc<conflux_core::BandwidthLimiter>,
     /// `None` when the config dir could not be resolved (settings are then not saved).
     pub settings_path: Option<PathBuf>,
     /// Last known snapshot of network adapters with user overrides applied,
@@ -177,6 +178,9 @@ impl AppState {
     ) -> Self {
         Self {
             tasks: Arc::new(TaskController::new(tasks, Arc::new(history), events)),
+            bandwidth_limiter: Arc::new(conflux_core::BandwidthLimiter::new(
+                settings.bandwidth_limit(),
+            )),
             settings: Arc::new(RwLock::new(settings)),
             settings_path,
             last_adapters: Arc::new(RwLock::new(Vec::new())),

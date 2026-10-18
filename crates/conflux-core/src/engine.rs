@@ -1,4 +1,5 @@
 use crate::adapter::{build_bound_http_client, NetworkAdapter, DEFAULT_STALL_TIMEOUT};
+use crate::bandwidth::BandwidthLimiter;
 use crate::checksum::compute_sha256_cancellable;
 use crate::chunk::{chunk_count, try_plan_chunks, Chunk, ChunkStatus};
 use crate::filename::derive_filename;
@@ -140,6 +141,7 @@ pub struct ProgressUpdate {
 }
 
 pub struct DownloadEngine {
+    bandwidth_limiter: Option<Arc<BandwidthLimiter>>,
     block_size_override: Option<u64>,
     connections_per_adapter: usize,
     retry_backoff: Duration,
@@ -151,6 +153,7 @@ pub struct DownloadEngine {
 impl Default for DownloadEngine {
     fn default() -> Self {
         Self {
+            bandwidth_limiter: None,
             block_size_override: None,
             connections_per_adapter: 4,
             retry_backoff: DEFAULT_RETRY_BACKOFF,
@@ -454,6 +457,7 @@ struct SidecarTarget {
 
 /// State shared by every worker of one chunked download.
 struct ChunkedShared {
+    bandwidth_limiter: Option<Arc<BandwidthLimiter>>,
     url: String,
     total_bytes: u64,
     /// Sent as `If-Range` on every chunk GET: the probe's strong ETag, else its
@@ -539,6 +543,12 @@ impl DownloadProbe {
 }
 
 impl DownloadEngine {
+    /// Shares a live aggregate speed budget with other engines and adapter workers.
+    pub fn with_bandwidth_limiter(mut self, limiter: Arc<BandwidthLimiter>) -> Self {
+        self.bandwidth_limiter = Some(limiter);
+        self
+    }
+
     /// Creates an engine. `connections_per_adapter` must be non-zero.
     pub fn new(connections_per_adapter: usize) -> Result<Self> {
         if connections_per_adapter == 0 {
@@ -1202,6 +1212,7 @@ impl DownloadEngine {
         });
         let (stop_tx, stop_rx) = watch::channel(false);
         let shared = Arc::new(ChunkedShared {
+            bandwidth_limiter: self.bandwidth_limiter.clone(),
             url: probe.url.clone(),
             total_bytes: probe.total_bytes,
             if_range: if_range_validator(probe),
@@ -1623,6 +1634,13 @@ impl DownloadEngine {
                 let Some(item) = next else { break };
                 let bytes =
                     item.context("Error reading single-stream body (stall or disconnect)")?;
+                if let Some(limiter) = &self.bandwidth_limiter {
+                    tokio::select! {
+                        biased;
+                        _ = wait_for_true(&mut cancel) => return Err(cancelled_error()),
+                        _ = limiter.consume(bytes.len()) => {},
+                    }
+                }
                 let len = bytes.len() as u64;
                 if let Some(expected) = expected {
                     if received + len > expected {
@@ -2256,6 +2274,30 @@ async fn fetch_segment(
 
         let Some(item) = next else { break };
         let bytes = item.context("error reading segment body (stall timeout or disconnect)")?;
+        if let Some(limiter) = &shared.bandwidth_limiter {
+            let stopped = tokio::select! {
+                biased;
+                _ = wait_for_true(stop) => true,
+                _ = wait_for_true(retire) => true,
+                _ = limiter.consume(bytes.len()) => false,
+            };
+            if stopped {
+                flush_segment_buffer(
+                    shared,
+                    lease.id,
+                    adapter,
+                    adapter_states,
+                    &mut buffer,
+                    &mut buffer_start_offset,
+                    current_offset,
+                    uncommitted,
+                )
+                .await?;
+                return Err(AttemptError::Stopped);
+            }
+            // Waiting for our own bandwidth budget is not network silence.
+            silence.last_received = Instant::now();
+        }
         let len = bytes.len() as u64;
 
         if current_offset + len > lease.end_at_request {

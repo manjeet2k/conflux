@@ -635,7 +635,6 @@ export const App: React.FC = () => {
                       />
                     )}
                   </div>
-                  <StatusBar items={visible.length} selected={selectedTasks.length} active={counts.active} speed={totalSpeed} />
                 </>
               )}
               {view === 'network' && (
@@ -657,6 +656,15 @@ export const App: React.FC = () => {
                 />
               )}
             </div>
+            <StatusBar
+              items={visible.length}
+              selected={selectedTasks.length}
+              active={counts.active}
+              speed={totalSpeed}
+              settings={settings}
+              loaded={settingsLoaded}
+              onChange={updateSettings}
+            />
           </main>
         </div>
       </div>
