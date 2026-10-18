@@ -9,6 +9,10 @@ All notable changes to Conflux are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- New desktop downloads use `filename.part` until completion, then publish without replacing existing files. Temporary file locks are retried; failed publishes can resume without contacting the server, and publication interrupted by an app restart is recovered by file identity. Existing paused downloads retain their paths.
+- Downloads use a rolling per-segment speed that decays during silence, allowing idle workers to rescue crawling tails as small as one block. Streams silent for ten seconds are retried only when peers on the same adapter are still receiving; completed blocks are preserved.
+
 ## [0.3.3] - 2026-10-18
 
 ### Fixed

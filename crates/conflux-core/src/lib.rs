@@ -18,7 +18,9 @@ pub use engine::{
     AdapterProgress, AdapterUpdate, DownloadCancelled, DownloadEngine, DownloadProbe,
     ProgressUpdate, RequestHeaders,
 };
-pub use file_identity::{remove_owned_empty_file, remove_owned_file, FileIdentity};
+pub use file_identity::{
+    publish_owned_file, remove_owned_empty_file, remove_owned_file, FileIdentity,
+};
 pub use filename::{claim_unique_path, sanitize_filename};
 pub use resume::{read_resume_headers, remove_resume_sidecar, resume_sidecar_path};
 pub use segment::{

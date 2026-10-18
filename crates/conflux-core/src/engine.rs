@@ -1988,10 +1988,82 @@ fn measured_rate(bytes: u64, elapsed: Duration) -> Option<f64> {
     (bytes >= RATE_SAMPLE_MIN && secs > 0.0).then(|| bytes as f64 / secs)
 }
 
+const SEGMENT_SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
+const SEGMENT_RATE_WINDOW: Duration = Duration::from_secs(3);
+const SILENT_STREAM_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Time-weighted EWMA sampled even when no body bytes arrive. A quiet connection's
+/// old speed therefore decays instead of masking a crawl or silence indefinitely.
+struct SegmentRate {
+    sampled_at: Instant,
+    bytes: u64,
+    rate: Option<f64>,
+}
+
+impl SegmentRate {
+    fn new(now: Instant, initial: Option<f64>) -> Self {
+        Self {
+            sampled_at: now,
+            bytes: 0,
+            rate: initial.filter(|r| r.is_finite() && *r > 0.0),
+        }
+    }
+
+    fn sample(&mut self, now: Instant, bytes: u64) -> Option<f64> {
+        let elapsed = now.duration_since(self.sampled_at).as_secs_f64();
+        if elapsed == 0.0 {
+            return self.rate;
+        }
+        let received = bytes.saturating_sub(self.bytes);
+        let sample = received as f64 / elapsed;
+        let weight = (-elapsed / SEGMENT_RATE_WINDOW.as_secs_f64()).exp();
+        self.rate = match self.rate {
+            Some(previous) => Some(previous * weight + sample * (1.0 - weight)),
+            None if received > 0 => Some(sample),
+            None => None,
+        };
+        self.bytes = bytes;
+        self.sampled_at = now;
+        self.rate
+    }
+}
+
+/// Compare only with traffic on this adapter, subtracting this stream's own bytes.
+struct StreamSilence {
+    last_received: Instant,
+    last_peer_received: Option<Instant>,
+    adapter_bytes: u64,
+    own_bytes: u64,
+}
+
+impl StreamSilence {
+    fn new(now: Instant, adapter_bytes: u64) -> Self {
+        Self {
+            last_received: now,
+            last_peer_received: None,
+            adapter_bytes,
+            own_bytes: 0,
+        }
+    }
+
+    fn should_retry(&mut self, now: Instant, adapter_bytes: u64, own_bytes: u64) -> bool {
+        let own_delta = own_bytes.saturating_sub(self.own_bytes);
+        if adapter_bytes.saturating_sub(self.adapter_bytes) > own_delta {
+            self.last_peer_received = Some(now);
+        }
+        self.adapter_bytes = adapter_bytes;
+        self.own_bytes = own_bytes;
+        now.duration_since(self.last_received) >= SILENT_STREAM_TIMEOUT
+            && self
+                .last_peer_received
+                .is_some_and(|last| now.duration_since(last) < SEGMENT_RATE_WINDOW)
+    }
+}
+
 /// Streams one byte-range segment with strict validation and 1 MiB write buffering.
 ///
 /// Updates `conn_rate` with this piece's average speed (it sizes the worker's next piece)
-/// and publishes the running speed in the lease bounds for tail-steal decisions.
+/// and publishes a rolling speed in the lease bounds for tail-steal decisions.
 #[allow(clippy::too_many_arguments)]
 async fn fetch_segment(
     adapter: &AdapterWorkerState,
@@ -2119,6 +2191,15 @@ async fn fetch_segment(
     let mut buffer_start_offset = lease.start;
     let mut current_offset = lease.start;
     let piece_started = Instant::now();
+    let mut rate = SegmentRate::new(piece_started, *conn_rate);
+    let mut silence = StreamSilence::new(piece_started, adapter.received.load(Ordering::SeqCst));
+    // Do not sample interval's immediate first tick: a tiny startup denominator
+    // would turn the first buffered TCP read into a wildly inflated EWMA seed.
+    let mut sample_tick = tokio::time::interval_at(
+        tokio::time::Instant::now() + SEGMENT_SAMPLE_INTERVAL,
+        SEGMENT_SAMPLE_INTERVAL,
+    );
+    sample_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Until this piece has its own measurement, the connection's last one stands in.
     lease.bounds.lock().unwrap().rate = *conn_rate;
 
@@ -2151,6 +2232,23 @@ async fn fetch_segment(
                 ).await?;
                 return Err(AttemptError::Stopped);
             }
+            _ = sample_tick.tick() => {
+                let now = Instant::now();
+                let own_bytes = current_offset - lease.start;
+                lease.bounds.lock().unwrap().rate = rate.sample(now, own_bytes);
+                if silence.should_retry(now, adapter.received.load(Ordering::SeqCst), own_bytes) {
+                    flush_segment_buffer(
+                        shared, lease.id, adapter, adapter_states, &mut buffer,
+                        &mut buffer_start_offset, current_offset, uncommitted,
+                    ).await?;
+                    *conn_rate = None;
+                    return Err(AttemptError::Failed(anyhow!(
+                        "segment {} via {} silent for {:?} while same-adapter peers receive data",
+                        lease.id, adapter.label, now.duration_since(silence.last_received)
+                    )));
+                }
+                continue;
+            }
             n = stream.next() => n,
         };
 
@@ -2170,15 +2268,11 @@ async fn fetch_segment(
             let mut bounds = lease.bounds.lock().unwrap();
             let (take, reached_end) = bounds.take(len);
             let was_split = bounds.end < lease.end_at_request;
-            if let Some(rate) =
-                measured_rate(bounds.reserved - lease.start, piece_started.elapsed())
-            {
-                bounds.rate = Some(rate);
-            }
             (take, reached_end, was_split)
         };
 
         if take > 0 {
+            silence.last_received = Instant::now();
             buffer.extend_from_slice(&bytes[..take as usize]);
             current_offset += take;
             *uncommitted += take;
@@ -2198,6 +2292,9 @@ async fn fetch_segment(
                 uncommitted,
             )
             .await?;
+            // Disk backpressure is not network silence. Start the quiet period
+            // after the write, when this worker can actually poll the body again.
+            silence.last_received = Instant::now();
         }
 
         if reached_end && was_split {
@@ -2614,6 +2711,59 @@ mod tests {
         assert_eq!(v(Some("W/\"a\""), None), None);
         assert_eq!(v(None, Some(lm)), None);
         assert_eq!(v(None, None), None);
+    }
+
+    #[test]
+    fn test_segment_rate_tracks_crawl_and_decays_during_silence() {
+        let now = Instant::now();
+        let mut rate = SegmentRate::new(now, None);
+        assert_eq!(rate.sample(now, 0), None);
+        assert_eq!(rate.sample(now + Duration::from_secs(1), 0), None);
+        let fast = rate
+            .sample(now + Duration::from_secs(2), 3_000_000)
+            .unwrap();
+        assert_eq!(fast, 3_000_000.0);
+        // A 3-second window of trickling must displace the initial fast sample.
+        let crawl = rate
+            .sample(now + Duration::from_secs(5), 3_003_000)
+            .unwrap();
+        let expected = fast / std::f64::consts::E + 1_000.0 * (1.0 - 1.0 / std::f64::consts::E);
+        assert!((crawl - expected).abs() < 1e-6);
+        let silent = rate
+            .sample(now + Duration::from_secs(14), 3_003_000)
+            .unwrap();
+        assert!((silent - crawl * (-3.0_f64).exp()).abs() < 1e-6);
+        assert!(silent < fast / 50.0);
+    }
+
+    #[test]
+    fn test_segment_rate_seed_decays_and_sampling_is_time_consistent() {
+        let now = Instant::now();
+        let mut a = SegmentRate::new(now, Some(1_000_000.0));
+        let mut b = SegmentRate::new(now, Some(1_000_000.0));
+        for i in 1..=6 {
+            a.sample(now + Duration::from_millis(i * 500), 0);
+        }
+        let once = b.sample(now + Duration::from_secs(3), 0).unwrap();
+        assert!((a.rate.unwrap() - once).abs() < 1e-6);
+        assert!((once - 1_000_000.0 / std::f64::consts::E).abs() < 1e-6);
+        assert_eq!(SegmentRate::new(now, Some(f64::NAN)).rate, None);
+    }
+
+    #[test]
+    fn test_silence_requires_recent_peer_traffic_and_ten_seconds_without_data() {
+        let now = Instant::now();
+        let mut silence = StreamSilence::new(now, 100);
+        // Own traffic cannot be mistaken for a healthy peer.
+        silence.last_received = now + Duration::from_secs(1);
+        assert!(!silence.should_retry(now + Duration::from_secs(1), 200, 100));
+        assert!(!silence.should_retry(now + Duration::from_secs(20), 200, 100));
+        assert!(silence.should_retry(now + Duration::from_secs(21), 201, 100));
+        // An old peer sample cannot trigger a cut when the entire adapter is quiet.
+        assert!(!silence.should_retry(now + Duration::from_secs(24), 201, 100));
+        silence.last_received = now + Duration::from_secs(25);
+        assert!(!silence.should_retry(now + Duration::from_secs(34), 202, 100));
+        assert!(silence.should_retry(now + Duration::from_secs(35), 203, 100));
     }
 
     #[test]

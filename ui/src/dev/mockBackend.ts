@@ -59,7 +59,8 @@ const base = (id: string, filename: string, size: number, over: Partial<Download
   url: `https://mirror.example.com/pub/${filename}`,
   filename,
   save_dir: 'C:\\Users\\pc\\Downloads',
-  save_path: `C:\\Users\\pc\\Downloads\\${filename}`,
+  save_path: `C:\\Users\\pc\\Downloads\\${filename}${over.status === 'completed' ? '' : '.part'}`,
+  final_path: over.status === 'completed' ? null : `C:\\Users\\pc\\Downloads\\${filename}`,
   adapter_ids: adapters.slice(0, 3).map((a) => a.id),
   total_bytes: Math.floor(size),
   supports_ranges: true,
@@ -128,6 +129,10 @@ function tick() {
       i < t.completed_chunks ? '#' : i < t.completed_chunks + 12 ? '>' : '.'
     ).join('');
     if (t.downloaded_bytes >= t.total_bytes) {
+      if (t.final_path) {
+        t.save_path = t.final_path;
+        t.final_path = null;
+      }
       Object.assign(t, { status: 'completed', speed_bytes_sec: 0, eta_seconds: 0, active_chunks: 0, adapters: [], completed_at_ms: Date.now() });
     }
     emit(PROGRESS_EVENT, t);

@@ -23,7 +23,7 @@ pub const IDLE_POLL: Duration = Duration::from_millis(50);
 /// read to its end (which keeps the connection alive and its TCP window open).
 pub const PIECE_TARGET: Duration = Duration::from_secs(4);
 
-/// Smallest request and smallest tail steal, in blocks (4 MiB at the default 1 MiB block).
+/// Smallest request and usual tail steal, in blocks (4 MiB at the default 1 MiB block).
 pub const MIN_PIECE_BLOCKS: u64 = 4;
 
 /// Largest single request.
@@ -74,7 +74,7 @@ pub struct SegmentBounds {
     pub reserved: u64,
     /// Exclusive upper byte offset; can only shrink when split by a thief.
     pub end: u64,
-    /// Measured speed of the worker's connection in bytes/s (`None` until data arrives).
+    /// Rolling speed in bytes/s, decayed during silence (`None` until measured or seeded).
     /// Used to estimate how long the segment still needs when deciding a tail steal.
     pub rate: Option<f64>,
 }
@@ -462,23 +462,29 @@ impl SegmentScheduler {
     ///
     /// The victim's remaining range is divided in proportion to the two connection speeds
     /// (victim keeps the lower part) so both finish together. A segment is only split if
-    /// its speed is known, the thief's share is at least `MIN_PIECE_BLOCKS` blocks, and
-    /// the range finishes at least `MIN_STEAL_GAIN` sooner.
+    /// its speed is known and the range finishes at least `MIN_STEAL_GAIN` sooner.
+    /// With no pending work, a thief may take just one block to rescue a small tail.
     fn try_split_active(
         &mut self,
         now: Instant,
         thief_rate: Option<f64>,
         thief_label: Option<String>,
     ) -> Option<SegmentLease> {
-        let min_steal = self.block_size().saturating_mul(MIN_PIECE_BLOCKS);
+        let min_blocks = if self.pending.is_empty() {
+            1
+        } else {
+            MIN_PIECE_BLOCKS
+        };
         // (active index, split block, time saved in seconds)
         let mut best: Option<(usize, usize, f64)> = None;
 
         for (seg_idx, seg) in self.active.iter().enumerate() {
             let bounds = seg.bounds.lock().unwrap();
-            let Some(v) = bounds.rate.filter(|r| r.is_finite() && *r > 0.0) else {
+            let Some(v) = bounds.rate.filter(|r| r.is_finite() && *r >= 0.0) else {
                 continue;
             };
+            // A measured silent stream is stealable too. Keep time estimates finite.
+            let v = v.max(1.0);
             let t = thief_rate
                 .filter(|r| r.is_finite() && *r > 0.0)
                 .unwrap_or(v);
@@ -495,7 +501,7 @@ impl SegmentScheduler {
                 continue;
             }
             let split_offset = self.blocks[split_block].start;
-            if split_offset <= reserved || end - split_offset < min_steal {
+            if split_offset <= reserved || (seg.end_block - split_block) < min_blocks as usize {
                 continue;
             }
 
@@ -1041,14 +1047,13 @@ mod tests {
         advance(&v, 4 * MIB, 100_000_000.0);
         assert!(matches!(s.claim(now, None, None), Claim::Wait(_)));
 
-        // Slow victim but only 6 blocks left: the thief's share would be < 4 blocks.
+        // Slow victim with only 6 blocks left: a 3-block tail steal is now worthwhile.
         let mut s = SegmentScheduler::new(plan_chunks(8 * MIB, MIB), 5, Duration::ZERO);
         let v = lease_of(s.claim(now, Some(1e9), None));
         advance(&v, 2 * MIB, 100_000.0);
-        assert!(matches!(
-            s.claim(now, Some(100_000.0), None),
-            Claim::Wait(_)
-        ));
+        let t = lease_of(s.claim(now, Some(100_000.0), None));
+        assert_eq!(v.bounds.lock().unwrap().end, t.start);
+        assert_eq!((t.start, t.end_at_request), (5 * MIB, 8 * MIB));
 
         // Same victim with 16 blocks left: worth it.
         let mut s = SegmentScheduler::new(plan_chunks(18 * MIB, MIB), 5, Duration::ZERO);
@@ -1057,6 +1062,52 @@ mod tests {
         let t = lease_of(s.claim(now, Some(100_000.0), None));
         assert_eq!(v.bounds.lock().unwrap().end, t.start);
         assert_eq!((t.start, t.end_at_request), (10 * MIB, 18 * MIB));
+    }
+
+    #[test]
+    fn test_small_tail_split_preserves_partition_and_retry_ownership() {
+        let now = Instant::now();
+        for rate in [0.0, 100.0, 100_000.0] {
+            // A partial final block is still a block that can be stolen.
+            let total = 2 * MIB + MIB / 2;
+            let mut s = SegmentScheduler::new(plan_chunks(total, MIB), 5, Duration::ZERO);
+            let v = lease_of(s.claim(now, None, None));
+            advance(&v, MIB + MIB / 4, rate);
+            s.commit(v.id, MIB);
+            let t = lease_of(s.claim(now, Some(1_000_000.0), None));
+            assert_eq!(v.bounds.lock().unwrap().end, 2 * MIB);
+            assert_eq!((t.start, t.end_at_request), (2 * MIB, total));
+            // The victim cannot write into the thief's block even if its read crosses it.
+            assert_eq!(v.bounds.lock().unwrap().take(2 * MIB), (3 * MIB / 4, true));
+            s.commit(t.id, total);
+            s.finish(t.id);
+            s.fail(v.id, now);
+            let retry = lease_of(s.claim(now, None, None));
+            assert_eq!((retry.start, retry.end_at_request), (MIB, 2 * MIB));
+            s.commit(retry.id, retry.end_at_request);
+            s.finish(retry.id);
+            assert_eq!(s.completed_count(), 3);
+            assert!(matches!(s.claim(now, None, None), Claim::Finished));
+        }
+    }
+
+    #[test]
+    fn test_small_tail_waits_when_pending_work_is_in_backoff() {
+        let now = Instant::now();
+        let mut s = SegmentScheduler::new(plan_chunks(12 * MIB, MIB), 5, Duration::from_secs(5));
+        let v = lease_of(s.claim(now, None, None));
+        let retry = lease_of(s.claim(now, None, None));
+        advance(&v, MIB, 100_000.0);
+        s.fail(retry.id, now);
+        // Put the remaining pending range in backoff too, so claim scans the victim.
+        for range in &mut s.pending {
+            range.not_before = Some(now + Duration::from_secs(5));
+        }
+        assert!(matches!(
+            s.claim(now, Some(100_000.0), None),
+            Claim::Wait(_)
+        ));
+        assert_eq!(v.bounds.lock().unwrap().end, 4 * MIB);
     }
 
     #[test]

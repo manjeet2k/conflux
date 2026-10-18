@@ -48,6 +48,10 @@ pub struct DownloadTaskState {
     pub filename: String,
     pub save_dir: String,
     pub save_path: String,
+    /// Intended completed path; `save_path` is the physical .part file until published.
+    /// Absent for legacy tasks, whose physical paths must never be inferred from suffixes.
+    #[serde(default)]
+    pub final_path: Option<String>,
     #[serde(default)]
     pub file_identity: Option<conflux_core::FileIdentity>,
     /// Adapter ids the user selected (empty = discovery defaults). Reused on resume.
@@ -96,6 +100,39 @@ pub struct Lifecycle {
 }
 
 impl DownloadTaskState {
+    /// Recover a crash after the rename but before the completion snapshot was saved.
+    /// A saved hash is the receipt that the engine finished before publishing began.
+    pub fn recover_published(&mut self) -> bool {
+        let Some(path) = self.final_path.as_ref() else {
+            return false;
+        };
+        let Some(identity) = self.file_identity.as_ref() else {
+            return false;
+        };
+        if self.sha256.is_none()
+            || conflux_core::FileIdentity::at(std::path::Path::new(path))
+                .ok()
+                .as_ref()
+                != Some(identity)
+        {
+            return false;
+        }
+        self.save_path = path.clone();
+        self.filename = std::path::Path::new(path)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into();
+        self.final_path = None;
+        self.status = TaskStatus::Completed;
+        self.error = None;
+        self.total_bytes = std::fs::metadata(&self.save_path).map_or(self.total_bytes, |m| m.len());
+        self.downloaded_bytes = self.total_bytes;
+        self.completed_chunks = self.total_chunks;
+        self.completed_at_ms = Some(crate::controller::now_ms());
+        self.clear_runtime();
+        true
+    }
     /// Zeroes the fields that only mean something while the task is running.
     pub fn clear_runtime(&mut self) {
         self.speed_bytes_sec = 0.0;
@@ -216,6 +253,7 @@ mod tests {
             filename: "f".into(),
             save_dir: "d".into(),
             save_path: "p".into(),
+            final_path: None,
             file_identity: None,
             adapter_ids: vec![],
             total_bytes: 1,
@@ -254,6 +292,7 @@ mod tests {
             "filename",
             "save_dir",
             "save_path",
+            "final_path",
             "file_identity",
             "adapter_ids",
             "total_bytes",

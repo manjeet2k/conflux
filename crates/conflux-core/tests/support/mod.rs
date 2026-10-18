@@ -31,6 +31,12 @@ pub enum RangeMode {
 }
 
 #[derive(Clone)]
+pub enum BodyFault {
+    Crawl { after_bytes: usize, delay: Duration },
+    Silence { after_bytes: usize },
+}
+
+#[derive(Clone)]
 pub struct ServerConfig {
     pub payload: Arc<Vec<u8>>,
     pub range_mode: RangeMode,
@@ -56,6 +62,10 @@ pub struct ServerConfig {
     pub stall_peer_first_n_chunks: usize,
     /// Sleep this long after each body write of `write_piece` bytes (throttling).
     pub throttle: Option<Duration>,
+    /// Body delay overrides keyed by requested start offset (excludes the probe).
+    pub range_body_throttles: Vec<(u64, Duration)>,
+    /// Change the response starting at offset zero after an initial burst (not the probe).
+    pub leading_range_fault: Option<BodyFault>,
     pub write_piece: usize,
     pub content_disposition: Option<String>,
     /// Respond with this status (empty body) to every request, including HEAD.
@@ -113,6 +123,8 @@ impl ServerConfig {
             fail_peer_ip: None,
             stall_peer_first_n_chunks: 0,
             throttle: None,
+            range_body_throttles: Vec::new(),
+            leading_range_fault: None,
             write_piece: 16 * 1024,
             content_disposition: None,
             all_status: None,
@@ -179,6 +191,7 @@ impl Version<'_> {
 pub struct Stats {
     pub requests: AtomicUsize,
     pub chunk_requests: AtomicUsize,
+    pub chunk_ranges: Mutex<Vec<(u64, u64)>>,
     pub head_requests: AtomicUsize,
     pub body_bytes_sent: AtomicU64,
     pub requests_by_peer_127_0_0_2: AtomicUsize,
@@ -591,6 +604,9 @@ async fn handle(
         }
     };
     let body = &version.payload[start as usize..=end as usize];
+    if !is_probe {
+        stats.chunk_ranges.lock().unwrap().push((start, end));
+    }
 
     let mut headers = Vec::new();
     let (cr_start, cr_end) = if config.range_mode == RangeMode::WrongContentRange && !is_probe {
@@ -624,6 +640,41 @@ async fn handle(
     }
     write_head(&mut sock, 206, &headers).await?;
 
+    if !is_probe && start == 0 {
+        if let Some(fault) = &config.leading_range_fault {
+            let after = match fault {
+                BodyFault::Crawl { after_bytes, .. } | BodyFault::Silence { after_bytes } => {
+                    *after_bytes
+                }
+            }
+            .min(body.len());
+            // The initial burst is unthrottled so the live rate must adapt to the fault.
+            let mut burst = config.clone();
+            burst.throttle = None;
+            write_body(&mut sock, &body[..after], &burst, stats).await?;
+            match fault {
+                BodyFault::Crawl { delay, .. } => {
+                    burst.throttle = Some(*delay);
+                    tokio::time::sleep(*delay).await;
+                    write_body(&mut sock, &body[after..], &burst, stats).await?;
+                }
+                BodyFault::Silence { .. } => tokio::time::sleep(Duration::from_secs(120)).await,
+            }
+            return sock.shutdown().await;
+        }
+    }
+
+    let mut body_config = config.clone();
+    if !is_probe {
+        if let Some((_, delay)) = config
+            .range_body_throttles
+            .iter()
+            .find(|(offset, _)| *offset == start)
+        {
+            body_config.throttle = Some(*delay);
+        }
+    }
+
     if chunk_index.is_some_and(|n| n < config.drop_first_n_chunks) {
         // Send half the body then drop the connection (simulated disconnect).
         let half = &body[..body.len() / 2];
@@ -631,7 +682,7 @@ async fn handle(
         return Ok(()); // socket dropped without completing the body
     }
 
-    write_body(&mut sock, body, config, stats).await?;
+    write_body(&mut sock, body, &body_config, stats).await?;
     if overlong {
         if let Some(delay) = config.overlong_tail_delay {
             tokio::time::sleep(delay).await;

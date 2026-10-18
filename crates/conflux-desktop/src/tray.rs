@@ -166,6 +166,7 @@ mod tests {
 
     fn make_task(id: &str, status: TaskStatus, downloaded: u64, total: u64) -> DownloadTaskState {
         DownloadTaskState {
+            final_path: None,
             id: id.into(),
             url: "https://example.com/file".into(),
             filename: format!("{id}.bin"),

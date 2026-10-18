@@ -82,6 +82,8 @@ pub struct WorkerExit {
     pub completed_length: Option<u64>,
     /// Cumulative active duration; `None` keeps the recorded value.
     pub duration_ms: Option<u64>,
+    /// Physical completed path after the .part file was successfully published.
+    pub published_path: Option<PathBuf>,
 }
 
 impl WorkerExit {
@@ -92,6 +94,7 @@ impl WorkerExit {
             error: None,
             completed_length: None,
             duration_ms: None,
+            published_path: None,
         }
     }
 
@@ -110,6 +113,15 @@ impl WorkerExit {
             task.duration_ms = ms;
         }
         if self.status == TaskStatus::Completed {
+            if let Some(path) = self.published_path {
+                task.filename = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into();
+                task.save_path = path.to_string_lossy().into();
+                task.final_path = None;
+            }
             task.total_bytes = self
                 .completed_length
                 .unwrap_or_else(|| task.total_bytes.max(task.downloaded_bytes));
@@ -121,7 +133,11 @@ impl WorkerExit {
             task.avg_speed_bytes_sec =
                 Some((task.downloaded_bytes as f64) / (task.duration_ms as f64 / 1000.0));
         }
-        task.sha256 = self.sha256;
+        // A panic while publishing must not erase the persisted completion receipt:
+        // the rename may already have succeeded before the worker unwound.
+        if self.sha256.is_some() || task.final_path.is_none() {
+            task.sha256 = self.sha256;
+        }
         task.error = self.error;
     }
 }
@@ -256,6 +272,7 @@ impl TaskController {
     // ── Output paths ────────────────────────────────────────
     /// Picks a free name in `dir` (skipping every path a task knows), claims it on disk with
     /// an empty placeholder and reserves it. See [`reserve_output_path`].
+    #[cfg(test)]
     pub async fn reserve_new_output(
         &self,
         dir: &Path,
@@ -269,6 +286,130 @@ impl TaskController {
             .map(|t| PathBuf::from(&t.save_path))
             .collect();
         reserve_output_path(&self.reserved_paths, &claimed, dir, filename).await
+    }
+
+    /// Claim only the .part file on disk; keep the desired final name in history.
+    pub async fn reserve_staged_output(
+        &self,
+        dir: &Path,
+        filename: &str,
+    ) -> Result<(PathBuf, PathBuf, FileIdentity), String> {
+        let tasks = self.tasks.read().await;
+        let mut reserved = self.reserved_paths.lock().await;
+        for n in 0..u32::MAX {
+            let name = if n == 0 {
+                filename.to_string()
+            } else {
+                numbered_filename(filename, n)
+            };
+            let final_path = dir.join(&name);
+            let part_path = dir.join(format!("{name}.part"));
+            if [&final_path, &part_path].iter().any(|p| {
+                reserved.contains(*p)
+                    || tasks.values().any(|t| {
+                        Path::new(&t.save_path) == *p
+                            || t.final_path.as_deref().is_some_and(|f| Path::new(f) == *p)
+                    })
+                    || std::fs::symlink_metadata(p).is_ok()
+                    || conflux_core::resume_sidecar_path(p).exists()
+            }) {
+                continue;
+            }
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&part_path)
+            {
+                Ok(file) => {
+                    let identity = FileIdentity::of(&file).map_err(|e| e.to_string())?;
+                    reserved.insert(part_path.clone());
+                    return Ok((part_path, final_path, identity));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(format!("Cannot create {}: {e}", part_path.display())),
+            }
+        }
+        Err("No available download filename".into())
+    }
+
+    /// Persist both the completed hash and chosen destination before renaming. This
+    /// makes an interrupted publish recoverable using file identity after app restart.
+    pub async fn prepare_publish(&self, id: &str, hash: &str) -> Result<Option<PathBuf>, String> {
+        {
+            let mut tasks = self.tasks.write().await;
+            let task = tasks.get(id).ok_or("Download no longer exists")?;
+            let Some(desired) = &task.final_path else {
+                return Ok(None);
+            };
+            let desired = PathBuf::from(desired);
+            let dir = desired.parent().ok_or("Invalid final download path")?;
+            let mut reserved = self.reserved_paths.lock().await;
+            let mut selected = None;
+            for n in 0..u32::MAX {
+                let candidate = if n == 0 {
+                    desired.clone()
+                } else {
+                    dir.join(numbered_filename(&task.filename, n))
+                };
+                if reserved.contains(&candidate)
+                    || tasks.values().any(|t| {
+                        t.id != id
+                            && (Path::new(&t.save_path) == candidate
+                                || t.final_path
+                                    .as_deref()
+                                    .is_some_and(|f| Path::new(f) == candidate))
+                    })
+                    || std::fs::symlink_metadata(&candidate).is_ok()
+                    || conflux_core::resume_sidecar_path(&candidate).exists()
+                {
+                    continue;
+                }
+                selected = Some(candidate);
+                break;
+            }
+            let path = selected.ok_or("No available completed filename")?;
+            reserved.insert(path.clone());
+            let task = tasks.get_mut(id).unwrap();
+            task.final_path = Some(path.to_string_lossy().into());
+            task.sha256 = Some(hash.into());
+        }
+        self.save_history();
+        self.flush_history().await?;
+        Ok(self
+            .get(id)
+            .await
+            .and_then(|t| t.final_path.map(PathBuf::from)))
+    }
+
+    pub async fn publish_completed(&self, id: &str, hash: &str) -> Result<Option<PathBuf>, String> {
+        let task = self.get(id).await.ok_or("Download no longer exists")?;
+        if task.final_path.is_none() {
+            return Ok(None);
+        }
+        let identity = task
+            .file_identity
+            .ok_or("Cannot publish a file with unknown ownership")?;
+        loop {
+            let target = self
+                .prepare_publish(id, hash)
+                .await?
+                .ok_or("Missing completed path")?;
+            match conflux_core::publish_owned_file(Path::new(&task.save_path), &target, &identity)
+                .await
+            {
+                Ok(()) => return Ok(Some(target)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // A different process claimed the final name after it was selected.
+                    self.release_path(&target).await;
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "The completed .part file was kept; could not publish {}: {error}",
+                        target.display()
+                    ))
+                }
+            }
+        }
     }
 
     /// Reserves an existing task's path; `false` if another task owns it.
@@ -461,16 +602,23 @@ impl TaskController {
             let mut handles = self.handles.lock().await;
             let mut tasks = self.tasks.write().await;
             let snapshot = tasks.get_mut(id).map(|task| {
+                // The publish destination was reserved until the worker really exited.
+                // Capture it before apply() replaces the task's physical path.
+                let publish_path = task.final_path.clone();
                 exit.apply(task);
                 task.lifecycle.generation += 1;
-                task.clone()
+                (task.clone(), publish_path)
             });
-            if let Some(task) = &snapshot {
+            if let Some((task, _)) = &snapshot {
                 self.emit(task, &tasks);
             }
             handles.remove(id);
-            self.reserved_paths.lock().await.remove(output_path);
-            snapshot
+            let mut reserved = self.reserved_paths.lock().await;
+            reserved.remove(output_path);
+            if let Some((_, Some(path))) = &snapshot {
+                reserved.remove(Path::new(path));
+            }
+            snapshot.map(|(task, _)| task)
         };
         done.send_replace(true);
         self.save_history();
@@ -647,6 +795,7 @@ impl TaskController {
 /// the CLI can never pick the same file). This mirrors `conflux_core::claim_unique_path`,
 /// but additionally skips paths reserved by running tasks: a resumed task's file may be
 /// missing on disk while its engine is about to recreate it.
+#[cfg(test)]
 pub async fn reserve_output_path(
     reserved: &Mutex<HashSet<PathBuf>>,
     claimed_paths: &[PathBuf],
@@ -773,6 +922,7 @@ mod tests {
 
     fn task(id: &str, status: TaskStatus, path: &Path) -> DownloadTaskState {
         DownloadTaskState {
+            final_path: None,
             id: id.into(),
             url: "http://example.invalid/file.bin".into(),
             filename: "file.bin".into(),
@@ -811,6 +961,142 @@ mod tests {
             },
             cancel_rx,
         )
+    }
+
+    #[tokio::test]
+    async fn staging_claims_part_names_and_skips_files_sidecars_and_task_claims() {
+        let f = fixture(vec![]);
+        let c = &f.controller;
+        std::fs::write(f.dir.join("file.bin"), b"existing").unwrap();
+        std::fs::write(f.dir.join("file (1).bin.part.conflux.json"), b"resume").unwrap();
+        let (part, final_path, identity) =
+            c.reserve_staged_output(&f.dir, "file.bin").await.unwrap();
+        assert_eq!(part, f.dir.join("file (2).bin.part"));
+        assert_eq!(final_path, f.dir.join("file (2).bin"));
+        assert_eq!(FileIdentity::at(&part).unwrap(), identity);
+        assert!(!final_path.exists());
+        let mut paused = task("a", TaskStatus::Paused, &part);
+        paused.final_path = Some(final_path.to_string_lossy().into());
+        c.insert_new(paused).await;
+        // Even after a user deletes a paused task's partial file, its intended name
+        // must not be assigned to a different download.
+        std::fs::remove_file(&part).unwrap();
+        c.release_path(&part).await;
+        let (_, other_final, _) = c.reserve_staged_output(&f.dir, "file.bin").await.unwrap();
+        assert_eq!(other_final, f.dir.join("file (3).bin"));
+        assert_eq!(std::fs::read(f.dir.join("file.bin")).unwrap(), b"existing");
+    }
+
+    #[tokio::test]
+    async fn publish_collision_records_the_actual_final_path_and_releases_both_paths() {
+        let f = fixture(vec![]);
+        let c = &f.controller;
+        let (part, desired, identity) = c.reserve_staged_output(&f.dir, "file.bin").await.unwrap();
+        std::fs::write(&part, b"complete").unwrap();
+        let hash = conflux_core::compute_sha256(&part).await.unwrap();
+        let mut t = task("a", TaskStatus::Downloading, &part);
+        t.file_identity = Some(identity.clone());
+        t.final_path = Some(desired.to_string_lossy().into());
+        let generation = c.insert_new(t).await;
+        // A file appears at the intended final name while the download is running.
+        std::fs::write(&desired, b"user's file").unwrap();
+        let worker_controller = Arc::clone(c);
+        let (channels, _) = worker_channels();
+        let worker_hash = hash.clone();
+        let worker = async move {
+            let path = worker_controller
+                .publish_completed("a", &worker_hash)
+                .await
+                .unwrap();
+            WorkerExit {
+                status: TaskStatus::Completed,
+                sha256: Some(worker_hash),
+                completed_length: Some(8),
+                published_path: path,
+                ..WorkerExit::paused()
+            }
+        };
+        c.spawn_worker("a", generation, part.clone(), None, channels, worker)
+            .await;
+        wait_until_idle(c, "a").await;
+        let t = c.get("a").await.unwrap();
+        let actual = f.dir.join("file (1).bin");
+        assert_eq!(t.status, TaskStatus::Completed);
+        assert_eq!(t.save_path, actual.to_string_lossy());
+        assert_eq!(t.filename, "file (1).bin");
+        assert_eq!(t.final_path, None);
+        assert_eq!(t.sha256.as_deref(), Some(hash.as_str()));
+        assert_eq!(FileIdentity::at(&actual).unwrap(), identity);
+        assert_eq!(std::fs::read(&desired).unwrap(), b"user's file");
+        assert!(!part.exists());
+        assert!(c.reserved_paths.lock().await.is_empty());
+        c.remove("a", true).await.unwrap();
+        assert!(!actual.exists());
+        assert_eq!(std::fs::read(&desired).unwrap(), b"user's file");
+    }
+
+    #[tokio::test]
+    async fn persisted_publish_intent_recovers_a_crash_after_rename() {
+        let f = fixture(vec![]);
+        let history_path = f.dir.join("downloads.json");
+        let c = Arc::new(TaskController::new(
+            vec![],
+            Arc::new(HistoryStore::new(Some(history_path.clone()))),
+            Arc::new(NoEvents),
+        ));
+        let (part, final_path, identity) =
+            c.reserve_staged_output(&f.dir, "file.bin").await.unwrap();
+        std::fs::write(&part, b"complete").unwrap();
+        let mut t = task("a", TaskStatus::Downloading, &part);
+        t.file_identity = Some(identity.clone());
+        t.final_path = Some(final_path.to_string_lossy().into());
+        c.insert_new(t).await;
+        let hash = conflux_core::compute_sha256(&part).await.unwrap();
+        let target = c.prepare_publish("a", &hash).await.unwrap().unwrap();
+        let before = HistoryStore::new(Some(history_path.clone())).load().0;
+        assert_eq!(before[0].status, TaskStatus::Paused);
+        assert_eq!(before[0].save_path, part.to_string_lossy());
+        conflux_core::publish_owned_file(&part, &target, &identity)
+            .await
+            .unwrap();
+        let mut panicked = c.get("a").await.unwrap();
+        WorkerExit::crashed().apply(&mut panicked);
+        assert_eq!(panicked.sha256.as_deref(), Some(hash.as_str()));
+        assert!(panicked.recover_published());
+        // No finish_worker/history update: simulate the process exiting right here.
+        let recovered = HistoryStore::new(Some(history_path)).load().0;
+        assert_eq!(recovered[0].status, TaskStatus::Completed);
+        assert_eq!(recovered[0].save_path, final_path.to_string_lossy());
+        assert_eq!(recovered[0].final_path, None);
+        assert_eq!(recovered[0].sha256.as_deref(), Some(hash.as_str()));
+        // A same-size replacement at the final name is never accepted as our file.
+        std::fs::rename(&final_path, f.dir.join("original.bin")).unwrap();
+        std::fs::write(&final_path, b"complete").unwrap();
+        assert_eq!(c.get("a").await.unwrap().status, TaskStatus::Downloading);
+        let mut replaced = c.get("a").await.unwrap();
+        assert!(!replaced.recover_published());
+    }
+
+    #[tokio::test]
+    async fn publishing_refuses_to_rename_if_history_cannot_record_the_intent() {
+        let f = fixture(vec![]);
+        let bad_history_path = f.dir.join("history.json");
+        std::fs::create_dir(&bad_history_path).unwrap();
+        let c = TaskController::new(
+            vec![],
+            Arc::new(HistoryStore::new(Some(bad_history_path))),
+            Arc::new(NoEvents),
+        );
+        let (part, final_path, identity) =
+            c.reserve_staged_output(&f.dir, "file.bin").await.unwrap();
+        std::fs::write(&part, b"complete").unwrap();
+        let mut t = task("a", TaskStatus::Downloading, &part);
+        t.file_identity = Some(identity);
+        t.final_path = Some(final_path.to_string_lossy().into());
+        c.insert_new(t).await;
+        assert!(c.publish_completed("a", "hash").await.is_err());
+        assert_eq!(std::fs::read(&part).unwrap(), b"complete");
+        assert!(!final_path.exists());
     }
 
     /// An engine that notices cancellation, then is stuck (like a blocking write on a

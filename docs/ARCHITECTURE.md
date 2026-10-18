@@ -114,11 +114,36 @@ Conflux partitions the target file into dynamic chunks (e.g. 4 MB default):
 3. **Automatic Bandwidth Balancing**:
    - A 100 Mbps Ethernet connection will finish and claim 4 chunks in the time a 25 Mbps connection claims 1 chunk.
    - Bandwidth aggregation is naturally self-balancing without complex static partitioning.
-4. **Fault-Tolerant Failover**:
+4. **Tail recovery**:
+   - Active segments publish a time-weighted rolling speed every 500 ms with a 3-second decay constant, including samples with no incoming bytes.
+   - Once no pending ranges remain, an idle worker can steal as little as one block (including a partial final block), provided splitting saves at least one second. The victim keeps the lower range and its live upper bound shrinks, preserving a single writer per byte.
+   - A stream silent for ten seconds is retried through the existing failure path only if another stream on the same adapter received data within the last three seconds. Buffered data is flushed first and completed blocks are retained. Time spent waiting on a disk write does not count as network silence.
+   - Splits occur only at block boundaries. A victim's final partial block that continues trickling must still finish on that connection; the silence rule does not cancel a stream that keeps receiving data.
+5. **Fault-Tolerant Failover**:
    - If an adapter drops (e.g. Wi-Fi disconnection or socket timeout), the worker catches the error, marks the chunk status back to `Pending`, and logs the failure.
    - Surviving workers on the remaining adapters automatically steal the uncompleted chunk and download it without corrupting the file or interrupting the download.
 
 ---
+
+### Desktop staging and completion
+
+New desktop tasks write to `<filename>.part`, with resume data at
+`<filename>.part.conflux.json`. The displayed filename keeps the intended final name;
+`save_path` records the physical file and `final_path` records the intended completed path.
+Legacy tasks without `final_path` continue at their recorded paths, including real files
+whose names end in `.part`.
+
+After the engine syncs and hashes the file, the desktop writes Mark-of-the-Web to the
+partial file and records the hash and publish destination in history before renaming.
+The Windows rename uses an identity-checked handle and does not replace a destination.
+Collisions select a new numbered filename; scanner sharing/access errors retry for about
+four seconds. A failed publish keeps the completed `.part` file, and Resume verifies its
+hash and retries publishing without a network request. If the app exits after renaming
+but before recording completion, history loading recognizes the final file by identity.
+History format 2 records this intent; older history formats remain readable.
+
+The task becomes Completed only after publication succeeds. Open is limited to completed
+tasks; Show in folder and Copy file path refer to the current physical path.
 
 ## 4. Zero-Copy Sparse File Pre-Allocation
 

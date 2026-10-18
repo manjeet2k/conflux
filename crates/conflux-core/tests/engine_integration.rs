@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use support::{payload, sha256_hex, RangeMode, ServerConfig, TestServer};
+use support::{payload, sha256_hex, BodyFault, RangeMode, ServerConfig, TestServer};
 use tokio::sync::{mpsc, watch};
 
 const CHUNK: u64 = 256 * 1024;
@@ -154,6 +154,67 @@ async fn normal_ranged_download_matches_sha() {
     assert_eq!(last.adapters[0].downloaded_bytes, PAYLOAD_LEN as u64);
     assert_eq!(last.adapters[0].active_connections, 0);
     assert!(!last.adapters[0].dropped);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn crawling_small_tail_is_split_before_read_timeout() {
+    let data = payload(PAYLOAD_LEN, 701);
+    let mut cfg = ServerConfig::new(Arc::clone(&data));
+    cfg.write_piece = 8 * 1024;
+    cfg.leading_range_fault = Some(BodyFault::Crawl {
+        after_bytes: CHUNK as usize - 16 * 1024,
+        delay: Duration::from_millis(500),
+    });
+    let server = TestServer::start(cfg).await;
+    let engine = test_engine().with_stall_timeout(Duration::from_secs(20));
+    let out = tokio::time::timeout(Duration::from_secs(10), run_download(&engine, &server, &[]))
+        .await
+        .expect("crawling tail was not rescued by splitting");
+    assert_file_matches(&out, &data);
+    assert_progress_sane(&out.progress, data.len() as u64);
+    // The first request owns [0, 4*CHUNK); a request inside it proves a tail split.
+    assert!(server
+        .stats
+        .chunk_ranges
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|&(start, end)| start > 0 && end < 4 * CHUNK));
+    assert!(out.elapsed < Duration::from_secs(10));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn silent_stream_retries_while_same_adapter_peer_keeps_receiving() {
+    let block = 1024 * 1024;
+    let data = payload(8 * block, 702);
+    let mut cfg = ServerConfig::new(Arc::clone(&data));
+    cfg.leading_range_fault = Some(BodyFault::Silence {
+        after_bytes: block + 123,
+    });
+    // The second response stays active past the ten-second silence threshold;
+    // subsequent requests are fast so a retry can finish before the 20 s read timeout.
+    cfg.write_piece = 16 * 1024;
+    cfg.range_body_throttles = vec![(4 * block as u64, Duration::from_millis(50))];
+    let server = TestServer::start(cfg).await;
+    let engine = DownloadEngine::new(2)
+        .unwrap()
+        .with_retry_backoff(Duration::from_millis(10))
+        .with_stall_timeout(Duration::from_secs(20));
+    let out = tokio::time::timeout(Duration::from_secs(18), run_download(&engine, &server, &[]))
+        .await
+        .expect("silent stream was not retried before the read timeout");
+    assert_file_matches(&out, &data);
+    assert_progress_sane(&out.progress, data.len() as u64);
+    assert!(out.elapsed >= Duration::from_secs(10));
+    assert!(out.elapsed < Duration::from_secs(18));
+    // The complete first block survived; retry starts at its first uncommitted block.
+    assert!(server
+        .stats
+        .chunk_ranges
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|&(start, end)| start == block as u64 && end == 4 * block as u64 - 1));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

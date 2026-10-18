@@ -18,12 +18,12 @@ use tokio::sync::{watch, Notify, RwLock};
 use tracing::warn;
 
 /// Version of the on-disk history layout. Version 0 is the original bare JSON array.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Minimum interval between writes caused by progress ticks alone.
 pub const PROGRESS_SAVE_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Current layout: `{"schema_version": 1, "tasks": [...]}`.
+/// Current layout: `{"schema_version": 2, "tasks": [...]}`; includes staging/publish intent.
 #[derive(Serialize)]
 struct OnDiskRef<'a> {
     schema_version: u32,
@@ -280,6 +280,7 @@ It was left unchanged; downloads from this session will not be remembered."
         Err(e) => return quarantine(&e.to_string()),
     };
     for task in &mut tasks {
+        task.recover_published();
         if matches!(task.status, TaskStatus::Downloading | TaskStatus::Stopping) {
             task.status = TaskStatus::Paused;
         }
@@ -318,6 +319,7 @@ mod tests {
             filename: "y".into(),
             save_dir: "/tmp".into(),
             save_path: "/tmp/y".into(),
+            final_path: None,
             file_identity: None,
             adapter_ids: vec![],
             total_bytes: 100,
@@ -442,6 +444,7 @@ mod tests {
         let path = dir.join("downloads.json");
         let mut value = serde_json::to_value(vec![task("a", TaskStatus::Error, 1)]).unwrap();
         for key in [
+            "final_path",
             "completed_at_ms",
             "adapters",
             "chunk_map",

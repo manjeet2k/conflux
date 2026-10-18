@@ -59,6 +59,7 @@ export interface DownloadTask {
   filename: string;
   save_dir: string;
   save_path: string;
+  final_path?: string | null;
   /** Opaque backend-owned identity; never reconstructed or submitted by the UI. */
   file_identity?: { volume: number; file: number } | null;
   adapter_ids?: string[];

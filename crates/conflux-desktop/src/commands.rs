@@ -1,8 +1,8 @@
 use crate::adapters::{adapter_names, adapter_stat, AdapterInfo};
 use crate::browser_bridge::ExternalDownloadPayload;
 use crate::controller::{
-    now_ms, remove_empty_placeholder, CommitError, ResumeStart, TaskController, TaskEvents,
-    WorkerChannels, WorkerExit,
+    now_ms, remove_empty_placeholder, CommitError, ResumeStart, ResumeTicket, TaskController,
+    TaskEvents, WorkerChannels, WorkerExit,
 };
 use crate::redact::redact_error;
 use crate::settings::{self, Backdrop, Settings};
@@ -203,12 +203,13 @@ pub async fn start_download(
             .map(|f| sanitize_filename(&f))
             .filter(|f| !f.is_empty())
             .unwrap_or_else(|| probe.suggested_filename.clone());
-        let (output_path, file_identity) = state
+        let (output_path, final_path, identity) = state
             .tasks
-            .reserve_new_output(&dir, &requested_name)
+            .reserve_staged_output(&dir, &requested_name)
             .await?;
+        let file_identity = Some(identity);
         let save_path = output_path.to_string_lossy().to_string();
-        let filename = output_path
+        let filename = final_path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or(requested_name);
@@ -230,6 +231,7 @@ pub async fn start_download(
             filename,
             save_dir: dir.to_string_lossy().to_string(),
             save_path,
+            final_path: Some(final_path.to_string_lossy().into()),
             file_identity: file_identity.clone(),
             adapter_ids: vec![],
             total_bytes: probe.total_bytes,
@@ -311,6 +313,9 @@ pub async fn resume_task_internal(
             ResumeStart::AlreadyRunning(task) => return Ok(task),
         };
         let task = ticket.task.clone();
+        if task.final_path.is_some() && task.sha256.is_some() {
+            return resume_publication(state, ticket).await;
+        }
 
         let dir = validate_save_dir(&task.save_dir)?;
         let settings = state.settings.read().await.clone();
@@ -396,6 +401,111 @@ pub async fn resume_task_internal(
         Ok(state.tasks.get(task_id).await.unwrap_or(snapshot))
     })
     .await
+}
+
+/// Retry publishing an already downloaded file, without probing or contacting the server.
+async fn resume_publication(
+    state: &AppState,
+    ticket: ResumeTicket,
+) -> Result<DownloadTaskState, String> {
+    let task = ticket.task.clone();
+    let path = PathBuf::from(&task.save_path);
+    if !state.tasks.reserve_path(&path).await {
+        return Err("Download path is in use".into());
+    }
+    let committed = state
+        .tasks
+        .commit_resume(ticket, |t| {
+            t.error = None;
+        })
+        .await;
+    let (snapshot, generation) = match committed {
+        Ok(value) => value,
+        Err(stale) => {
+            state.tasks.release_path(&path).await;
+            return match stale {
+                CommitError::Removed => Err("Download no longer exists".into()),
+                CommitError::Superseded(task) => Ok(*task),
+            };
+        }
+    };
+    state.tasks.save_history();
+    let controller = Arc::clone(&state.tasks);
+    let id = task.id.clone();
+    let (cancel_tx, mut cancel_rx) = watch::channel(false);
+    let channels = WorkerChannels {
+        cancel_tx,
+        adapter_tx: None,
+        names: Arc::new(RwLock::new(HashMap::new())),
+    };
+    let output = path.clone();
+    let worker = async move {
+        let mut recovered = task.clone();
+        if recovered.recover_published() {
+            return WorkerExit {
+                status: TaskStatus::Completed,
+                sha256: recovered.sha256,
+                completed_length: Some(recovered.total_bytes),
+                published_path: Some(PathBuf::from(recovered.save_path)),
+                ..WorkerExit::paused()
+            };
+        }
+        let expected_hash = task.sha256.clone().unwrap();
+        let result = async {
+            if task.file_identity.as_ref() != conflux_core::FileIdentity::at(&output).ok().as_ref()
+            {
+                return Err("The .part file's ownership changed; it was preserved".to_string());
+            }
+            let hash = conflux_core::checksum::compute_sha256_cancellable(
+                &output,
+                &mut cancel_rx,
+                Duration::ZERO,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            let Some(hash) = hash else { return Ok(None) };
+            if hash != expected_hash {
+                return Err("The completed .part file changed; it was preserved".into());
+            }
+            #[cfg(windows)]
+            write_mark_of_the_web(&output, &task.url, task.file_identity.as_ref()).await;
+            controller.publish_completed(&id, &hash).await.map(Some)
+        }
+        .await;
+        match result {
+            Ok(Some(published_path)) => WorkerExit {
+                status: TaskStatus::Completed,
+                sha256: Some(expected_hash),
+                completed_length: std::fs::metadata(published_path.as_deref().unwrap_or(&output))
+                    .ok()
+                    .map(|m| m.len()),
+                published_path,
+                ..WorkerExit::paused()
+            },
+            Ok(None) => WorkerExit {
+                sha256: Some(expected_hash),
+                ..WorkerExit::paused()
+            },
+            Err(error) => WorkerExit {
+                status: TaskStatus::Error,
+                error: Some(redact_error(&error)),
+                sha256: Some(expected_hash),
+                ..WorkerExit::paused()
+            },
+        }
+    };
+    state
+        .tasks
+        .spawn_worker(
+            &snapshot.id,
+            generation,
+            path,
+            None,
+            channels,
+            Box::pin(worker),
+        )
+        .await;
+    Ok(state.tasks.get(&snapshot.id).await.unwrap_or(snapshot))
 }
 
 /// Pauses every running download (concurrently, bounded by one stop timeout in total) and
@@ -863,7 +973,7 @@ async fn run_download(
                 adapter_rx,
                 Some(tx),
                 cancel_rx.clone(),
-                expected_identity,
+                expected_identity.clone(),
             )
             .await
     } else {
@@ -875,7 +985,7 @@ async fn run_download(
                 adapter_rx,
                 Some(tx),
                 cancel_rx.clone(),
-                expected_identity,
+                expected_identity.clone(),
             )
             .await
     };
@@ -892,12 +1002,22 @@ async fn run_download(
     }
 
     let stop_requested = *cancel_rx.borrow();
+    let mut published_path = None;
     let (status, sha256, error) = match result {
         Ok(hash) => {
-            info!(task_id = %task_id, sha256 = %hash, "Download completed");
             #[cfg(windows)]
-            write_mark_of_the_web(&output_path, &probe.url).await;
-            (TaskStatus::Completed, Some(hash), None)
+            write_mark_of_the_web(&output_path, &probe.url, expected_identity.as_ref()).await;
+            match controller.publish_completed(&task_id, &hash).await {
+                Ok(path) => {
+                    published_path = path;
+                    info!(task_id = %task_id, sha256 = %hash, "Download completed");
+                    (TaskStatus::Completed, Some(hash), None)
+                }
+                Err(message) => {
+                    error!(task_id = %task_id, "Publishing completed download failed: {message}");
+                    (TaskStatus::Error, Some(hash), Some(redact_error(&message)))
+                }
+            }
         }
         // Also treat any error after a stop request as a pause: tearing down sockets
         // mid-transfer can surface as an I/O error rather than `DownloadCancelled`.
@@ -915,7 +1035,7 @@ async fn run_download(
     };
 
     let completed_length = if status == TaskStatus::Completed {
-        tokio::fs::metadata(&output_path)
+        tokio::fs::metadata(published_path.as_deref().unwrap_or(&output_path))
             .await
             .ok()
             .map(|metadata| metadata.len())
@@ -928,6 +1048,7 @@ async fn run_download(
         error,
         completed_length,
         duration_ms: Some(initial_duration_ms + session_start.elapsed().as_millis() as u64),
+        published_path,
     }
 }
 
@@ -1133,10 +1254,40 @@ fn zone_identifier_contents(url: &str) -> String {
 /// Writes Mark-of-the-Web (`<path>:Zone.Identifier` NTFS alternate data stream). Best effort:
 /// fails on non-NTFS volumes (e.g. FAT32 USB drives), which is only logged.
 #[cfg(windows)]
-async fn write_mark_of_the_web(path: &Path, url: &str) {
+async fn write_mark_of_the_web(
+    path: &Path,
+    url: &str,
+    expected: Option<&conflux_core::FileIdentity>,
+) {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+    let Some(expected) = expected.cloned() else {
+        warn!(path = %path.display(), "Cannot mark a file with unknown ownership");
+        return;
+    };
     let mut stream = path.as_os_str().to_os_string();
     stream.push(":Zone.Identifier");
-    match tokio::fs::write(&stream, zone_identifier_contents(url)).await {
+    let contents = zone_identifier_contents(url);
+    let source = path.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || {
+        // Allow the ADS write while preventing the source path from being replaced.
+        let guard = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
+            .open(source)?;
+        if conflux_core::FileIdentity::of(&guard)? != expected {
+            return Err(std::io::Error::other(
+                conflux_core::file_identity::FileOwnershipChanged,
+            ));
+        }
+        let result = std::fs::write(stream, contents);
+        drop(guard);
+        result
+    })
+    .await
+    .map_err(std::io::Error::other)
+    .and_then(|result| result);
+    match result {
         Ok(()) => info!(path = %path.display(), "Wrote Mark-of-the-Web"),
         Err(e) => warn!(path = %path.display(), "Failed to write Mark-of-the-Web: {e}"),
     }
@@ -1177,6 +1328,100 @@ fn prepare_resume_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn security_mark_never_modifies_a_replacement_part_file() {
+        let directory = std::env::temp_dir().join(format!("conflux-mark-{}", Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let part = directory.join("file.exe.part");
+        std::fs::write(&part, b"complete").unwrap();
+        let identity = conflux_core::FileIdentity::at(&part).unwrap();
+        std::fs::rename(&part, directory.join("original")).unwrap();
+        std::fs::write(&part, b"user's file").unwrap();
+        write_mark_of_the_web(&part, "https://example.com/file.exe", Some(&identity)).await;
+        assert!(!PathBuf::from(format!("{}:Zone.Identifier", part.display())).exists());
+        assert_eq!(std::fs::read(&part).unwrap(), b"user's file");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn resume_retries_completed_part_without_contacting_the_server() {
+        let directory = std::env::temp_dir().join(format!("conflux-publish-{}", Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let part = directory.join("file.exe.part");
+        let final_path = directory.join("file.exe");
+        std::fs::write(&part, b"complete").unwrap();
+        std::fs::write(&final_path, b"user's file").unwrap();
+        let identity = conflux_core::FileIdentity::at(&part).unwrap();
+        let hash = conflux_core::compute_sha256(&part).await.unwrap();
+        let task = DownloadTaskState {
+            id: "publish".into(),
+            url: "http://127.0.0.1:1/offline.exe".into(),
+            filename: "file.exe".into(),
+            save_dir: directory.to_string_lossy().into(),
+            save_path: part.to_string_lossy().into(),
+            final_path: Some(final_path.to_string_lossy().into()),
+            file_identity: Some(identity.clone()),
+            adapter_ids: vec![],
+            total_bytes: 8,
+            supports_ranges: false,
+            downloaded_bytes: 8,
+            status: TaskStatus::Error,
+            speed_bytes_sec: 0.0,
+            eta_seconds: 0,
+            active_chunks: 0,
+            completed_chunks: 1,
+            total_chunks: 1,
+            sha256: Some(hash.clone()),
+            error: Some("Publish failed".into()),
+            created_at_ms: 1,
+            completed_at_ms: None,
+            duration_ms: 500,
+            avg_speed_bytes_sec: None,
+            adapters: vec![],
+            chunk_map: None,
+            lifecycle: Default::default(),
+        };
+        let state = AppState::new(
+            Settings::default(),
+            None,
+            crate::history::HistoryStore::new(None),
+            vec![task],
+            Arc::new(crate::controller::NoEvents),
+        );
+        resume_task_internal(&state, "publish").await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let task = state.tasks.get("publish").await.unwrap();
+                if !matches!(task.status, TaskStatus::Downloading | TaskStatus::Stopping) {
+                    assert_eq!(task.status, TaskStatus::Completed, "{:?}", task.error);
+                    assert_eq!(task.sha256.as_deref(), Some(hash.as_str()));
+                    assert_eq!(task.filename, "file (1).exe");
+                    assert_eq!(task.final_path, None);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(&final_path).unwrap(), b"user's file");
+        let published = directory.join("file (1).exe");
+        assert_eq!(
+            conflux_core::FileIdentity::at(&published).unwrap(),
+            identity
+        );
+        assert!(!part.exists());
+        #[cfg(windows)]
+        assert!(
+            std::fs::read_to_string(format!("{}:Zone.Identifier", published.display()))
+                .unwrap()
+                .contains("ZoneId=3")
+        );
+        state.tasks.flush_history().await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn resume_claims_missing_files_and_preserves_replacements() {
