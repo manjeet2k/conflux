@@ -139,16 +139,6 @@ const useStyles = makeStyles({
   endHeader: { justifyContent: 'flex-end' },
   end: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' },
   num: { fontVariantNumeric: 'tabular-nums', color: tokens.colorNeutralForeground2 },
-  progressCell: { display: 'flex', alignItems: 'center', gap: '10px' },
-  progressBar: { flex: 1, minWidth: 0 },
-  percent: {
-    width: '44px',
-    flexShrink: 0,
-    textAlign: 'right',
-    fontVariantNumeric: 'tabular-nums',
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground2,
-  },
   name: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   icon: { fontSize: '24px' },
 });
@@ -413,15 +403,12 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
                       </TableCell>
                     )}
                     <TableCell>
-                      <div className={styles.progressCell}>
-                        <DownloadProgress
-                          className={styles.progressBar}
-                          status={t.status}
-                          fraction={fraction}
-                          indeterminate={indeterminate}
-                        />
-                        <span className={styles.percent}>{percentText(t, fraction)}</span>
-                      </div>
+                      <DownloadProgress
+                        status={t.status}
+                        fraction={fraction}
+                        indeterminate={indeterminate}
+                        label={percentText(t, fraction)}
+                      />
                     </TableCell>
                     {has('speed') && (
                       <TableCell className={mergeClasses(styles.end, styles.num)}>
