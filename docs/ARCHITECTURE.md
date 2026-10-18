@@ -127,8 +127,12 @@ Conflux partitions the target file into dynamic chunks (e.g. 4 MB default):
 
 ### Desktop staging and completion
 
-New desktop tasks write to `<filename>.part`, with resume data at
-`<filename>.part.conflux.json`. The displayed filename keeps the intended final name;
+New desktop tasks write to `<filename>.part`, with resume data under
+`%APPDATA%\com.conflux.desktop\resume\<path-hash>.json`. The full output path is
+hashed so equal filenames in different folders have separate resume records. Existing
+`<filename>.part.conflux.json` sidecars remain readable and are removed only after resume
+data is persisted in app data. No new resume JSON files are written to download folders.
+The displayed filename keeps the intended final name;
 `save_path` records the physical file and `final_path` records the intended completed path.
 Legacy tasks without `final_path` continue at their recorded paths, including real files
 whose names end in `.part`.
@@ -175,7 +179,7 @@ Conflux uses **sparse file pre-allocation**:
 - **Resume validation**: parallel transfers require range support, a known size and a syntactically valid strong ETag. Every ranged request sends that ETag in `If-Range` and requires the same ETag in its 206 response. Missing secondary Last-Modified headers are accepted; conflicting supplied values are rejected. Weak/missing ETags and lost range support use a fresh complete single stream, never old completed blocks. Sidecars bind saved blocks to a hash of the resource URL and the output file identity; signed URLs are not newly stored there. Unsplit responses must reach verified EOF before committing their final blocks.
 - **IPv6 family filtering**: bound workers are constrained to the bound adapter's IP family via a custom DNS resolver (`FamilyFilteredResolver`). IPv4-bound workers resolve and connect exclusively to IPv4 addresses, preventing dual-stack CDN endpoints from silently routing traffic out the default gateway via IPv6 `[::]:0`.
 - **Request privacy**: automatic redirect Referer generation is disabled. Explicit browser context is preserved, and cookies are stripped across origins. Resume restores permitted Referer/User-Agent before probing, using the saved original authorization origin even when the initial request redirected.
-- **Ephemeral session cookies**: authenticated downloads received from browser extension handoffs use cookies only in-memory; cookies are never persisted to disk in the `.conflux.json` resume sidecar to protect user credentials. Resuming an authenticated download where the session has expired or requires cookies prompts a clean re-handoff.
+- **Ephemeral session cookies**: authenticated downloads received from browser extension handoffs use cookies only in-memory; cookies are never persisted to disk in the app-data resume metadata to protect user credentials. Resuming an authenticated download where the session has expired or requires cookies prompts a clean re-handoff.
 - **Disk error distinction**: chunk write failures (disk full `ENOSPC` or access denied) are returned as `AttemptError::Disk(io::Error)`. This terminates the download immediately without wasting retry cycles or dropping healthy network adapters.
 - **Prompt worker retirement**: when an adapter reaches `MAX_CONSECUTIVE_ADAPTER_FAILURES`, `adapter.retire_tx` is signaled immediately, causing sibling workers on that adapter to release locked chunks promptly without stalling for the 20-second timeout.
 - **Last-usable-adapter guard**: after `MAX_CONSECUTIVE_ADAPTER_FAILURES` (3) failures an adapter is dropped for this download, but never if it is the last live one; the per-chunk budget (`MAX_CHUNK_ATTEMPTS`, 5) then decides. Drop decisions take the `adapter_states` write lock so concurrent workers take turns.

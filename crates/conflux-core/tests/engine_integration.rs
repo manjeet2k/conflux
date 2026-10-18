@@ -4,8 +4,8 @@ mod support;
 
 use anyhow::Result;
 use conflux_core::{
-    resume_sidecar_path, AdapterUpdate, DownloadCancelled, DownloadEngine, DownloadProbe,
-    NetworkAdapter, ProgressUpdate, RequestHeaders,
+    AdapterUpdate, DownloadCancelled, DownloadEngine, DownloadProbe, NetworkAdapter,
+    ProgressUpdate, RequestHeaders,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -13,6 +13,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use support::{payload, sha256_hex, BodyFault, RangeMode, ServerConfig, TestServer};
 use tokio::sync::{mpsc, watch};
+
+// Fixtures may write resume metadata directly, before the engine creates its directory.
+fn resume_sidecar_path(output: &Path) -> PathBuf {
+    let path = conflux_core::resume_sidecar_path(output).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    path
+}
 
 const CHUNK: u64 = 256 * 1024;
 const PAYLOAD_LEN: usize = 4 * 1024 * 1024 + 12_345; // 17 chunks, last one partial
@@ -786,7 +793,13 @@ async fn pause_then_resume_continues_from_completed_chunks() {
     assert!(done_before > 0, "no chunk finished before the pause");
     assert!(done_before < 17, "download finished before the pause");
     let sidecar = resume_sidecar_path(&path);
-    assert!(sidecar.exists(), "cancel must leave a resume sidecar");
+    assert!(sidecar.exists(), "cancel must leave resume metadata");
+    assert!(!sidecar.starts_with(dir.path()));
+    assert_eq!(
+        std::fs::read_dir(dir.path()).unwrap().count(),
+        1,
+        "the download folder must contain only the partial download"
+    );
 
     // Resume against the same resource URL after removing throttling.
     slow.replace_config(ServerConfig::new(Arc::clone(&data)));
@@ -817,6 +830,34 @@ async fn pause_then_resume_continues_from_completed_chunks() {
     assert!(progress[0].downloaded_bytes >= done_before as u64 * CHUNK);
     assert!(progress[0].completed_chunks >= done_before);
     assert_progress_sane(&progress, PAYLOAD_LEN as u64);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn legacy_sidecar_resumes_without_downloading_completed_blocks() {
+    let data = payload(PAYLOAD_LEN, 121);
+    let server = TestServer::start(throttled_config(&data)).await;
+    let engine = test_engine();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy.bin");
+    let url = server.url("/legacy.bin");
+    let done = cancelled_partial_download(&engine, &url, &path, Duration::from_millis(1500)).await;
+    assert!(done > 0 && done < 17);
+    let metadata = resume_sidecar_path(&path);
+    let legacy = dir.path().join("legacy.bin.conflux.json");
+    // Reproduce a download paused by a previous Conflux version.
+    std::fs::copy(&metadata, &legacy).unwrap();
+    std::fs::remove_file(&metadata).unwrap();
+    server.replace_config(ServerConfig::new(Arc::clone(&data)));
+    let before = server.stats.chunk_requests.load(Ordering::SeqCst);
+    let (result, progress) = resume_to_end(&engine, &url, &path).await;
+    assert_eq!(result.unwrap(), sha256_hex(&data));
+    assert!(std::fs::read(&path).unwrap() == *data);
+    assert!(progress[0].completed_chunks >= done);
+    let fetched = server.stats.chunk_requests.load(Ordering::SeqCst) - before;
+    assert!((1..=17 - done).contains(&fetched));
+    assert!(!legacy.exists());
+    assert!(!metadata.exists());
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

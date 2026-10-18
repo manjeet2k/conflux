@@ -40,7 +40,7 @@ real Windows machine with several adapters. The checklist is
 - **Browser interception requires the updated extension.** Use extension 0.2.2 with desktop 0.2.8 or newer for the confirmation acknowledgement protocol.
 - **Disabling the last enabled adapter mid-download does not stop the download.** It keeps going
   over the default route instead of pausing.
-- **Paths longer than 260 characters** (folder plus file name, plus the `.conflux.json` sidecar)
+- **Paths longer than 260 characters** (folder plus file name)
   may fail on Windows unless long paths are enabled (`LongPathsEnabled` policy). Use a shorter
   download folder.
 - **The Add dialog probes a URL automatically** a moment after you paste or edit it, to show the

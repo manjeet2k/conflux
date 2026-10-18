@@ -311,7 +311,7 @@ impl TaskController {
                             || t.final_path.as_deref().is_some_and(|f| Path::new(f) == *p)
                     })
                     || std::fs::symlink_metadata(p).is_ok()
-                    || conflux_core::resume_sidecar_path(p).exists()
+                    || conflux_core::has_resume_sidecar(p)
             }) {
                 continue;
             }
@@ -360,7 +360,7 @@ impl TaskController {
                                     .is_some_and(|f| Path::new(f) == candidate))
                     })
                     || std::fs::symlink_metadata(&candidate).is_ok()
-                    || conflux_core::resume_sidecar_path(&candidate).exists()
+                    || conflux_core::has_resume_sidecar(&candidate)
                 {
                     continue;
                 }
@@ -814,8 +814,7 @@ pub async fn reserve_output_path(
         if reserved.contains(&candidate) || claimed_paths.iter().any(|p| p == &candidate) {
             continue;
         }
-        let sidecar = conflux_core::resume_sidecar_path(&candidate);
-        if sidecar.exists() {
+        if conflux_core::has_resume_sidecar(&candidate) {
             continue;
         }
         let created = std::fs::OpenOptions::new()
@@ -1535,7 +1534,9 @@ mod tests {
 
         // A candidate with an existing resume sidecar is skipped.
         let sidecar_target = dir.join("with_sidecar.bin");
-        std::fs::write(conflux_core::resume_sidecar_path(&sidecar_target), b"{}").unwrap();
+        let metadata = conflux_core::resume_sidecar_path(&sidecar_target).unwrap();
+        std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+        std::fs::write(&metadata, b"{}").unwrap();
         let g = reserve_output_path(&reserved, &[], &dir, "with_sidecar.bin")
             .await
             .unwrap()

@@ -426,7 +426,7 @@ fn unique_path(dir: &Path, filename: &str) -> PathBuf {
             .is_some_and(|n| is_sidecar_name(&n.to_string_lossy()));
         name_is_sidecar
             || std::fs::symlink_metadata(p).is_ok()
-            || std::fs::symlink_metadata(crate::resume::resume_sidecar_path(p)).is_ok()
+            || crate::resume::has_resume_sidecar(p)
     };
 
     let candidate = dir.join(filename);

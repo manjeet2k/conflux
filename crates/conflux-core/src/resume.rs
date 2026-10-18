@@ -1,5 +1,6 @@
-//! Resume sidecar: `<output>.conflux.json` records which chunks of a chunked download are
-//! durably on disk, so a stopped or failed download can continue instead of starting over.
+//! Resume metadata in Conflux app data records which chunks are durably on disk, so a
+//! stopped or failed download can continue instead of starting over. Legacy sidecars next
+//! to the output are read for compatibility and removed after app-data persistence.
 //!
 //! Durability rule: the data file is synced *before* a sidecar listing new chunks is
 //! written, and the sidecar is replaced atomically (write temp file, sync, rename). So a
@@ -38,14 +39,81 @@ pub(crate) fn resource_id(url: &str) -> String {
     format!("{:x}", Sha256::digest(url.as_bytes()))
 }
 
-/// '<dir>/file.iso' -> `<dir>/file.iso.conflux.json`.
-pub fn resume_sidecar_path(output_path: &Path) -> PathBuf {
+/// Resume files share the desktop app's roaming data directory on Windows.
+fn resume_dir() -> std::io::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        let app_data = std::env::var_os("APPDATA")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Windows roaming app data is unavailable; cannot store download resume data",
+                )
+            })?;
+        Ok(app_data.join("com.conflux.desktop").join("resume"))
+    }
+    // Linux exists only for the WSL core tests. Keep their metadata out of download dirs
+    // and separate test processes without introducing a supported Linux app-data location.
+    #[cfg(not(windows))]
+    {
+        Ok(std::env::temp_dir().join(format!("conflux-resume-tests-{}", std::process::id())))
+    }
+}
+
+/// Returns an app-data filename keyed by the full output path, not just its basename.
+/// Resolving the parent keeps the key stable before creation and after file deletion.
+pub fn resume_sidecar_path(output_path: &Path) -> std::io::Result<PathBuf> {
+    let absolute = std::path::absolute(output_path)?;
+    let normalized = absolute
+        .parent()
+        .and_then(|parent| parent.canonicalize().ok())
+        .and_then(|parent| absolute.file_name().map(|name| parent.join(name)))
+        .unwrap_or(absolute);
+    let key = normalized.as_os_str().as_encoded_bytes();
+    #[cfg(windows)]
+    let key = key.to_ascii_lowercase();
+    let name = format!("{:x}.json", Sha256::digest(key));
+    Ok(resume_dir()?.join(name))
+}
+
+fn legacy_sidecar_path(output_path: &Path) -> PathBuf {
     let mut name: OsString = output_path
         .file_name()
         .map(OsString::from)
         .unwrap_or_default();
     name.push(".conflux.json");
     output_path.with_file_name(name)
+}
+
+/// Both locations reserve an output name until its resume data has been removed.
+pub fn has_resume_sidecar(output_path: &Path) -> bool {
+    resume_sidecar_path(output_path).is_ok_and(|path| std::fs::symlink_metadata(path).is_ok())
+        || std::fs::symlink_metadata(legacy_sidecar_path(output_path)).is_ok()
+}
+
+/// Prefer app data. Only fall back to a legacy sidecar if app-data metadata is absent.
+pub(crate) fn read_resume_state(output_path: &Path) -> Result<ResumeState> {
+    let path = resume_sidecar_path(output_path)?;
+    match read_sidecar(&path) {
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            read_sidecar(&legacy_sidecar_path(output_path))
+        }
+        result => result,
+    }
+}
+
+/// Persist before removing legacy metadata, so interruption never loses the saved chunks.
+pub(crate) fn write_resume_state(output_path: &Path, state: &ResumeState) -> Result<()> {
+    write_sidecar(&resume_sidecar_path(output_path)?, state)?;
+    remove_sidecar_file(&legacy_sidecar_path(output_path))?;
+    Ok(())
 }
 
 /// Encodes ids as ascending ranges. Input may be in any order and contain duplicates.
@@ -100,7 +168,7 @@ pub(crate) fn read_sidecar(path: &Path) -> Result<ResumeState> {
 
 /// Restore only non-cookie headers and only the Referer for the saved resource origin.
 pub fn read_resume_headers(output: &Path, url: &str) -> Result<Option<RequestHeaders>> {
-    let state = read_sidecar(&resume_sidecar_path(output))?;
+    let state = read_resume_state(output)?;
     Ok(state.headers.map(|mut headers| {
         headers.cookie = None;
         let saved_origin = state.header_origin;
@@ -116,6 +184,9 @@ pub fn read_resume_headers(output: &Path, url: &str) -> Result<Option<RequestHea
 
 /// Atomically replaces the sidecar at `path` (temp file + sync + rename).
 pub(crate) fn write_sidecar(path: &Path, state: &ResumeState) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).context("Cannot create resume data directory")?;
+    }
     let mut tmp_name: OsString = path.file_name().map(OsString::from).unwrap_or_default();
     tmp_name.push(".tmp");
     let tmp = path.with_file_name(tmp_name);
@@ -131,11 +202,15 @@ pub(crate) fn write_sidecar(path: &Path, state: &ResumeState) -> Result<()> {
 
 /// Removes the sidecar (and a leftover temp file). Missing files are not an error.
 pub fn remove_resume_sidecar(output_path: &Path) -> std::io::Result<()> {
-    let sidecar = resume_sidecar_path(output_path);
+    remove_sidecar_file(&resume_sidecar_path(output_path)?)?;
+    remove_sidecar_file(&legacy_sidecar_path(output_path))
+}
+
+fn remove_sidecar_file(sidecar: &Path) -> std::io::Result<()> {
     let mut tmp_name: OsString = sidecar.file_name().map(OsString::from).unwrap_or_default();
     tmp_name.push(".tmp");
     let _ = std::fs::remove_file(sidecar.with_file_name(tmp_name));
-    match std::fs::remove_file(&sidecar) {
+    match std::fs::remove_file(sidecar) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
         _ => Ok(()),
     }
@@ -226,11 +301,98 @@ mod tests {
     }
 
     #[test]
-    fn test_sidecar_path_appends_suffix() {
-        assert_eq!(
-            resume_sidecar_path(Path::new("/tmp/a/file.iso")),
-            PathBuf::from("/tmp/a/file.iso.conflux.json")
+    fn resume_paths_are_in_app_data_and_distinguish_output_directories() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let path = first.path().join("file.iso");
+        let metadata = resume_sidecar_path(&path).unwrap();
+        assert_eq!(metadata.parent(), Some(resume_dir().unwrap().as_path()));
+        assert!(!metadata.starts_with(first.path()));
+        assert_ne!(
+            metadata,
+            resume_sidecar_path(&second.path().join("file.iso")).unwrap()
         );
+        assert_eq!(
+            metadata,
+            resume_sidecar_path(&first.path().join(".").join("file.iso")).unwrap()
+        );
+        std::fs::write(&path, b"data").unwrap();
+        assert_eq!(metadata, resume_sidecar_path(&path).unwrap());
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(metadata, resume_sidecar_path(&path).unwrap());
+        #[cfg(windows)]
+        assert_eq!(
+            metadata.parent().unwrap(),
+            PathBuf::from(std::env::var_os("APPDATA").unwrap()).join("com.conflux.desktop/resume")
+        );
+    }
+
+    #[test]
+    fn legacy_resume_migrates_without_losing_completed_chunks() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("file.bin");
+        let legacy = legacy_sidecar_path(&output);
+        let metadata = resume_sidecar_path(&output).unwrap();
+        let mut saved = state(100, Some("\"a\""));
+        saved.completed = "0-3".into();
+        write_sidecar(&legacy, &saved).unwrap();
+        assert!(has_resume_sidecar(&output));
+        assert_eq!(read_resume_state(&output).unwrap(), saved);
+        write_resume_state(&output, &saved).unwrap();
+        assert!(!legacy.exists());
+        assert_eq!(read_resume_state(&output).unwrap(), saved);
+        assert!(has_resume_sidecar(&output));
+        remove_resume_sidecar(&output).unwrap();
+        assert!(!metadata.exists());
+        assert!(!has_resume_sidecar(&output));
+    }
+
+    #[test]
+    fn app_data_takes_precedence_and_cleanup_removes_both_locations_and_temps() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("file.bin");
+        let legacy = legacy_sidecar_path(&output);
+        let metadata = resume_sidecar_path(&output).unwrap();
+        let old = state(100, Some("old"));
+        let mut current = old.clone();
+        current.completed = "0-3".into();
+        write_sidecar(&legacy, &old).unwrap();
+        write_sidecar(&metadata, &current).unwrap();
+        assert_eq!(read_resume_state(&output).unwrap(), current);
+        let temp_paths: Vec<_> = [&legacy, &metadata]
+            .iter()
+            .map(|path| {
+                let mut name = path.file_name().unwrap().to_os_string();
+                name.push(".tmp");
+                path.with_file_name(name)
+            })
+            .collect();
+        for temp in &temp_paths {
+            std::fs::write(temp, b"partial").unwrap();
+        }
+        remove_resume_sidecar(&output).unwrap();
+        for path in [&legacy, &metadata].into_iter().chain(temp_paths.iter()) {
+            assert!(!path.exists());
+        }
+        remove_resume_sidecar(&output).unwrap();
+    }
+
+    #[test]
+    fn failed_migration_preserves_legacy_resume_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("file.bin");
+        let legacy = legacy_sidecar_path(&output);
+        let metadata = resume_sidecar_path(&output).unwrap();
+        let saved = state(100, Some("old"));
+        write_sidecar(&legacy, &saved).unwrap();
+        std::fs::create_dir_all(&metadata).unwrap();
+        assert!(write_resume_state(&output, &saved).is_err());
+        assert_eq!(read_sidecar(&legacy).unwrap(), saved);
+        // An unreadable current record must not fall back to stale legacy progress.
+        assert!(read_resume_state(&output).is_err());
+        std::fs::remove_dir(&metadata).unwrap();
+        assert_eq!(read_resume_state(&output).unwrap(), saved);
+        remove_resume_sidecar(&output).unwrap();
     }
 
     #[test]
@@ -294,7 +456,7 @@ mod tests {
             referer: Some("http://portal/page".into()),
             user_agent: Some("Browser".into()),
         });
-        write_sidecar(&resume_sidecar_path(&path), &saved).unwrap();
+        write_sidecar(&resume_sidecar_path(&path).unwrap(), &saved).unwrap();
         let same = read_resume_headers(&path, "http://x/original")
             .unwrap()
             .unwrap();
@@ -312,7 +474,7 @@ mod tests {
     fn test_write_read_remove_sidecar() {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("f.bin");
-        let path = resume_sidecar_path(&output);
+        let path = resume_sidecar_path(&output).unwrap();
         let mut s = state(100, Some("e"));
         s.completed = "0-3".into();
         write_sidecar(&path, &s).unwrap();

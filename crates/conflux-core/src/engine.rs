@@ -3,8 +3,8 @@ use crate::checksum::compute_sha256_cancellable;
 use crate::chunk::{chunk_count, try_plan_chunks, Chunk, ChunkStatus};
 use crate::filename::derive_filename;
 use crate::resume::{
-    decode_ranges, encode_ranges, read_sidecar, remove_resume_sidecar, resume_sidecar_path,
-    validate, write_sidecar, ResumeState, SIDECAR_VERSION,
+    decode_ranges, encode_ranges, read_resume_state, remove_resume_sidecar, resume_sidecar_path,
+    validate, write_resume_state, ResumeState, SIDECAR_VERSION,
 };
 use crate::segment::{
     block_size_for, Claim, FailOutcome, SegmentLease, SegmentScheduler, MAX_THROTTLE_ROUNDS,
@@ -447,6 +447,7 @@ fn describe_failure(err: &anyhow::Error) -> String {
 /// Where and what to write for the resume sidecar of one chunked download.
 struct SidecarTarget {
     path: PathBuf,
+    output_path: PathBuf,
     /// Everything except `completed`.
     template: ResumeState,
 }
@@ -1018,7 +1019,7 @@ impl DownloadEngine {
         // Without a caller-claimed identity, the sidecar's recorded identity is the only
         // evidence of which file is ours.
         if resume && expected_identity.is_none() {
-            if let Some(expected) = read_sidecar(&resume_sidecar_path(output_path))
+            if let Some(expected) = read_resume_state(output_path)
                 .ok()
                 .and_then(|saved| saved.file_identity)
             {
@@ -1081,7 +1082,7 @@ impl DownloadEngine {
         output_path: &Path,
         expected_identity: Option<&crate::FileIdentity>,
     ) -> Result<(Vec<Chunk>, u64, SparseFileWriter, Option<RequestHeaders>)> {
-        let state = read_sidecar(&resume_sidecar_path(output_path))?;
+        let state = read_resume_state(output_path)?;
         if let (Some(expected), Some(recorded)) = (expected_identity, &state.file_identity) {
             if expected != recorded {
                 // The sidecar describes some other file: its chunk map is meaningless here.
@@ -1228,7 +1229,8 @@ impl DownloadEngine {
             user_agent: h.user_agent.clone(),
         });
         let sidecar = Arc::new(SidecarTarget {
-            path: resume_sidecar_path(output_path),
+            path: resume_sidecar_path(output_path)?,
+            output_path: output_path.to_path_buf(),
             template: ResumeState {
                 version: SIDECAR_VERSION,
                 resource_id: Some(crate::resume::resource_id(&probe.url)),
@@ -2375,8 +2377,8 @@ async fn persist_sidecar(
         completed: encode_ranges(&ids),
         ..sidecar.template.clone()
     };
-    let path = sidecar.path.clone();
-    match tokio::task::spawn_blocking(move || write_sidecar(&path, &state)).await {
+    let output_path = sidecar.output_path.clone();
+    match tokio::task::spawn_blocking(move || write_resume_state(&output_path, &state)).await {
         Ok(Ok(())) => {
             debug!(
                 "Resume sidecar {:?} records {} completed chunks",
