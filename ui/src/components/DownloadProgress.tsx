@@ -4,9 +4,9 @@ import type { TaskStatus } from '../types';
 import { statusText } from '../utils/status';
 
 const useStyles = makeStyles({
-  // Not clipped, so the fill's glow can bloom past the track; only the indeterminate sweep needs clipping.
   track: {
     position: 'relative',
+    overflow: 'hidden',
     backgroundColor: 'var(--cfx-track)',
     borderRadius: tokens.borderRadiusCircular,
   },
@@ -47,26 +47,60 @@ const useStyles = makeStyles({
     bottom: 0,
     left: 0,
     borderRadius: 'inherit',
-    // Rises from a soft tint into the full status color, with a gentle halo.
-    backgroundImage: 'linear-gradient(90deg, color-mix(in srgb, var(--cfx-bar) 40%, transparent), var(--cfx-bar))',
-    boxShadow: '0 0 6px color-mix(in srgb, var(--cfx-bar) 20%, transparent)',
+    // Hue-shifting gradient keeps the entire pill saturated end-to-end
+    backgroundImage: 'var(--cfx-bar-gradient)',
     transitionProperty: 'width',
     transitionDuration: '400ms',
     transitionTimingFunction: 'cubic-bezier(0.2, 0, 0, 1)',
     '@media (prefers-reduced-motion: reduce)': { transitionDuration: '0ms' },
   },
-  // An unfinished bar brightens slightly into a lit head at its leading edge.
-  head: {
-    backgroundImage:
-      'linear-gradient(90deg, color-mix(in srgb, var(--cfx-bar) 40%, transparent), var(--cfx-bar) 75%, color-mix(in srgb, var(--cfx-bar) 85%, white))',
-    boxShadow: '0 0 6px color-mix(in srgb, var(--cfx-bar) 25%, transparent)',
+  // Vibrant Pill Gradients (Clean hue-shifts keeping the entire bar saturated end-to-end, reversed)
+  downloading: {
+    '--cfx-bar-gradient': 'linear-gradient(90deg, #22D3EE 0%, #3B82F6 100%)',
+    '--cfx-bar': '#3B82F6',
   },
-  // Vivid status tones; the Fluent palette backgrounds read too dark on the acrylic surface.
-  downloading: { '--cfx-bar': '#4096e0' },
-  stopping: { '--cfx-bar': '#e8ae45' },
-  paused: { '--cfx-bar': '#e8ae45' },
-  completed: { '--cfx-bar': '#3dbb75' },
-  error: { '--cfx-bar': '#e5636f' },
+  stopping: {
+    '--cfx-bar-gradient': 'linear-gradient(90deg, #FDE047 0%, #F59E0B 100%)',
+    '--cfx-bar': '#F59E0B',
+  },
+  paused: {
+    '--cfx-bar-gradient': 'linear-gradient(90deg, #FDE047 0%, #F59E0B 100%)',
+    '--cfx-bar': '#F59E0B',
+  },
+  completed: {
+    '--cfx-bar-gradient': 'linear-gradient(90deg, #A3E635 0%, #10B981 100%)',
+    '--cfx-bar': '#10B981',
+  },
+  error: {
+    '--cfx-bar-gradient': 'linear-gradient(90deg, #FB923C 0%, #E11D48 100%)',
+    '--cfx-bar': '#E11D48',
+  },
+  // Multi-stop mesh / liquid variants (Electric Aurora & Neon Citrus, reversed)
+  auroraDownloading: {
+    '--cfx-bar-gradient': 'linear-gradient(90deg, #F59E0B 0%, #EC4899 50%, #6366F1 100%)',
+    '--cfx-bar': '#6366F1',
+  },
+  auroraPaused: {
+    '--cfx-bar-gradient': 'linear-gradient(90deg, #FEF08A 0%, #FACC15 45%, #F97316 100%)',
+    '--cfx-bar': '#F97316',
+  },
+  // Muted / earthy pastel variants (for soft frosted light mode, reversed)
+  pastelDownloading: {
+    '--cfx-bar-gradient': 'linear-gradient(90deg, #43978D 0%, #264D59 100%)',
+    '--cfx-bar': '#264D59',
+  },
+  pastelCompleted: {
+    '--cfx-bar-gradient': 'linear-gradient(90deg, #F9E07F 0%, #43978D 100%)',
+    '--cfx-bar': '#43978D',
+  },
+  pastelPaused: {
+    '--cfx-bar-gradient': 'linear-gradient(90deg, #F9E07F 0%, #F9AD6A 100%)',
+    '--cfx-bar': '#F9AD6A',
+  },
+  pastelError: {
+    '--cfx-bar-gradient': 'linear-gradient(90deg, #F9AD6A 0%, #D46C4E 100%)',
+    '--cfx-bar': '#D46C4E',
+  },
   // Clip the soft highlight to the fill and leave a quiet interval between sweeps.
   sheen: {
     '::after': {
@@ -79,7 +113,8 @@ const useStyles = makeStyles({
       bottom: 0,
       left: 0,
       width: '45%',
-      backgroundImage: 'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.14) 30%, rgba(255, 255, 255, 0.35) 50%, rgba(255, 255, 255, 0.14) 70%, transparent)',
+      backgroundImage:
+        'linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.16) 30%, rgba(255, 255, 255, 0.40) 50%, rgba(255, 255, 255, 0.16) 70%, transparent)',
       animationName: {
         '0%': { transform: 'translateX(-100%)', opacity: 0 },
         '12%': { opacity: 1 },
@@ -103,6 +138,8 @@ const useStyles = makeStyles({
   },
 });
 
+export type GradientVariant = 'vibrant' | 'aurora' | 'pastel';
+
 interface DownloadProgressProps {
   status: TaskStatus;
   /** 0..1 */
@@ -112,15 +149,18 @@ interface DownloadProgressProps {
   size?: 'row' | 'large';
   /** Text shown inside the bar, e.g. the percentage. */
   label?: string;
+  /** Gradient theme: vibrant (default hue-shift), aurora (liquid mesh), or pastel (soft muted). */
+  variant?: GradientVariant;
   className?: string;
 }
 
-/** Status-colored gradient progress bar; an unfinished bar has a glowing head, a running one a moving sheen. */
+/** Status-colored gradient progress bar; shifting adjacent hues keep the bar saturated end-to-end. */
 export const DownloadProgress: React.FC<DownloadProgressProps> = ({
   status,
   fraction,
   indeterminate = false,
   size = 'row',
+  variant = 'vibrant',
   label,
   className,
 }) => {
@@ -129,9 +169,34 @@ export const DownloadProgress: React.FC<DownloadProgressProps> = ({
   // Any progress at all stays visible as at least a dot, so a fresh download reads as started.
   const minFill = label !== undefined ? 16 : size === 'large' ? 10 : 8;
   const width = pct > 0 ? `max(${pct}%, ${minFill}px)` : '0';
+
+  const statusVariantClass =
+    variant === 'aurora'
+      ? status === 'downloading'
+        ? styles.auroraDownloading
+        : status === 'paused' || status === 'stopping'
+          ? styles.auroraPaused
+          : styles[status]
+      : variant === 'pastel'
+        ? status === 'downloading'
+          ? styles.pastelDownloading
+          : status === 'completed'
+            ? styles.pastelCompleted
+            : status === 'paused' || status === 'stopping'
+              ? styles.pastelPaused
+              : styles.pastelError
+        : styles[status];
+
   return (
     <div
-      className={mergeClasses(styles.track, styles[size], label !== undefined && styles.labeled, styles[status], indeterminate && styles.clip, className)}
+      className={mergeClasses(
+        styles.track,
+        styles[size],
+        label !== undefined && styles.labeled,
+        statusVariantClass,
+        indeterminate && styles.clip,
+        className
+      )}
       role="progressbar"
       aria-label={statusText[status]}
       aria-valuemin={0}
@@ -142,7 +207,6 @@ export const DownloadProgress: React.FC<DownloadProgressProps> = ({
       <div
         className={mergeClasses(
           styles.fill,
-          (indeterminate || pct < 100) && styles.head,
           indeterminate ? styles.indeterminate : status === 'downloading' && pct > 0 && styles.sheen
         )}
         style={indeterminate ? undefined : { width }}
