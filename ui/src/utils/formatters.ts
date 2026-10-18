@@ -11,7 +11,13 @@ export function formatBytes(bytes: number, decimals = 1): string {
   return `${sign}${parseFloat((abs / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
-export function formatSpeed(bytesPerSec: number): string {
+export type SpeedUnit = 'bytes' | 'bits';
+
+export function formatSpeed(bytesPerSec: number, unit: SpeedUnit = 'bytes'): string {
+  if (!Number.isFinite(bytesPerSec)) return '--';
+  if (unit === 'bits') {
+    return `${parseFloat((Math.max(0, bytesPerSec) * 8 / 1_000_000).toFixed(2))} Mb/s`;
+  }
   if (bytesPerSec <= 0) return '0 KB/s';
   return `${formatBytes(bytesPerSec, 1)}/s`;
 }

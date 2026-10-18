@@ -1,6 +1,7 @@
 import React from 'react';
 import { makeStyles, tokens } from '@fluentui/react-components';
 import { formatSpeed } from '../utils/formatters';
+import type { SpeedUnit } from '../utils/formatters';
 import { SpeedSparkline } from './SpeedSparkline';
 
 export interface Series {
@@ -23,19 +24,21 @@ const useStyles = makeStyles({
 
 const MIB = 1024 * 1024;
 
-/** Smallest 1/2/5 x 10^n MB/s (at least 1 MB/s) >= v, so axis labels are round numbers. */
-function niceCeil(bytesPerSec: number): number {
-  const mb = Math.max(1, bytesPerSec / MIB);
-  const exp = Math.pow(10, Math.floor(Math.log10(mb)));
-  const f = mb / exp;
-  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * exp * MIB;
+/** Round the axis up in the selected unit; samples remain in bytes per second. */
+function niceCeil(bytesPerSec: number, unit: SpeedUnit): number {
+  const scale = unit === 'bits' ? 1_000_000 / 8 : MIB;
+  const value = Math.max(1, bytesPerSec / scale);
+  const exp = Math.pow(10, Math.floor(Math.log10(value)));
+  const f = value / exp;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * exp * scale;
 }
 
 /**
  * Rolling throughput chart: `area` is drawn filled (the aggregate), `lines` on top (per adapter).
  * Values are right-aligned to `capacity` samples so the chart scrolls in from the right.
  */
-export const SpeedGraph: React.FC<{ area: Series; lines: Series[]; capacity: number; height?: number; compact?: boolean; paused?: boolean; active?: boolean }> = ({
+export const SpeedGraph: React.FC<{ speedUnit: SpeedUnit; area: Series; lines: Series[]; capacity: number; height?: number; compact?: boolean; paused?: boolean; active?: boolean }> = ({
+  speedUnit,
   area,
   lines,
   capacity,
@@ -49,7 +52,7 @@ export const SpeedGraph: React.FC<{ area: Series; lines: Series[]; capacity: num
   const W = 600;
   const H = height ?? 120;
   const observedMax = Math.max(...area.values, ...lines.flatMap((l) => l.values), 1);
-  const max = niceCeil(observedMax);
+  const max = niceCeil(observedMax, speedUnit);
   const x = (i: number, n: number) => ((capacity - n + i) / Math.max(1, capacity - 1)) * W;
   const y = (v: number) => H - (v / max) * H;
 
@@ -96,10 +99,10 @@ export const SpeedGraph: React.FC<{ area: Series; lines: Series[]; capacity: num
           ))}
       </svg>
       <span className={styles.label} style={{ top: 0 }}>
-        {formatSpeed(max)}
+        {formatSpeed(max, speedUnit)}
       </span>
       <span className={styles.label} style={{ top: H / 2 - 8 }}>
-        {formatSpeed(max / 2)}
+        {formatSpeed(max / 2, speedUnit)}
       </span>
     </div>
   );

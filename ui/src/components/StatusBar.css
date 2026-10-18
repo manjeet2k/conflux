@@ -1,3 +1,88 @@
+/* Recessed track with one sliding selection surface under the stationary labels. */
+body .cfx-speed-units {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 34px;
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid var(--cfx-control-stroke);
+  border-radius: 6px;
+  background-color: rgba(0, 0, 0, 0.05);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12), 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+body .cfx-speed-units::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  left: 3px;
+  top: 3px;
+  box-sizing: border-box;
+  width: 60px;
+  height: 26px;
+  border: 1px solid var(--cfx-control-stroke);
+  border-bottom-color: var(--cfx-control-bottom-stroke);
+  border-radius: 4px;
+  background-color: var(--cfx-control-fill);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  pointer-events: none;
+  transform: translateX(0);
+  transition: transform 200ms var(--cfx-button-release-curve);
+}
+
+body .cfx-speed-units[data-speed-unit='bits']::before {
+  transform: translateX(62px);
+}
+
+body .cfx-speed-units:has(.fui-Button[aria-pressed='true']:hover)::before {
+  background-color: var(--cfx-control-fill-hover);
+}
+
+body .cfx-speed-units:has(.fui-Button[aria-pressed='true']:active)::before {
+  background-color: var(--cfx-control-fill-pressed);
+}
+
+body .cfx-speed-units .fui-Button {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  height: 26px;
+  min-height: 26px;
+  width: 60px;
+  min-width: 60px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background-color: transparent;
+  color: var(--colorNeutralForeground2);
+  font-size: 12px;
+  line-height: 20px;
+  font-weight: 500;
+}
+
+body .cfx-speed-units .fui-Button:hover {
+  background-color: var(--cfx-subtle-hover);
+  color: var(--colorNeutralForeground1);
+}
+
+body .cfx-speed-units .fui-Button[aria-pressed='true'] {
+  background-color: transparent;
+  color: #fff;
+}
+
+body .cfx-speed-units .fui-Button[aria-pressed='true']:hover {
+  background-color: transparent;
+}
+
+body .cfx-speed-units .fui-Button:active,
+body .cfx-speed-units .fui-Button:hover:active {
+  background-color: var(--cfx-control-fill-pressed);
+}
+
 /* One outlined control, with a separate dropdown hit area and a quiet hover border. */
 body .cfx-slow-mode.fui-SplitButton {
   box-sizing: border-box;
@@ -81,6 +166,7 @@ body .cfx-slow-mode.fui-SplitButton:has(button:disabled) {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  body .cfx-speed-units::before,
   body .cfx-slow-mode.fui-SplitButton,
   body .cfx-slow-mode .fui-MenuButton__menuIcon {
     transition: none;
@@ -88,6 +174,30 @@ body .cfx-slow-mode.fui-SplitButton:has(button:disabled) {
 }
 
 @media (forced-colors: active) {
+  body .cfx-speed-units {
+    border-color: ButtonText;
+    background-color: ButtonFace;
+    box-shadow: none;
+  }
+
+  body .cfx-speed-units::before,
+  body .cfx-speed-units:has(.fui-Button[aria-pressed='true']:is(:hover, :active))::before {
+    border-color: Highlight;
+    background-color: Highlight;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  body .cfx-speed-units .fui-Button {
+    color: ButtonText;
+  }
+
+  body .cfx-speed-units .fui-Button[aria-pressed='true'] {
+    background-color: transparent;
+    color: HighlightText;
+    box-shadow: none;
+  }
+
   body .cfx-slow-mode.fui-SplitButton,
   body .cfx-slow-mode.fui-SplitButton:hover,
   body .cfx-slow-mode.fui-SplitButton:has([aria-expanded='true']) {

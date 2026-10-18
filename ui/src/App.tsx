@@ -32,6 +32,7 @@ import { useDownloads } from './hooks/useDownloads';
 import { useSettings } from './hooks/useSettings';
 import { useWindowTheme } from './hooks/useWindowTheme';
 import { useSpeedHistory } from './hooks/useSpeedHistory';
+import type { SpeedUnit } from './utils/formatters';
 import { TitleBar } from './components/TitleBar';
 import { NavPane } from './components/NavPane';
 import { CommandBar } from './components/CommandBar';
@@ -186,6 +187,7 @@ export const App: React.FC = () => {
   const [view, setView] = useState<ViewId>('all');
   const [compactNav, setCompactNav] = useState(() => readPref('cfx.compactNav', window.innerWidth < 1100));
   const [detailsOpen, setDetailsOpen] = useState(() => readPref('cfx.details', true));
+  const [speedUnit, setSpeedUnit] = useState<SpeedUnit>(() => localStorage.getItem('cfx.speedUnit') === 'bits' ? 'bits' : 'bytes');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortState>({ key: 'added', direction: 'descending' });
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -208,6 +210,7 @@ export const App: React.FC = () => {
 
   useEffect(() => localStorage.setItem('cfx.compactNav', compactNav ? '1' : '0'), [compactNav]);
   useEffect(() => localStorage.setItem('cfx.details', detailsOpen ? '1' : '0'), [detailsOpen]);
+  useEffect(() => localStorage.setItem('cfx.speedUnit', speedUnit), [speedUnit]);
 
   // One-time announcement for browser integration in 0.2.0
   useEffect(() => {
@@ -609,6 +612,7 @@ export const App: React.FC = () => {
                         )
                       ) : (
                         <DownloadTable
+                          speedUnit={speedUnit}
                           tasks={visible}
                           sort={sort}
                           onSort={setSort}
@@ -621,6 +625,7 @@ export const App: React.FC = () => {
                     </div>
                     {detailsOpen && single && (
                       <DetailsPane
+                        speedUnit={speedUnit}
                         task={single}
                         adapters={adapters}
                         speedHistory={taskHistory}
@@ -639,6 +644,7 @@ export const App: React.FC = () => {
               )}
               {view === 'network' && (
                 <NetworkPage
+                  speedUnit={speedUnit}
                   adapters={adapters}
                   tasks={tasks}
                   history={history}
@@ -657,6 +663,8 @@ export const App: React.FC = () => {
               )}
             </div>
             <StatusBar
+              speedUnit={speedUnit}
+              onSpeedUnitChange={setSpeedUnit}
               active={counts.active}
               queued={downloadQueue.length}
               speed={totalSpeed}

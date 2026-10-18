@@ -16,6 +16,7 @@ import { Page, SectionHeader } from '../components/Page';
 import { SpeedGraph } from '../components/SpeedGraph';
 import { adapterColor, adapterProblem, kindIcon, kindLabel, usableAdapters } from '../utils/adapters';
 import { formatBytes, formatSpeed } from '../utils/formatters';
+import type { SpeedUnit } from '../utils/formatters';
 
 const useStyles = makeStyles({
   card: {
@@ -93,6 +94,7 @@ function liveStats(tasks: DownloadTask[]): Map<string, LiveStat> {
 }
 
 interface NetworkPageProps {
+  speedUnit: SpeedUnit;
   adapters: AdapterInfo[];
   tasks: DownloadTask[];
   history: SpeedSample[];
@@ -102,6 +104,7 @@ interface NetworkPageProps {
 }
 
 export const NetworkPage: React.FC<NetworkPageProps> = ({
+  speedUnit,
   adapters,
   tasks,
   history,
@@ -141,7 +144,7 @@ export const NetworkPage: React.FC<NetworkPageProps> = ({
         <div className={styles.graphHeader}>
           <div>
             <Caption1 className={styles.muted}>Total throughput</Caption1>
-            <div className={styles.total}>{formatSpeed(totalNow)}</div>
+            <div className={styles.total}>{formatSpeed(totalNow, speedUnit)}</div>
           </div>
           <div className={styles.legend}>
             <span className={styles.legendItem}>
@@ -157,6 +160,7 @@ export const NetworkPage: React.FC<NetworkPageProps> = ({
           </div>
         </div>
         <SpeedGraph
+          speedUnit={speedUnit}
           area={{ key: 'total', color: accent, values: history.map((h) => h.total) }}
           lines={showLines}
           capacity={HISTORY_SECONDS}
@@ -224,7 +228,7 @@ export const NetworkPage: React.FC<NetworkPageProps> = ({
               <div className={styles.stats}>
                 <div className={styles.stat}>
                   <Caption1 className={styles.muted}>Speed</Caption1>
-                  <span className={styles.statValue}>{formatSpeed(s?.speed ?? 0)}</span>
+                  <span className={styles.statValue}>{formatSpeed(s?.speed ?? 0, speedUnit)}</span>
                 </div>
                 <div className={styles.stat}>
                   <Caption1 className={styles.muted}>Connections</Caption1>

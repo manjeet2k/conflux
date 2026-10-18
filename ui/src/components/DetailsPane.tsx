@@ -10,6 +10,7 @@ import {
 import type { AdapterInfo, DownloadTask } from '../types';
 import { HISTORY_SECONDS } from '../hooks/useSpeedHistory';
 import { formatBytes, formatDate, formatDuration, formatEta, formatSpeed, progressOf } from '../utils/formatters';
+import type { SpeedUnit } from '../utils/formatters';
 import { fileKind, fileTypeLabels } from '../utils/fileTypes';
 import { adapterColor, adapterProblem } from '../utils/adapters';
 import { speedWindowStats } from '../utils/sparkline';
@@ -22,6 +23,7 @@ import { SpeedGraph } from './SpeedGraph';
 import './DetailsPane.css';
 
 interface DetailsPaneProps {
+  speedUnit: SpeedUnit;
   task: DownloadTask;
   adapters: AdapterInfo[];
   speedHistory: Record<string, number[]>;
@@ -205,13 +207,13 @@ export const DetailsPane: React.FC<DetailsPaneProps> = (p) => {
         </div>
         <div className="cfx-details-speed" role="group" aria-label="Download speed history, last 60 seconds of active transfer" style={{ '--cfx-sparkline-muted': p.dark ? '#8A99AD' : '#596779' } as React.CSSProperties}>
           <div className="cfx-details-speed-header">
-            <span><Caption1 className="cfx-details-muted">Speed</Caption1> <strong>{running ? formatSpeed(t.speed_bytes_sec) : t.status === 'paused' ? 'Paused' : t.status === 'stopping' ? 'Stopping…' : 'Stopped'}</strong></span>
+            <span><Caption1 className="cfx-details-muted">Speed</Caption1> <strong>{running ? formatSpeed(t.speed_bytes_sec, p.speedUnit) : t.status === 'paused' ? 'Paused' : t.status === 'stopping' ? 'Stopping…' : 'Stopped'}</strong></span>
             {speeds.length > 0 && <Caption1 className="cfx-details-speed-stats" title="Peak and average of the last 60 one-second transfer samples">
-              Peak: {formatSpeed(peak)} • Avg: {formatSpeed(average)}
+              Peak: {formatSpeed(peak, p.speedUnit)} • Avg: {formatSpeed(average, p.speedUnit)}
             </Caption1>}
           </div>
           {speeds.length > 0 ? <>
-            <SpeedGraph area={{ key: t.id, color: p.dark ? '#38BDF8' : '#007EBD', values: speeds }} lines={[]} capacity={HISTORY_SECONDS} height={60} compact active={running} paused={t.status === 'paused'} />
+            <SpeedGraph speedUnit={p.speedUnit} area={{ key: t.id, color: p.dark ? '#38BDF8' : '#007EBD', values: speeds }} lines={[]} capacity={HISTORY_SECONDS} height={60} compact active={running} paused={t.status === 'paused'} />
             <div className="cfx-details-speed-axis cfx-details-muted"><span>Last 60 s of transfer</span><span>{transferState}</span></div>
           </> : <Caption1 className="cfx-details-muted">{running ? 'Collecting speed samples…' : 'No speed samples recorded for this download.'}</Caption1>}
         </div>
@@ -237,7 +239,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = (p) => {
                     <span className="cfx-details-adapter-ip cfx-details-muted" title={a.ip ?? 'Default route'}>{a.ip ?? 'Default route'}</span>
                     <span>{a.active_connections} stream{a.active_connections === 1 ? '' : 's'}</span>
                     <span title="Received bytes, including retries">{formatBytes(a.downloaded_bytes)}</span>
-                    <strong>{running && a.dropped ? 'Dropped' : formatSpeed(a.speed_bytes_sec)}</strong>
+                    <strong>{running && a.dropped ? 'Dropped' : formatSpeed(a.speed_bytes_sec, p.speedUnit)}</strong>
                   </div>
                   {problem && <Caption1 role="status" className="cfx-details-adapter-problem" style={{ color: tokens.colorPaletteRedForeground1 }}>{problem}</Caption1>}
                 </div>
@@ -254,7 +256,7 @@ export const DetailsPane: React.FC<DetailsPaneProps> = (p) => {
           {prop('Type', `${fileTypeLabels[fileKind(t.filename)]}${t.total_bytes > 0 ? ` · ${formatBytes(t.total_bytes)}` : ''}`)}
           {completed && t.completed_at_ms != null && prop('Completed', formatDate(t.completed_at_ms))}
           {completed && (t.duration_ms ?? 0) > 0 && prop('Time taken', formatDuration(t.duration_ms))}
-          {completed && (t.avg_speed_bytes_sec ?? 0) > 0 && prop('Avg. speed', formatSpeed(t.avg_speed_bytes_sec!))}
+          {completed && (t.avg_speed_bytes_sec ?? 0) > 0 && prop('Avg. speed', formatSpeed(t.avg_speed_bytes_sec!, p.speedUnit))}
           {completed && t.sha256 && prop('SHA-256', t.sha256, t.sha256)}
         </section>
       </div>

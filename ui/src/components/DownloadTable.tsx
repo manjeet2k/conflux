@@ -29,6 +29,7 @@ import {
 } from '@fluentui/react-icons';
 import type { DownloadTask } from '../types';
 import { formatBytes, formatDate, formatDuration, formatEta, formatSpeed, progressOf } from '../utils/formatters';
+import type { SpeedUnit } from '../utils/formatters';
 import { FileIcon } from './FileIcon';
 import { StatusLabel } from './StatusLabel';
 import { DownloadProgress } from './DownloadProgress';
@@ -156,6 +157,7 @@ export interface RowActions {
 }
 
 interface DownloadTableProps {
+  speedUnit: SpeedUnit;
   tasks: DownloadTask[]; // already filtered and sorted
   sort: SortState;
   onSort: (sort: SortState) => void;
@@ -167,6 +169,7 @@ interface DownloadTableProps {
 }
 
 export const DownloadTable: React.FC<DownloadTableProps> = ({
+  speedUnit,
   tasks,
   sort,
   onSort,
@@ -402,9 +405,9 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
                     {has('speed') && (
                       <TableCell className={mergeClasses(styles.end, styles.num)}>
                         {t.status === 'downloading'
-                          ? formatSpeed(t.speed_bytes_sec)
+                          ? formatSpeed(t.speed_bytes_sec, speedUnit)
                           : t.status === 'completed' && t.avg_speed_bytes_sec
-                            ? <span title={`Average speed: ${formatSpeed(t.avg_speed_bytes_sec)}`}>{formatSpeed(t.avg_speed_bytes_sec)}</span>
+                            ? <span title={`Average speed: ${formatSpeed(t.avg_speed_bytes_sec, speedUnit)}`}>{formatSpeed(t.avg_speed_bytes_sec, speedUnit)}</span>
                             : ''}
                       </TableCell>
                     )}
