@@ -7,14 +7,18 @@ import {
   MenuPopover,
   MenuTrigger,
   MenuDivider,
+  Overflow,
+  OverflowItem,
+  OverflowDivider,
   SearchBox,
   Toolbar,
   ToolbarButton,
   ToolbarDivider,
-  ToolbarToggleButton,
   Tooltip,
   makeStyles,
   tokens,
+  useIsOverflowItemVisible,
+  useOverflowMenu,
 } from '@fluentui/react-components';
 import {
   Add20Regular,
@@ -42,9 +46,16 @@ const useStyles = makeStyles({
     borderBottom: '1px solid var(--cfx-divider)',
     flexShrink: 0,
   },
-  toolbar: { flex: 1, minWidth: 0, overflow: 'hidden' },
-  search: { width: '240px' },
-  add: { marginRight: '4px', minWidth: '88px' },
+  toolbar: {
+    flex: 1,
+    minWidth: '32px',
+    padding: 0,
+    '& > button': { flexShrink: 0, whiteSpace: 'nowrap' },
+  },
+  search: { flex: '0 1 auto', minWidth: '140px', width: 'clamp(140px, 22vw, 240px)' },
+  add: { marginRight: '4px', minWidth: '88px', flexShrink: 0 },
+  playback: { minWidth: '104px' },
+  details: { flexShrink: 0 },
   divider: { color: tokens.colorNeutralStroke2 },
 });
 
@@ -80,6 +91,20 @@ interface CommandBarProps extends CommandState {
 
 export const CommandBar: React.FC<CommandBarProps> = (p) => {
   const styles = useStyles();
+  const actions: DownloadAction[] = [
+    {
+      id: 'playback',
+      label: p.canPause ? 'Pause' : 'Resume',
+      icon: p.canPause ? <Pause20Regular /> : <Play20Regular />,
+      disabled: !p.canPause && !p.canResume,
+      onClick: p.canPause ? p.onPause : p.onResume,
+      showLabel: true,
+    },
+    { id: 'remove', label: 'Remove', hint: 'Remove (Del)', icon: <Delete20Regular />, disabled: !p.canRemove, onClick: p.onRemove },
+    { id: 'open', label: 'Open', hint: 'Open (Enter)', icon: <Open20Regular />, disabled: !p.canOpen, onClick: p.onOpen, group: 'files' },
+    { id: 'reveal', label: 'Show in folder', icon: <FolderOpen20Regular />, disabled: !p.canReveal, onClick: p.onReveal, group: 'files' },
+    { id: 'copy', label: 'Copy download link', icon: <Link20Regular />, disabled: !p.canCopyLink, onClick: p.onCopyLink, group: 'files' },
+  ];
   return (
     <div className={styles.root}>
       <Tooltip content="Add download (Ctrl+N)" relationship="description">
@@ -87,63 +112,33 @@ export const CommandBar: React.FC<CommandBarProps> = (p) => {
           Add
         </Button>
       </Tooltip>
-      <Toolbar aria-label="Download actions" className={styles.toolbar} size="medium">
-        <ToolbarButton icon={<Play20Regular />} disabled={!p.canResume} onClick={p.onResume}>
-          Resume
-        </ToolbarButton>
-        <ToolbarButton icon={<Pause20Regular />} disabled={!p.canPause} onClick={p.onPause}>
-          Pause
-        </ToolbarButton>
-        <Tooltip content="Remove (Del)" relationship="description">
-          <ToolbarButton
-            aria-label="Remove"
-            icon={<Delete20Regular />}
-            disabled={!p.canRemove}
-            onClick={p.onRemove}
-          />
-        </Tooltip>
-        <ToolbarDivider className={styles.divider} />
-        <Tooltip content="Open (Enter)" relationship="description">
-          <ToolbarButton aria-label="Open" icon={<Open20Regular />} disabled={!p.canOpen} onClick={p.onOpen} />
-        </Tooltip>
-        <Tooltip content="Show in folder" relationship="description">
-          <ToolbarButton
-            aria-label="Show in folder"
-            icon={<FolderOpen20Regular />}
-            disabled={!p.canReveal}
-            onClick={p.onReveal}
-          />
-        </Tooltip>
-        <Tooltip content="Copy download link" relationship="description">
-          <ToolbarButton
-            aria-label="Copy download link"
-            icon={<Link20Regular />}
-            disabled={!p.canCopyLink}
-            onClick={p.onCopyLink}
-          />
-        </Tooltip>
-        <Menu>
-          <MenuTrigger disableButtonEnhancement>
-            <Tooltip content="More options" relationship="label">
-              <ToolbarButton icon={<MoreHorizontal20Regular />} />
-            </Tooltip>
-          </MenuTrigger>
-          <MenuPopover>
-            <MenuList>
-              <MenuItem icon={<Play20Regular />} disabled={!p.anyPaused} onClick={p.onResumeAll}>
-                Resume all
-              </MenuItem>
-              <MenuItem icon={<Pause20Regular />} disabled={!p.anyActive} onClick={p.onPauseAll}>
-                Pause all
-              </MenuItem>
-              <MenuDivider />
-              <MenuItem icon={<Broom20Regular />} disabled={!p.anyCompleted} onClick={p.onClearCompleted}>
-                Clear completed from list
-              </MenuItem>
-            </MenuList>
-          </MenuPopover>
-        </Menu>
-      </Toolbar>
+      <Overflow padding={0} hasHiddenItems>
+        <Toolbar aria-label="Download actions" className={styles.toolbar} size="medium">
+          {actions.map((action) => (
+            <React.Fragment key={action.id}>
+              {action.id === 'open' && (
+                <OverflowDivider groupId="files">
+                  <ToolbarDivider className={styles.divider} />
+                </OverflowDivider>
+              )}
+              <OverflowItem id={action.id} groupId={action.group}>
+                <Tooltip content={action.hint ?? action.label} relationship="description">
+                  <ToolbarButton
+                    className={action.id === 'playback' ? styles.playback : undefined}
+                    aria-label={action.label}
+                    icon={action.icon}
+                    disabled={action.disabled}
+                    onClick={action.onClick}
+                  >
+                    {action.showLabel ? action.label : undefined}
+                  </ToolbarButton>
+                </Tooltip>
+              </OverflowItem>
+            </React.Fragment>
+          ))}
+          <ActionOverflowMenu actions={actions} commands={p} />
+        </Toolbar>
+      </Overflow>
       <SearchBox
         className={styles.search}
         placeholder="Search downloads"
@@ -153,21 +148,65 @@ export const CommandBar: React.FC<CommandBarProps> = (p) => {
         aria-label="Search downloads (Ctrl+F)"
       />
       <Tooltip content="Details pane" relationship="label">
-        <ToolbarToggleButtonStandalone checked={p.detailsOpen} onClick={p.onToggleDetails} />
+        <Button
+          className={styles.details}
+          appearance={p.detailsOpen ? 'secondary' : 'subtle'}
+          aria-label="Details pane"
+          aria-pressed={p.detailsOpen}
+          icon={<PanelBottom20Regular />}
+          onClick={p.onToggleDetails}
+        />
       </Tooltip>
     </div>
   );
 };
 
-/** ToolbarToggleButton needs a Toolbar context; this is its standalone equivalent. */
-const ToolbarToggleButtonStandalone: React.FC<{ checked: boolean; onClick: () => void }> = ({ checked, onClick }) => (
-  <Toolbar checkedValues={{ panel: checked ? ['details'] : [] }} onCheckedValueChange={onClick}>
-    <ToolbarToggleButton
-      aria-label="Details pane"
-      appearance="subtle"
-      icon={<PanelBottom20Regular />}
-      name="panel"
-      value="details"
-    />
-  </Toolbar>
-);
+interface DownloadAction {
+  id: string;
+  label: string;
+  hint?: string;
+  icon: React.ReactElement;
+  disabled: boolean;
+  onClick: () => void;
+  showLabel?: boolean;
+  group?: string;
+}
+
+const OverflowAction: React.FC<{ action: DownloadAction }> = ({ action }) => {
+  const visible = useIsOverflowItemVisible(action.id);
+  if (visible) return null;
+  return (
+    <MenuItem icon={action.icon} disabled={action.disabled} onClick={action.onClick}>
+      {action.label}
+    </MenuItem>
+  );
+};
+
+const ActionOverflowMenu: React.FC<{ actions: DownloadAction[]; commands: CommandBarProps }> = ({ actions, commands }) => {
+  const { ref, overflowCount } = useOverflowMenu<HTMLButtonElement>();
+  return (
+    <Menu>
+      <MenuTrigger disableButtonEnhancement>
+        <Tooltip content="More actions" relationship="label">
+          <ToolbarButton ref={ref} aria-label="More actions" icon={<MoreHorizontal20Regular />} />
+        </Tooltip>
+      </MenuTrigger>
+      <MenuPopover>
+        <MenuList>
+          {actions.map((action) => <OverflowAction key={action.id} action={action} />)}
+          {overflowCount > 0 && <MenuDivider />}
+          <MenuItem icon={<Play20Regular />} disabled={!commands.anyPaused} onClick={commands.onResumeAll}>
+            Resume all
+          </MenuItem>
+          <MenuItem icon={<Pause20Regular />} disabled={!commands.anyActive} onClick={commands.onPauseAll}>
+            Pause all
+          </MenuItem>
+          <MenuDivider />
+          <MenuItem icon={<Broom20Regular />} disabled={!commands.anyCompleted} onClick={commands.onClearCompleted}>
+            Clear completed from list
+          </MenuItem>
+        </MenuList>
+      </MenuPopover>
+    </Menu>
+  );
+};

@@ -41,8 +41,19 @@ export const windowsControlStyleHooks: NonNullable<FluentProviderProps['customSt
   },
 };
 
+// Fluent's default subtle hover fills are opaque. Use the same translucent
+// surfaces as the list and navigation so controls retain the window material.
+const subtleControlSurfaces: Partial<Theme> = {
+  colorSubtleBackgroundHover: 'var(--cfx-subtle-hover)',
+  colorSubtleBackgroundPressed: 'var(--cfx-subtle-pressed)',
+  colorSubtleBackgroundSelected: 'var(--cfx-selected)',
+  colorNeutralForeground2BrandHover: 'var(--colorNeutralForeground1)',
+  colorNeutralForeground2BrandPressed: 'var(--colorNeutralForeground2)',
+};
+
 export const lightTheme: Theme = {
   ...createLightTheme(windowsBlue),
+  ...subtleControlSurfaces,
   fontFamilyBase,
   fontFamilyMonospace,
 };
@@ -50,6 +61,7 @@ export const lightTheme: Theme = {
 // Windows 11 dark mode uses a light accent fill (#60CDFF) with black foreground.
 export const darkTheme: Theme = {
   ...createDarkTheme(windowsBlue),
+  ...subtleControlSurfaces,
   fontFamilyBase,
   fontFamilyMonospace,
   colorBrandBackground: '#60CDFF',
@@ -85,15 +97,15 @@ export function surfaceVars(dark: boolean, backdrop: Backdrop): Record<string, s
       '--cfx-window': material ? 'transparent' : '#202020',
       '--cfx-layer': acrylic ? 'rgba(40, 40, 40, 0.55)' : material ? 'rgba(58, 58, 58, 0.30)' : '#272727',
       '--cfx-card': 'rgba(255, 255, 255, 0.05)',
-      '--cfx-card-hover': 'rgba(255, 255, 255, 0.08)',
+      '--cfx-card-hover': 'rgba(255, 255, 255, 0.065)',
       '--cfx-stroke': 'rgba(255, 255, 255, 0.08)',
       '--cfx-divider': 'rgba(255, 255, 255, 0.0837)',
-      '--cfx-subtle-hover': 'rgba(255, 255, 255, 0.06)',
-      '--cfx-subtle-pressed': 'rgba(255, 255, 255, 0.04)',
+      '--cfx-subtle-hover': 'rgba(255, 255, 255, 0.035)',
+      '--cfx-subtle-pressed': 'rgba(255, 255, 255, 0.025)',
       '--cfx-track': 'rgba(255, 255, 255, 0.12)',
       '--cfx-accent': '#60CDFF',
       '--cfx-control-fill': 'rgba(255, 255, 255, 0.0605)',
-      '--cfx-control-fill-hover': 'rgba(255, 255, 255, 0.0837)',
+      '--cfx-control-fill-hover': 'rgba(255, 255, 255, 0.075)',
       '--cfx-control-fill-pressed': 'rgba(255, 255, 255, 0.0326)',
       '--cfx-control-fill-disabled': 'rgba(255, 255, 255, 0.0419)',
       '--cfx-control-stroke': 'rgba(255, 255, 255, 0.0698)',
@@ -103,22 +115,22 @@ export function surfaceVars(dark: boolean, backdrop: Backdrop): Record<string, s
       '--cfx-flyout-shadow': '0 8px 16px rgba(0, 0, 0, 0.26), 0 2px 4px rgba(0, 0, 0, 0.16)',
       '--cfx-header': material ? 'rgba(40, 40, 40, 0.60)' : '#272727',
       '--cfx-selected': 'rgba(255, 255, 255, 0.07)',
-      '--cfx-selected-hover': 'rgba(255, 255, 255, 0.10)',
+      '--cfx-selected-hover': 'rgba(255, 255, 255, 0.085)',
     };
   }
   return {
     '--cfx-window': material ? 'transparent' : '#F3F3F3',
     '--cfx-layer': acrylic ? 'rgba(252, 252, 252, 0.65)' : material ? 'rgba(255, 255, 255, 0.50)' : '#F9F9F9',
     '--cfx-card': 'rgba(255, 255, 255, 0.70)',
-    '--cfx-card-hover': 'rgba(249, 249, 249, 0.50)',
+    '--cfx-card-hover': 'rgba(255, 255, 255, 0.76)',
     '--cfx-stroke': 'rgba(0, 0, 0, 0.0578)',
     '--cfx-divider': 'rgba(0, 0, 0, 0.0803)',
-    '--cfx-subtle-hover': 'rgba(0, 0, 0, 0.0373)',
-    '--cfx-subtle-pressed': 'rgba(0, 0, 0, 0.0241)',
+    '--cfx-subtle-hover': 'rgba(0, 0, 0, 0.025)',
+    '--cfx-subtle-pressed': 'rgba(0, 0, 0, 0.02)',
     '--cfx-track': 'rgba(0, 0, 0, 0.10)',
     '--cfx-accent': '#005FB8',
     '--cfx-control-fill': 'rgba(255, 255, 255, 0.70)',
-    '--cfx-control-fill-hover': 'rgba(249, 249, 249, 0.50)',
+    '--cfx-control-fill-hover': 'rgba(255, 255, 255, 0.76)',
     '--cfx-control-fill-pressed': 'rgba(249, 249, 249, 0.30)',
     '--cfx-control-fill-disabled': 'rgba(249, 249, 249, 0.30)',
     '--cfx-control-stroke': 'rgba(0, 0, 0, 0.0578)',
@@ -128,7 +140,7 @@ export function surfaceVars(dark: boolean, backdrop: Backdrop): Record<string, s
     '--cfx-flyout-shadow': '0 8px 16px rgba(0, 0, 0, 0.14), 0 2px 4px rgba(0, 0, 0, 0.08)',
     '--cfx-header': material ? 'rgba(252, 252, 252, 0.70)' : '#F9F9F9',
     '--cfx-selected': 'rgba(0, 0, 0, 0.0373)',
-    '--cfx-selected-hover': 'rgba(0, 0, 0, 0.0578)',
+    '--cfx-selected-hover': 'rgba(0, 0, 0, 0.045)',
   };
 }
 

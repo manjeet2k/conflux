@@ -97,7 +97,7 @@ body .cfx-slow-mode.fui-SplitButton {
 
 body .cfx-slow-mode.fui-SplitButton:hover,
 body .cfx-slow-mode.fui-SplitButton:has([aria-expanded='true']) {
-  border-color: color-mix(in srgb, var(--colorNeutralStroke1Hover) 45%, var(--cfx-control-stroke));
+  border-color: color-mix(in srgb, var(--colorNeutralStroke1Hover) 25%, var(--cfx-control-stroke));
 }
 
 /* Hover keeps the fill steady; pressing either action only affects that action. */

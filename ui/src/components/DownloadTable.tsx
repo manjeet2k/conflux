@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Menu,
   MenuDivider,
@@ -63,15 +63,24 @@ const PILL_HEIGHT = 16;
 const useStyles = makeStyles({
   scroller: {
     flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
     overflow: 'auto',
+    scrollbarGutter: 'stable',
     outline: 'none',
     padding: '0 4px 8px',
   },
-  table: { tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 },
+  table: { flexShrink: 0, tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 },
   header: {
     position: 'sticky',
     top: 0,
     zIndex: 1,
+    backgroundColor: 'transparent',
+  },
+  // Only cover rows once they pass behind the pinned header. At rest, column
+  // labels sit directly on the list surface, without a separate tinted strip.
+  headerScrolled: {
     backgroundColor: 'var(--cfx-header)',
     backdropFilter: 'blur(20px)',
   },
@@ -79,9 +88,14 @@ const useStyles = makeStyles({
   headerRow: { height: '32px', borderBottom: 'none' },
   headerCell: {
     height: '32px',
+    fontSize: tokens.fontSizeBase200,
     fontWeight: tokens.fontWeightRegular,
-    color: tokens.colorNeutralForeground2,
+    color: tokens.colorNeutralForeground3,
+    ':hover': { color: tokens.colorNeutralForeground2 },
+    ':active': { color: tokens.colorNeutralForeground2 },
   },
+  // The cell owns the hover tint; inheriting it on the button would paint it twice.
+  headerButton: { backgroundColor: 'transparent' },
   // Win11 list rows: the highlight is a rounded rectangle inset from the list edges.
   row: {
     height: `${ROW_HEIGHT}px`,
@@ -166,6 +180,7 @@ interface DownloadTableProps {
   actions: RowActions;
   /** A row was clicked with the mouse (after the selection updated). */
   onRowClick?: () => void;
+  emptyState?: React.ReactNode;
 }
 
 export const DownloadTable: React.FC<DownloadTableProps> = ({
@@ -177,17 +192,22 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
   onSelectionChange,
   actions,
   onRowClick: onRowClicked,
+  emptyState,
 }) => {
   const styles = useStyles();
   const [focusId, setFocusId] = useState<string | null>(null);
   const anchorId = useRef<string | null>(null);
   const [showFocus, setShowFocus] = useState(false);
+  const [headerScrolled, setHeaderScrolled] = useState(false);
 
   const [listWidth, setListWidth] = useState(1200);
   const measureRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = measureRef.current;
     if (!el) return;
+    // Measure before the first paint; a guessed wide layout flashes extra columns.
+    const css = getComputedStyle(el);
+    setListWidth(el.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight));
     const ro = new ResizeObserver(([entry]) => setListWidth(entry.contentRect.width));
     ro.observe(el);
     return () => ro.disconnect();
@@ -307,7 +327,7 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
     <TableHeaderCell
       key={c.key}
       className={styles.headerCell}
-      button={{ className: c.align === 'end' ? styles.endHeader : undefined }}
+      button={{ className: mergeClasses(styles.headerButton, c.align === 'end' && styles.endHeader) }}
       style={c.width ? { width: `${c.width}px` } : undefined}
       sortDirection={sort.key === c.key ? sort.direction : undefined}
       onClick={(e) => {
@@ -345,6 +365,7 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
           aria-multiselectable
           aria-label="Downloads"
           onKeyDown={onKeyDown}
+          onScroll={(event) => setHeaderScrolled(event.currentTarget.scrollTop > 0)}
           onFocus={() => {
             if (!focusId && ids.length > 0) setFocusId(ids[0]);
           }}
@@ -356,7 +377,7 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
             sortable
             aria-label="Downloads"
           >
-            <TableHeader className={styles.header}>
+            <TableHeader className={mergeClasses(styles.header, headerScrolled && styles.headerScrolled)}>
               <TableRow className={styles.headerRow}>{shown.map(headerCell)}</TableRow>
             </TableHeader>
             <TableBody>
@@ -429,6 +450,7 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
               })}
             </TableBody>
           </Table>
+          {tasks.length === 0 && emptyState}
         </div>
       </MenuTrigger>
       <MenuPopover>

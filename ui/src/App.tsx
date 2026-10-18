@@ -560,7 +560,7 @@ export const App: React.FC = () => {
             onToggleCompact={() => setCompactNav((c) => !c)}
           />
           <main className={styles.layer}>
-            <div key={view} className={styles.viewContainer}>
+            <div key={isListView ? 'downloads' : view} className={styles.viewContainer}>
               {isListView && (
                 <>
                   <CommandBar
@@ -601,27 +601,24 @@ export const App: React.FC = () => {
                   )}
                   <div className={styles.content}>
                     <div className={styles.list}>
-                      {visible.length === 0 ? (
-                        search.trim() ? (
+                      <DownloadTable
+                        speedUnit={speedUnit}
+                        tasks={visible}
+                        sort={sort}
+                        onSort={setSort}
+                        selected={selected}
+                        onSelectionChange={setSelected}
+                        actions={actions}
+                        onRowClick={() => setDetailsOpen(true)}
+                        emptyState={search.trim() ? (
                           <EmptyState icon={Search48Regular} title="No matches" body={`Nothing matches "${search.trim()}".`} />
                         ) : (
                           <EmptyState
                             {...empty}
                             onAdd={view === 'all' || view === 'active' ? () => openAdd() : undefined}
                           />
-                        )
-                      ) : (
-                        <DownloadTable
-                          speedUnit={speedUnit}
-                          tasks={visible}
-                          sort={sort}
-                          onSort={setSort}
-                          selected={selected}
-                          onSelectionChange={setSelected}
-                          actions={actions}
-                          onRowClick={() => setDetailsOpen(true)}
-                        />
-                      )}
+                        )}
+                      />
                     </div>
                     {detailsOpen && single && (
                       <DetailsPane
