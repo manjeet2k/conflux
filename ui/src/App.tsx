@@ -619,9 +619,9 @@ export const App: React.FC = () => {
                         />
                       )}
                     </div>
-                    {detailsOpen && (
+                    {detailsOpen && single && (
                       <DetailsPane
-                        selection={selectedTasks}
+                        task={single}
                         adapters={adapters}
                         speedHistory={taskHistory}
                         dark={dark}
@@ -657,9 +657,8 @@ export const App: React.FC = () => {
               )}
             </div>
             <StatusBar
-              items={visible.length}
-              selected={selectedTasks.length}
               active={counts.active}
+              queued={downloadQueue.length}
               speed={totalSpeed}
               settings={settings}
               loaded={settingsLoaded}

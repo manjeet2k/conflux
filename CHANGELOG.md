@@ -13,6 +13,10 @@ All notable changes to Conflux are documented here. The format follows
 - Slow mode on the right of the bottom bar, with download metrics grouped on the left. The turtle toggle and speed selector share one continuous button surface; the selected cap appears only in its menu (1 MB/s by default). Changes apply immediately to active and future downloads across all adapters, and the preference is saved between launches.
 
 ### Fixed
+- Clicking empty space in the download list keeps the current selection and details pane open.
+- Inactive downloads retain the normal connection rows and columns with zero streams, received bytes, and speed. Tasks without a connection snapshot use the currently enabled adapters, keeping the panel populated while paused.
+- The bottom bar shows active downloads and total speed, including “0 downloading” and “0 KB/s” when idle. Queued link counts appear only when links are waiting; total item and selection counts are hidden.
+- Download details only appear for a single selected file in the current list. The pane can be resized with its top divider or arrow keys and scrolled. Only completed downloads use the minimal file summary; other statuses retain progress, speed history, and connection sections with status-specific messages and historical data.
 - Slow mode uses a softer hover outline and a vertical divider before the dropdown. Press feedback stays within each action; the arrow turns upward and its section stays highlighted while the speed menu is open.
 - Download resume JSON files now live in `%APPDATA%\com.conflux.desktop\resume` instead of the download folder. Existing sidecars remain resumable and move into app data when progress is saved.
 - New desktop downloads use `filename.part` until completion, then publish without replacing existing files. Temporary file locks are retried; failed publishes can resume without contacting the server, and publication interrupted by an app restart is recovered by file identity. Existing paused downloads retain their paths.

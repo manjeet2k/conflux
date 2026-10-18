@@ -308,7 +308,6 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
       style={c.width ? { width: `${c.width}px` } : undefined}
       sortDirection={sort.key === c.key ? sort.direction : undefined}
       onClick={(e) => {
-        // Sorting must not reach the grid's click-to-clear-selection handler.
         e.stopPropagation();
         onSort({
           key: c.key,
@@ -346,7 +345,6 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
           onFocus={() => {
             if (!focusId && ids.length > 0) setFocusId(ids[0]);
           }}
-          onClick={() => onSelectionChange(new Set())}
         >
           <Table
             className={styles.table}

@@ -2,13 +2,12 @@
   container: cfx-details / inline-size;
   box-sizing: border-box;
   width: 100%;
-  max-height: min(64vh, 620px);
+  max-height: calc(100% - 120px);
+  min-height: 0;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 16px 20px 18px;
-  overflow: auto;
+  overflow: hidden;
   border-top: 1px solid var(--cfx-divider);
   background: var(--cfx-layer);
   font-size: 12px;
@@ -16,6 +15,12 @@
   animation: win11BottomPaneEntrance 200ms cubic-bezier(0.1, 0.9, 0.2, 1) both;
 }
 
+.cfx-details-resize { display: flex; align-items: center; justify-content: center; height: 9px; flex-shrink: 0; cursor: row-resize; touch-action: none; user-select: none; }
+.cfx-details-resize::after { content: ''; width: 36px; height: 3px; border-radius: 2px; background: var(--cfx-divider); }
+.cfx-details-resize:hover::after, .cfx-details-resize:focus-visible::after { background: var(--colorBrandForeground1); }
+.cfx-details-resize:focus-visible { outline: 2px solid var(--colorStrokeFocus2); outline-offset: -2px; }
+.cfx-details-content { display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0; padding: 7px 20px 18px; overflow: auto; scrollbar-gutter: stable; overscroll-behavior: contain; }
+.cfx-details-content:focus-visible { outline: 2px solid var(--colorStrokeFocus2); outline-offset: -2px; }
 .cfx-details-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 40px; flex-shrink: 0; }
 .cfx-details-identity { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
 .cfx-details-icon { font-size: 32px; }
@@ -36,7 +41,7 @@
 .cfx-details-percent { font-size: 30px; line-height: 36px; font-weight: 600; letter-spacing: -0.8px; white-space: nowrap; }
 .cfx-details-metric { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; white-space: nowrap; }
 .cfx-details-metric > span { font-size: 11px; }
-.cfx-details-no-chunks { display: flex; flex-direction: column; gap: 14px; padding-top: 8px; min-height: 65px; }
+.cfx-details-no-chunks { display: flex; flex-direction: column; gap: 14px; padding-top: 8px; }
 .cfx-details-speed { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding-top: 6px; }
 .cfx-details-speed-header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 12px; }
 .cfx-details-speed-header > span:first-child { display: flex; gap: 10px; align-items: baseline; }
@@ -54,7 +59,6 @@
 .cfx-details-adapter-name strong, .cfx-details-adapter-ip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cfx-details-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .cfx-details-adapter-problem { display: block; padding: 2px 0 8px 17px; overflow-wrap: anywhere; user-select: text; }
-.cfx-details-connections-empty { display: block; padding: 16px 0; }
 .cfx-details-property { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 10px; align-items: center; min-height: 32px; border-top: 1px solid var(--cfx-divider); }
 .cfx-details-property > span { font-size: 11px; }
 .cfx-details-property-value { display: flex; align-items: center; gap: 6px; min-width: 0; user-select: text; }
@@ -62,8 +66,6 @@
 .cfx-details-property-value > button { flex-shrink: 0; min-height: 24px; }
 .cfx-details-verified { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 .cfx-details-error { flex-shrink: 0; overflow-wrap: anywhere; user-select: text; }
-.cfx-details-empty { min-height: 160px; }
-.cfx-details-empty-message { display: block; text-align: center; padding: 24px 0; }
 
 @container cfx-details (max-width: 1050px) {
   .cfx-details-transfer { grid-template-columns: minmax(0, 8fr) minmax(0, 5fr); gap: 22px; }
@@ -87,6 +89,8 @@
   .cfx-details-percent { font-size: 26px; }
   .cfx-details-adapter-row { grid-template-columns: minmax(75px, 1fr) minmax(70px, 1fr) 58px 56px 68px; gap: 6px; }
 }
+
+.cfx-details-single { grid-template-columns: minmax(0, 1fr); }
 
 @media (prefers-reduced-motion: reduce) {
   .cfx-details { animation: none; }

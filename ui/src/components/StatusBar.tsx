@@ -30,9 +30,8 @@ const useStyles = makeStyles({
 });
 
 interface StatusBarProps {
-  items: number;
-  selected: number;
   active: number;
+  queued: number;
   speed: number;
   settings: Settings;
   loaded: boolean;
@@ -40,9 +39,8 @@ interface StatusBarProps {
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
-  items,
-  selected,
   active,
+  queued,
   speed,
   settings,
   loaded,
@@ -56,15 +54,12 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   );
   return (
     <footer className={styles.root}>
-      <div className={styles.metrics}>
-        <span>
-          {items} item{items === 1 ? '' : 's'}
-        </span>
-        {selected > 0 && <span>{selected} selected</span>}
-        {active > 0 && <span>{active} downloading</span>}
+      <div className={styles.metrics} role="group" aria-label="Download metrics">
+        <span>{active} downloading</span>
+        {queued > 0 && <span>{queued} queued</span>}
         <span className={styles.speed} title="Total download speed">
           <ArrowDown12Regular />
-          {formatSpeed(speed)}
+          {formatSpeed(active > 0 ? speed : 0)}
         </span>
       </div>
       <Menu
