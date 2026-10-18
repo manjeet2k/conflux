@@ -28,7 +28,7 @@ import {
   SelectAllOn20Regular,
 } from '@fluentui/react-icons';
 import type { DownloadTask } from '../types';
-import { formatBytes, formatDate, formatDuration, formatEta, formatSpeed, progressOf } from '../utils/formatters';
+import { formatBytes, formatDate, formatEta, formatSpeed, progressOf } from '../utils/formatters';
 import type { SpeedUnit } from '../utils/formatters';
 import { FileIcon } from './FileIcon';
 import { StatusLabel } from './StatusLabel';
@@ -421,11 +421,7 @@ export const DownloadTable: React.FC<DownloadTableProps> = ({
                     )}
                     {has('eta') && (
                       <TableCell className={mergeClasses(styles.end, styles.num)}>
-                        {t.status === 'downloading'
-                          ? formatEta(t.eta_seconds)
-                          : t.status === 'completed' && t.duration_ms
-                            ? <span title={`Time taken: ${formatDuration(t.duration_ms)}`}>{formatDuration(t.duration_ms)}</span>
-                            : ''}
+                        {t.status === 'downloading' ? formatEta(t.eta_seconds) : ''}
                       </TableCell>
                     )}
                     <TableCell title={t.error ?? undefined}>

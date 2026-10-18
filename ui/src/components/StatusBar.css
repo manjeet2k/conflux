@@ -71,7 +71,7 @@ body .cfx-speed-units .fui-Button:hover {
 
 body .cfx-speed-units .fui-Button[aria-pressed='true'] {
   background-color: transparent;
-  color: #fff;
+  color: var(--colorNeutralForeground1);
 }
 
 body .cfx-speed-units .fui-Button[aria-pressed='true']:hover {
