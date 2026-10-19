@@ -1,9 +1,8 @@
+// src/App.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   FluentProvider,
-  MessageBar,
-  MessageBarBody,
   Toast,
   ToastBody,
   ToastTitle,
@@ -21,38 +20,46 @@ import {
   Dismiss16Regular,
   ErrorCircle48Regular,
   PauseCircle48Regular,
-  Search48Regular,
 } from '@fluentui/react-icons';
 import { listen } from '@tauri-apps/api/event';
-import { api, errorText } from './api';
-import type { AdapterInfo, DownloadTask, ExternalDownloadPayload, RequestHeaders, TaskStatus, UpdateInfo, ViewId } from './types';
-import { EXTERNAL_DOWNLOAD_EVENT, HISTORY_STATUS_EVENT, NETWORK_ADAPTERS_CHANGED_EVENT, UPDATE_AVAILABLE_EVENT } from './types';
+
 import { darkTheme, lightTheme, surfaceVars, windowsControlStyleHooks } from './theme';
-import { useDownloads } from './hooks/useDownloads';
-import { useSettings } from './hooks/useSettings';
-import { useWindowTheme } from './hooks/useWindowTheme';
-import { useSpeedHistory } from './hooks/useSpeedHistory';
-import type { SpeedUnit } from './utils/formatters';
-import { TitleBar } from './components/TitleBar';
-import { NavPane } from './components/NavPane';
-import { CommandBar } from './components/CommandBar';
-import { DownloadTable, GRID_ID } from './components/DownloadTable';
-import type { RowActions } from './components/DownloadTable';
-import { sortTasks } from './utils/sort';
-import type { SortState } from './utils/sort';
-import { DetailsPane } from './components/DetailsPane';
-import { AddDownloadDialog } from './components/AddDownloadDialog';
-import { RemoveDialog } from './components/RemoveDialog';
-import { StatusBar } from './components/StatusBar';
-import { EmptyState } from './components/EmptyState';
-import { NetworkPage } from './pages/NetworkPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { copyText, extractUrl } from './utils/files';
-import { advanceDownload, enqueueDownload, presentQueuedDownload } from './utils/downloadQueue';
-import type { DownloadQueue, DownloadRequest } from './utils/downloadQueue';
+import { TitleBar } from '@/components/ui/TitleBar';
+import { NavPane } from '@/components/ui/NavPane';
+import { StatusBar } from '@/components/ui/StatusBar';
+
+import {
+  AddDownloadDialog,
+  DownloadsView,
+  RemoveDialog,
+  advanceDownload,
+  downloadsApi,
+  enqueueDownload,
+  presentQueuedDownload,
+  sortTasks,
+  useDownloads,
+  useSpeedHistory,
+} from '@/features/downloads';
+import type {
+  DownloadQueue,
+  DownloadRequest,
+  ExternalDownloadPayload,
+  RequestHeaders,
+  RowActions,
+  SortState,
+  TaskStatus,
+  ViewId,
+} from '@/features/downloads';
+
+import { NetworkView, useNetwork } from '@/features/network';
+import { SettingsView, settingsApi, useSettings, useWindowTheme } from '@/features/settings';
+import type { UpdateInfo } from '@/features/settings';
+
+import { copyText, extractUrl } from '@/utils/files';
+import type { SpeedUnit } from '@/utils/formatters';
+import { usePref } from '@/hooks/usePref';
 
 const useStyles = makeStyles({
-  // Provider classes also reach portal roots; inline custom properties do not.
   darkSurfaces: surfaceVars(true, 'none'),
   lightSurfaces: surfaceVars(false, 'none'),
   root: {
@@ -63,8 +70,11 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground1,
     overflow: 'hidden',
   },
-  body: { flex: 1, display: 'flex', minHeight: 0 },
-  // Win11 layering: the content "layer" sits on the backdrop with a rounded top-left corner.
+  body: {
+    flex: 1,
+    display: 'flex',
+    minHeight: 0,
+  },
   layer: {
     flex: 1,
     minWidth: 0,
@@ -90,33 +100,47 @@ const useStyles = makeStyles({
       animation: 'none',
     },
   },
-  content: { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 },
-  list: { flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' },
 });
 
 const viewStatuses: Partial<Record<ViewId, TaskStatus[]>> = {
   active: ['downloading'],
-  // A stopping task is on its way to paused; it lists there while its engine winds down.
   paused: ['paused', 'stopping'],
   completed: ['completed'],
   failed: ['error'],
 };
 
 const emptyStates = {
-  all: { icon: ArrowDownload48Regular, title: 'No downloads yet', body: 'Add a link, or copy one and press Ctrl+V anywhere in Conflux.' },
-  active: { icon: ArrowDownload48Regular, title: 'Nothing downloading', body: 'Active downloads show up here with live speed per adapter.' },
-  paused: { icon: PauseCircle48Regular, title: 'No paused downloads', body: 'Paused downloads keep their finished chunks and resume where they left off.' },
-  completed: { icon: CheckmarkCircle48Regular, title: 'No completed downloads', body: 'Finished files are verified with a SHA-256 checksum.' },
-  failed: { icon: ErrorCircle48Regular, title: 'No failed downloads', body: 'Downloads that fail after retries on every adapter appear here.' },
+  all: {
+    icon: ArrowDownload48Regular,
+    title: 'No downloads yet',
+    body: 'Add a link, or copy one and press Ctrl+V anywhere in Conflux.',
+  },
+  active: {
+    icon: ArrowDownload48Regular,
+    title: 'Nothing downloading',
+    body: 'Active downloads show up here with live speed per adapter.',
+  },
+  paused: {
+    icon: PauseCircle48Regular,
+    title: 'No paused downloads',
+    body: 'Paused downloads keep their finished chunks and resume where they left off.',
+  },
+  completed: {
+    icon: CheckmarkCircle48Regular,
+    title: 'No completed downloads',
+    body: 'Finished files are verified with a SHA-256 checksum.',
+  },
+  failed: {
+    icon: ErrorCircle48Regular,
+    title: 'No failed downloads',
+    body: 'Downloads that fail after retries on every adapter appear here.',
+  },
 } as const;
 
 const isEditable = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
 
-const readPref = (key: string, fallback: boolean) => {
-  const v = localStorage.getItem(key);
-  return v === null ? fallback : v === '1';
-};
+const GRID_ID = 'cfx-download-grid';
 
 interface InteractiveToastProps extends ToastProps {
   children: React.ReactNode;
@@ -126,7 +150,6 @@ const InteractiveToast: React.FC<InteractiveToastProps> = ({ children, onClick, 
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     onClick?.(e);
     if (e.defaultPrevented) return;
-    // Don't dismiss if the user is highlighting/selecting text
     const selection = window.getSelection();
     if (selection && selection.toString().trim().length > 0) {
       e.preventDefault();
@@ -144,6 +167,7 @@ const InteractiveToast: React.FC<InteractiveToastProps> = ({ children, onClick, 
 export const App: React.FC = () => {
   const toasterId = useId('toaster');
   const { dispatchToast } = useToastController(toasterId);
+
   const notify = useCallback(
     (intent: ToastIntent, title: string) =>
       dispatchToast(
@@ -167,39 +191,42 @@ export const App: React.FC = () => {
       ),
     [dispatchToast]
   );
+
   const onError = useCallback((message: string) => notify('error', message), [notify]);
 
-  // One-time messages from startup, e.g. a damaged data file was reset (backup kept).
-  useEffect(() => {
-    api
-      .takeStartupNotices()
-      .then((notices) => notices.forEach((n) => notify('warning', n)))
-      .catch((e) => console.error('Failed to read startup notices:', e));
-  }, [notify]);
-
+  // Settings & Theme
   const { settings, loaded: settingsLoaded, update: updateSettings } = useSettings(onError);
   const { dark, backdrop } = useWindowTheme(settings.theme, settings.backdrop);
+
+  // Downloads
   const { tasks, start, pause, resume, remove } = useDownloads(onError);
   const { history, taskHistory } = useSpeedHistory(tasks);
-  const styles = useStyles();
 
-  const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
+  // Network
+  const { adapters, refreshAdapters, toggleAdapter } = useNetwork(onError);
+
+  // UI state
+  const styles = useStyles();
   const [view, setView] = useState<ViewId>('all');
-  const [compactNav, setCompactNav] = useState(() => readPref('cfx.compactNav', window.innerWidth < 1100));
-  const [detailsOpen, setDetailsOpen] = useState(() => readPref('cfx.details', true));
-  const [speedUnit, setSpeedUnit] = useState<SpeedUnit>(() => localStorage.getItem('cfx.speedUnit') === 'bits' ? 'bits' : 'bytes');
+  const [compactNav, setCompactNav] = usePref('cfx.compactNav', window.innerWidth < 1100);
+  const [detailsOpen, setDetailsOpen] = usePref('cfx.details', true);
+  const [speedUnit, setSpeedUnit] = useState<SpeedUnit>(() =>
+    localStorage.getItem('cfx.speedUnit') === 'bits' ? 'bits' : 'bytes'
+  );
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortState>({ key: 'added', direction: 'descending' });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [downloadDialogs, setDownloadDialogs] = useState<DownloadQueue>({ current: null, queued: [] });
   const downloadDialogsRef = useRef(downloadDialogs);
   const dialogOpenRef = useRef(false);
+
   const updateDownloadDialogs = useCallback((update: (state: DownloadQueue) => DownloadQueue) => {
     const next = update(downloadDialogsRef.current);
     downloadDialogsRef.current = next;
     if (next.current) dialogOpenRef.current = true;
     setDownloadDialogs(next);
   }, []);
+
   const addOpen = downloadDialogs.current !== null;
   const addUrl = downloadDialogs.current?.payload.url ?? '';
   const addFilename = downloadDialogs.current?.payload.filename ?? null;
@@ -208,9 +235,17 @@ export const App: React.FC = () => {
   const [removeIds, setRemoveIds] = useState<string[]>([]);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => localStorage.setItem('cfx.compactNav', compactNav ? '1' : '0'), [compactNav]);
-  useEffect(() => localStorage.setItem('cfx.details', detailsOpen ? '1' : '0'), [detailsOpen]);
-  useEffect(() => localStorage.setItem('cfx.speedUnit', speedUnit), [speedUnit]);
+  useEffect(() => {
+    localStorage.setItem('cfx.speedUnit', speedUnit);
+  }, [speedUnit]);
+
+  // One-time startup notices
+  useEffect(() => {
+    settingsApi
+      .takeStartupNotices()
+      .then((notices) => notices.forEach((n) => notify('warning', n)))
+      .catch((e) => console.error('Failed to read startup notices:', e));
+  }, [notify]);
 
   // One-time announcement for browser integration in 0.2.0
   useEffect(() => {
@@ -252,24 +287,6 @@ export const App: React.FC = () => {
     }
   }, [dispatchToast]);
 
-  const refreshAdapters = useCallback(() => {
-    api
-      .discoverAdapters()
-      .then(setAdapters)
-      .catch((e) => onError(`Failed to discover network adapters: ${errorText(e)}`));
-  }, [onError]);
-  useEffect(refreshAdapters, [refreshAdapters]);
-
-  useEffect(() => {
-    const unlisten = listen<AdapterInfo[]>(NETWORK_ADAPTERS_CHANGED_EVENT, (event) => {
-      setAdapters(event.payload);
-    });
-    unlisten.catch((e) => console.error('Failed to listen for network changes:', e));
-    return () => {
-      unlisten.then((fn) => fn()).catch(() => undefined);
-    };
-  }, []);
-
   const removeTasks = tasks.filter((t) => removeIds.includes(t.id));
   const removeOpen = removeTasks.length > 0;
 
@@ -280,79 +297,86 @@ export const App: React.FC = () => {
     }
   }, [addOpen, removeOpen, updateDownloadDialogs]);
 
-  const dismissRequest = useCallback((request: DownloadRequest) => {
-    if (request.payload.handoff_id) {
-      api.dismissExternalDownload(request.payload.handoff_id)
-        .catch((error) => onError(errorText(error)));
-    }
-  }, [onError]);
+  const dismissRequest = useCallback(
+    (request: DownloadRequest) => {
+      if (request.payload.handoff_id) {
+        downloadsApi
+          .dismissExternalDownload(request.payload.handoff_id)
+          .catch((error) => onError(String(error)));
+      }
+    },
+    [onError]
+  );
 
   const openAdd = useCallback(
     (url = '', filename: string | null = null, headers: RequestHeaders | null = null) => {
       if (dialogOpenRef.current) return;
       refreshAdapters();
-      const request = { id: crypto.randomUUID(), payload: { url, filename, headers } };
+      const request: DownloadRequest = { id: crypto.randomUUID(), payload: { url, filename, headers } };
       dialogOpenRef.current = true;
       updateDownloadDialogs((state) => enqueueDownload(state, request, false));
     },
     [refreshAdapters, updateDownloadDialogs]
   );
 
-  const handleExternalDownload = useCallback((payload: ExternalDownloadPayload) => {
-    refreshAdapters();
-    const request = { id: crypto.randomUUID(), payload };
-    const blocked = dialogOpenRef.current;
-    if (blocked) notify('info', 'Queued link: ' + (payload.filename || payload.url));
-    // The ref is updated synchronously: consecutive native events cannot overwrite each other.
-    updateDownloadDialogs((state) => enqueueDownload(state, request, blocked));
-  }, [refreshAdapters, notify, updateDownloadDialogs]);
+  const handleExternalDownload = useCallback(
+    (payload: ExternalDownloadPayload) => {
+      refreshAdapters();
+      const request: DownloadRequest = { id: crypto.randomUUID(), payload };
+      const blocked = dialogOpenRef.current;
+      if (blocked) notify('info', 'Queued link: ' + (payload.filename || payload.url));
+      updateDownloadDialogs((state) => enqueueDownload(state, request, blocked));
+    },
+    [refreshAdapters, notify, updateDownloadDialogs]
+  );
 
-  const handleAdvanceOrClose = useCallback((requestId: string, accepted = false) => {
-    const current = downloadDialogsRef.current.current;
-    if (current?.id !== requestId) return;
-    if (!accepted) dismissRequest(current);
-    updateDownloadDialogs((state) => advanceDownload(state, requestId));
-    dialogOpenRef.current = downloadDialogsRef.current.current !== null;
-    if (!dialogOpenRef.current) document.getElementById(GRID_ID)?.focus();
-  }, [dismissRequest, updateDownloadDialogs]);
+  const handleAdvanceOrClose = useCallback(
+    (requestId: string, accepted = false) => {
+      const current = downloadDialogsRef.current.current;
+      if (current?.id !== requestId) return;
+      if (!accepted) dismissRequest(current);
+      updateDownloadDialogs((state) => advanceDownload(state, requestId));
+      dialogOpenRef.current = downloadDialogsRef.current.current !== null;
+      if (!dialogOpenRef.current) document.getElementById(GRID_ID)?.focus();
+    },
+    [dismissRequest, updateDownloadDialogs]
+  );
 
   const handleCancelAll = useCallback(() => {
     const state = downloadDialogsRef.current;
-    for (const request of [...(state.current ? [state.current] : []), ...state.queued]) dismissRequest(request);
+    for (const request of [...(state.current ? [state.current] : []), ...state.queued]) {
+      dismissRequest(request);
+    }
     updateDownloadDialogs(() => ({ current: null, queued: [] }));
     dialogOpenRef.current = false;
     document.getElementById(GRID_ID)?.focus();
   }, [dismissRequest, updateDownloadDialogs]);
 
   useEffect(() => {
-    api
+    downloadsApi
       .takePendingDownload()
-      .then((pending) => {
-        if (pending) {
-          handleExternalDownload(pending);
-        }
+      .then((payload) => {
+        if (payload) handleExternalDownload(payload);
       })
       .catch((e) => console.error('Failed to take pending download:', e));
 
-    const unlisten = listen<ExternalDownloadPayload>(EXTERNAL_DOWNLOAD_EVENT, (event) => {
-      handleExternalDownload(event.payload);
+    const cleanupPromise = downloadsApi.onExternalDownload((payload) => {
+      handleExternalDownload(payload);
     });
-    unlisten.catch((e) => console.error('Failed to listen for external downloads:', e));
+
     return () => {
-      unlisten.then((fn) => fn()).catch(() => undefined);
+      cleanupPromise.then((unlisten) => unlisten());
     };
   }, [handleExternalDownload]);
 
   const openAbout = useCallback(() => {
     setView('settings');
     setSelected(new Set());
-    // The Settings page mounts on the next render; scroll to its About section after that.
     setTimeout(() => document.getElementById('settings-about')?.scrollIntoView({ block: 'start' }), 50);
   }, []);
 
-  // The quiet startup check found a newer version: tell the user, don't interrupt them.
   useEffect(() => {
-    const unlisten = listen<UpdateInfo>(UPDATE_AVAILABLE_EVENT, (event) => {
+    const cleanupPromise = settingsApi.onUpdateAvailable((payload: UpdateInfo) => {
       dispatchToast(
         <InteractiveToast>
           <ToastTitle
@@ -377,19 +401,18 @@ export const App: React.FC = () => {
             Update available
           </ToastTitle>
           <ToastBody subtitle="Open Settings → About & Updates to install it.">
-            Conflux {event.payload.version} is ready to download.
+            Conflux {payload.version} is ready to download.
           </ToastBody>
         </InteractiveToast>,
         { intent: 'info', timeout: 15000 }
       );
     });
-    unlisten.catch((e) => console.error('Failed to listen for updates:', e));
+
     return () => {
-      unlisten.then((fn) => fn()).catch(() => undefined);
+      cleanupPromise.then((unlisten) => unlisten());
     };
   }, [dispatchToast, openAbout]);
 
-  // ─── Derived lists ───
   const counts = useMemo(
     () => ({
       all: tasks.length,
@@ -412,23 +435,20 @@ export const App: React.FC = () => {
     return sortTasks(filtered, sort);
   }, [tasks, view, search, sort]);
 
-  // Selection is always a subset of what's visible.
-  const selectedTasks = visible.filter((t) => selected.has(t.id));
-  const single = selectedTasks.length === 1 ? selectedTasks[0] : null;
   const totalSpeed = tasks.reduce((s, t) => s + (t.status === 'downloading' ? t.speed_bytes_sec : 0), 0);
 
-  const idsWhere = (list: DownloadTask[], pred: (t: DownloadTask) => boolean) => list.filter(pred).map((t) => t.id);
-  const isResumable = (t: DownloadTask) => t.status === 'paused' || t.status === 'error';
-  const isRunning = (t: DownloadTask) => t.status === 'downloading';
-
-  // ─── Actions ───
   const actions: RowActions = {
-    onOpen: (t) => api.openFile(t.id).catch((e) => onError(`Couldn't open ${t.filename}: ${errorText(e)}`)),
-    onReveal: (t) => api.revealFile(t.id).catch((e) => onError(`Couldn't show ${t.filename}: ${errorText(e)}`)),
+    onOpen: (t) =>
+      downloadsApi.openFile(t.id).catch((err) => onError(`Couldn't open ${t.filename}: ${String(err)}`)),
+    onReveal: (t) =>
+      downloadsApi.revealFile(t.id).catch((err) => onError(`Couldn't show ${t.filename}: ${String(err)}`)),
     onResume: (ids) => ids.length > 0 && resume(ids),
     onPause: (ids) => ids.length > 0 && pause(ids),
     onRemove: (ids) => {
-      if (ids.length > 0) { dialogOpenRef.current = true; setRemoveIds(ids); }
+      if (ids.length > 0) {
+        dialogOpenRef.current = true;
+        setRemoveIds(ids);
+      }
     },
     onCopyLink: (list) =>
       copyText(list.map((t) => t.url).join('\n')).then(() =>
@@ -439,13 +459,11 @@ export const App: React.FC = () => {
 
   const copy = (text: string, what: string) => copyText(text).then(() => notify('success', `${what} copied`));
 
-  // ─── Global keyboard shortcuts & paste-to-add ───
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       const dialogOpen = addOpen || removeIds.length > 0;
       if (dialogOpen && e.ctrlKey && (key === 'n' || key === 'f')) {
-        // A dialog owns the keyboard; don't reset its form or move focus behind it.
         e.preventDefault();
       } else if (e.ctrlKey && key === 'n') {
         e.preventDefault();
@@ -455,7 +473,6 @@ export const App: React.FC = () => {
         setView((v) => (v === 'network' || v === 'settings' ? 'all' : v));
         setTimeout(() => searchRef.current?.focus());
       } else if (e.key === 'F5' || (e.ctrlKey && key === 'r')) {
-        // Never reload the webview; refresh adapters instead.
         e.preventDefault();
         refreshAdapters();
       }
@@ -470,7 +487,6 @@ export const App: React.FC = () => {
         notify('info', 'The clipboard does not contain a link');
       }
     };
-    // Suppress the browser's context menu outside text fields; our own menus handle right-click.
     const onContext = (e: MouseEvent) => {
       if (!isEditable(e.target)) e.preventDefault();
     };
@@ -484,22 +500,20 @@ export const App: React.FC = () => {
     };
   }, [addOpen, removeIds, openAdd, refreshAdapters, notify]);
 
-  // Download history could not be saved (e.g. disk full): shown until a save succeeds.
   const [historyError, setHistoryError] = useState<string | null>(null);
   useEffect(() => {
-    const unlisten = listen<string | null>(HISTORY_STATUS_EVENT, (event) => setHistoryError(event.payload));
-    unlisten.catch((e) => console.error('Failed to listen for history status:', e));
+    const cleanupPromise = downloadsApi.onHistoryStatus((status) => {
+      setHistoryError(status);
+    });
     return () => {
-      unlisten.then((fn) => fn()).catch(() => undefined);
+      cleanupPromise.then((unlisten) => unlisten());
     };
   }, []);
 
-  // ─── System tray context menu events ───
+  // System tray context menu events
   useEffect(() => {
     const unlistenAdd = listen('open-add-dialog', () => openAdd());
     const unlistenSettings = listen('open-settings', () => setView('settings'));
-    unlistenAdd.catch((e) => console.error('Failed to listen for open-add-dialog:', e));
-    unlistenSettings.catch((e) => console.error('Failed to listen for open-settings:', e));
     return () => {
       unlistenAdd.then((fn) => fn()).catch(() => undefined);
       unlistenSettings.then((fn) => fn()).catch(() => undefined);
@@ -513,17 +527,6 @@ export const App: React.FC = () => {
     notify('success', `Downloading ${task.filename}`);
   };
 
-  const handleToggleAdapter = useCallback(
-    (id: string, enabled: boolean) => {
-      setAdapters((prev) => prev.map((a) => (a.id === id ? { ...a, enabled } : a)));
-      api.setAdapterEnabled(id, enabled).catch((e) => {
-        onError(`Failed to update adapter: ${errorText(e)}`);
-        refreshAdapters();
-      });
-    },
-    [onError, refreshAdapters]
-  );
-
   const chunkColors = useMemo(
     () =>
       dark
@@ -536,10 +539,6 @@ export const App: React.FC = () => {
   const empty = emptyStates[view as keyof typeof emptyStates];
 
   return (
-    // Layout lives on an inner div: FluentProvider's className is also applied to portal
-    // mount nodes (menus, dialogs, toasts), which must not become full-screen boxes.
-    // FluentProvider paints an opaque background by default, which would hide the window
-    // material; the root below paints `--cfx-window` instead.
     <FluentProvider
       theme={dark ? darkTheme : lightTheme}
       customStyleHooks_unstable={windowsControlStyleHooks}
@@ -551,107 +550,65 @@ export const App: React.FC = () => {
         <div className={styles.body}>
           <NavPane
             view={view}
-            onSelect={(v) => {
+            onSelect={(v: ViewId) => {
               setView(v);
               setSelected(new Set());
             }}
             counts={counts}
             compact={compactNav}
-            onToggleCompact={() => setCompactNav((c) => !c)}
+            onToggleCompact={() => setCompactNav(!compactNav)}
           />
           <main className={styles.layer}>
             <div key={isListView ? 'downloads' : view} className={styles.viewContainer}>
               {isListView && (
-                <>
-                  <CommandBar
-                    canResume={selectedTasks.some(isResumable)}
-                    canPause={selectedTasks.some(isRunning)}
-                    canRemove={selectedTasks.length > 0}
-                    canOpen={single?.status === 'completed'}
-                    canReveal={!!single}
-                    canCopyLink={selectedTasks.length > 0}
-                    anyPaused={tasks.some(isResumable)}
-                    anyActive={tasks.some(isRunning)}
-                    anyCompleted={counts.completed > 0}
-                    onAdd={() => openAdd()}
-                    onResume={() => resume(idsWhere(selectedTasks, isResumable))}
-                    onPause={() => pause(idsWhere(selectedTasks, isRunning))}
-                    onRemove={() => setRemoveIds(selectedTasks.map((t) => t.id))}
-                    onOpen={() => single && actions.onOpen(single)}
-                    onReveal={() => single && actions.onReveal(single)}
-                    onCopyLink={() => actions.onCopyLink(selectedTasks)}
-                    onResumeAll={() => resume(idsWhere(tasks, isResumable))}
-                    onPauseAll={() => pause(idsWhere(tasks, isRunning))}
-                    onClearCompleted={() =>
-                      remove(
-                        idsWhere(tasks, (t) => t.status === 'completed'),
-                        false
-                      )
-                    }
-                    search={search}
-                    onSearch={setSearch}
-                    searchRef={searchRef}
-                    detailsOpen={detailsOpen}
-                    onToggleDetails={() => setDetailsOpen((d) => !d)}
-                  />
-                  {historyError && (
-                    <MessageBar intent="warning" layout="multiline">
-                      <MessageBarBody>{historyError}</MessageBarBody>
-                    </MessageBar>
-                  )}
-                  <div className={styles.content}>
-                    <div className={styles.list}>
-                      <DownloadTable
-                        speedUnit={speedUnit}
-                        tasks={visible}
-                        sort={sort}
-                        onSort={setSort}
-                        selected={selected}
-                        onSelectionChange={setSelected}
-                        actions={actions}
-                        onRowClick={() => setDetailsOpen(true)}
-                        emptyState={search.trim() ? (
-                          <EmptyState icon={Search48Regular} title="No matches" body={`Nothing matches "${search.trim()}".`} />
-                        ) : (
-                          <EmptyState
-                            {...empty}
-                            onAdd={view === 'all' || view === 'active' ? () => openAdd() : undefined}
-                          />
-                        )}
-                      />
-                    </div>
-                    {detailsOpen && single && (
-                      <DetailsPane
-                        speedUnit={speedUnit}
-                        task={single}
-                        adapters={adapters}
-                        speedHistory={taskHistory}
-                        dark={dark}
-                        chunkColors={chunkColors}
-                        onResume={(ids) => resume(ids)}
-                        onPause={(ids) => pause(ids)}
-                        onOpen={actions.onOpen}
-                        onReveal={actions.onReveal}
-                        onCopy={copy}
-                        onClose={() => setDetailsOpen(false)}
-                      />
-                    )}
-                  </div>
-                </>
+                <DownloadsView
+                  tasks={tasks}
+                  visible={visible}
+                  counts={counts}
+                  selected={selected}
+                  onSelectionChange={setSelected}
+                  sort={sort}
+                  onSort={setSort}
+                  speedUnit={speedUnit}
+                  detailsOpen={detailsOpen}
+                  onToggleDetails={() => setDetailsOpen(!detailsOpen)}
+                  search={search}
+                  onSearch={setSearch}
+                  searchRef={searchRef}
+                  historyError={historyError}
+                  adapters={adapters}
+                  taskHistory={taskHistory}
+                  dark={dark}
+                  chunkColors={chunkColors}
+                  actions={actions}
+                  view={view}
+                  emptyState={empty}
+                  onAdd={() => openAdd()}
+                  onResume={(ids) => resume(ids)}
+                  onPause={(ids) => pause(ids)}
+                  onRemove={(ids) => setRemoveIds(ids)}
+                  onClearCompleted={() =>
+                    remove(
+                      tasks.filter((t) => t.status === 'completed').map((t) => t.id),
+                      false
+                    )
+                  }
+                  copy={copy}
+                />
               )}
               {view === 'network' && (
-                <NetworkPage
+                <NetworkView
                   speedUnit={speedUnit}
                   adapters={adapters}
                   tasks={tasks}
                   history={history}
                   dark={dark}
                   onRefresh={refreshAdapters}
-                  onToggleAdapter={handleToggleAdapter}
+                  onToggleAdapter={toggleAdapter}
                 />
               )}
               {view === 'settings' && (
-                <SettingsPage
+                <SettingsView
                   settings={settings}
                   loaded={settingsLoaded}
                   onChange={updateSettings}

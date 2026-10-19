@@ -1,3 +1,4 @@
+// src/utils/fileTypes.ts
 /** Visual categories for downloaded filenames; no filesystem or platform lookup is needed. */
 export type FileKind = 'generic' | 'archive' | 'application' | 'disk' | 'image' | 'video' | 'audio'
   | 'pdf' | 'document' | 'spreadsheet' | 'presentation' | 'text' | 'code' | 'font' | 'ebook' | 'database';

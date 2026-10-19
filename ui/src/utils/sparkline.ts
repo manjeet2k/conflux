@@ -1,3 +1,4 @@
+// src/utils/sparkline.ts
 export const SPEED_HISTORY_CAPACITY = 60;
 
 const MINIMUM_SPEED_CEILING = 1024 * 1024;

@@ -13,7 +13,7 @@ bin/
 *.dll
 
 # Conflux temporary files, active downloads, and sparse files
-downloads/
+/downloads/
 temp/
 *.tmp
 *.conflux.json

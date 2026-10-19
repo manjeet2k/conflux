@@ -1,3 +1,4 @@
+// src/utils/status.ts
 import type { TaskStatus } from '../types';
 
 export const statusText: Record<TaskStatus, string> = {

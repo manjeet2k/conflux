@@ -1,3 +1,4 @@
+// src/hooks/useWindowTheme.ts
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import type { Backdrop, ThemePreference } from '../types';

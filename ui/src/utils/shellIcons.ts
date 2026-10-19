@@ -1,3 +1,4 @@
+// src/utils/shellIcons.ts
 import { api } from '../api';
 
 // A promise is shared while it is pending, so a list of the same type makes one IPC call.

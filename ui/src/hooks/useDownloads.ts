@@ -1,3 +1,4 @@
+// src/hooks/useDownloads.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { api } from '../api';

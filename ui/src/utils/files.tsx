@@ -1,3 +1,4 @@
+// src/utils/files.tsx
 /** Copies text, falling back to execCommand where the async clipboard API is unavailable. */
 export async function copyText(text: string): Promise<void> {
   try {

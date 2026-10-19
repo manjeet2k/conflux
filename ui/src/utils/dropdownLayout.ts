@@ -1,3 +1,4 @@
+// src/utils/dropdownLayout.ts
 /** WinUI rounds each layout measurement to device pixels, including item margins. */
 export function dropdownLayout(scale: number, index: number, count: number) {
   const snap = (dip: number) => Math.round(dip * scale) / scale;

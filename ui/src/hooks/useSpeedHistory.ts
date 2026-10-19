@@ -1,3 +1,4 @@
+// src/hooks/useSpeedHistory.ts
 import { useEffect, useRef, useState } from 'react';
 import type { DownloadTask } from '../types';
 

@@ -1,3 +1,4 @@
+// src/hooks/useSettings.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import type { Settings } from '../types';

@@ -1,7 +1,5 @@
-import type { ExternalDownloadPayload } from '../types';
-
-export interface DownloadRequest { id: string; payload: ExternalDownloadPayload }
-export interface DownloadQueue { current: DownloadRequest | null; queued: DownloadRequest[] }
+// src/utils/downloadQueue.ts
+import type { DownloadQueue, DownloadRequest } from '@/features/downloads/types/downloads.types';
 
 export function enqueueDownload(state: DownloadQueue, request: DownloadRequest, blocked: boolean): DownloadQueue {
   return !state.current && !blocked
@@ -18,3 +16,9 @@ export function presentQueuedDownload(state: DownloadQueue): DownloadQueue {
   if (state.current || state.queued.length === 0) return state;
   return { current: state.queued[0], queued: state.queued.slice(1) };
 }
+
+export const ManageQueueUseCase = {
+  enqueue: enqueueDownload,
+  advance: advanceDownload,
+  presentQueued: presentQueuedDownload,
+};

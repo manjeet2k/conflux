@@ -27,7 +27,7 @@ const useStyles = makeStyles({
   speed: { display: 'inline-flex', alignItems: 'center', gap: '4px' },
 });
 
-interface StatusBarProps {
+export interface StatusBarProps {
   speedUnit: SpeedUnit;
   onSpeedUnitChange: (unit: SpeedUnit) => void;
   active: number;

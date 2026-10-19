@@ -1,3 +1,4 @@
+// src/utils/formatters.ts
 export function formatBytes(bytes: number, decimals = 1): string {
   if (!Number.isFinite(bytes)) return '--';
   const sign = bytes < 0 ? '-' : '';
