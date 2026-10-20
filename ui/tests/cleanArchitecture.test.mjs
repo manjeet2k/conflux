@@ -11,7 +11,7 @@ function loadModule(relativePath, customRequire = () => ({})) {
   const output = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  vm.runInNewContext(output, { module, exports: module.exports, require: customRequire });
+  vm.runInNewContext(output, { module, exports: module.exports, require: customRequire, URL });
   return module.exports;
 }
 

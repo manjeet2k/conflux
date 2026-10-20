@@ -1,6 +1,6 @@
 // src/features/downloads/components/SpeedSparkline.tsx
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { buildSmoothPath, dampCeiling, normalizeSpeedSamples, speedWindowStats } from '../utils/sparkline';
+import { buildSmoothPath, dampCeiling, normalizeSpeedSamples, speedWindowStats } from '@/utils/sparkline';
 import './SpeedSparkline.css';
 
 /** Animate only a changed scale; paused graphs do no frame-by-frame work. */

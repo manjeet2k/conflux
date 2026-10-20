@@ -13,13 +13,9 @@ import {
   HISTORY_STATUS_EVENT,
 } from '@/utils/events.constants';
 
-export interface StartDownloadArgs {
-  url: string;
-  saveDir: string;
-  filename: string | null;
-  headers?: RequestHeaders | null;
-  handoffId?: string | null;
-}
+import type { StartDownloadParams } from '../utils/downloadValidation';
+
+export type StartDownloadArgs = StartDownloadParams;
 
 /**
  * Downloads API

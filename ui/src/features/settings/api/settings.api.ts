@@ -49,11 +49,7 @@ export const settingsApi = {
   getBrowserIntegrationStatus: () =>
     invoke<BrowserIntegrationStatus>('get_browser_integration_status'),
 
-  registerBrowserIntegration: () =>
-    invoke<BrowserIntegrationStatus>('register_browser_integration'),
-
-  unregisterBrowserIntegration: () =>
-    invoke<BrowserIntegrationStatus>('unregister_browser_integration'),
+  registerBrowserExtension: () => invoke<void>('register_browser_extension'),
 
   onUpdateAvailable: (callback: (info: UpdateInfo) => void) =>
     listen<UpdateInfo>(UPDATE_AVAILABLE_EVENT, (event) => callback(event.payload)),

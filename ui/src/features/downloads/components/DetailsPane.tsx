@@ -15,9 +15,9 @@ import { formatBytes, formatDate, formatDuration, formatEta, formatSpeed, progre
 import type { SpeedUnit } from '@/utils/formatters';
 import { fileKind, fileTypeLabels } from '@/utils/fileTypes';
 import { adapterColor, adapterProblem } from '@/features/network/utils/adapters';
-import { speedWindowStats } from '../utils/sparkline';
-import { FileIcon } from '@/components/ui/FileIcon';
-import { StatusLabel } from '@/components/ui/StatusLabel';
+import { speedWindowStats } from '@/utils/sparkline';
+import { FileIcon } from '@/components/FileIcon';
+import { StatusLabel } from '@/components/StatusLabel';
 import { DownloadProgress } from './DownloadProgress';
 import { ChunkMap } from './ChunkMap';
 import type { ChunkMapColors } from './ChunkMap';

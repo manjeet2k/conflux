@@ -12,7 +12,13 @@ function load() {
   const source = fs.readFileSync(new URL('../src/utils/shellIcons.ts', import.meta.url), 'utf8');
   const output = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   vm.runInNewContext(output, {
-    module, exports: module.exports, require: () => ({ api }),
+    module, exports: module.exports, require: (name) => {
+      assert.equal(name, '@tauri-apps/api/core');
+      return { invoke: (command, { extension, folder }) => {
+        assert.equal(command, 'get_shell_icon');
+        return api.getShellIcon(extension, folder);
+      } };
+    },
     console: { warn() {} }, Uint8ClampedArray,
     ImageData: class { constructor(data, width, height) { Object.assign(this, { data, width, height }); } },
     document: { createElement: () => ({ getContext: () => ({ putImageData: data => rendered.push(data) }), toDataURL: () => 'data:image/png;native-icon' }) },

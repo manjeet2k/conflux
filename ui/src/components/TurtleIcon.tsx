@@ -1,3 +1,4 @@
+// src/components/ui/TurtleIcon.tsx
 import React from 'react';
 
 export interface TurtleIconProps {
@@ -8,7 +9,12 @@ export interface TurtleIconProps {
   style?: React.CSSProperties;
 }
 
-/** Outlined at full speed; warm shell and green body when slow mode is on. */
+/**
+ * TurtleIcon
+ *
+ * SVG icon representing full-speed vs. throttled "slow mode" downloading.
+ * Features distinct fill layers for shell and body when active.
+ */
 export const TurtleIcon: React.FC<TurtleIconProps> = ({
   active = false,
   width = 32,

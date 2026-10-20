@@ -11,7 +11,7 @@ import {
   DialogTitle,
   Text,
 } from '@fluentui/react-components';
-import { FileIcon } from '@/components/ui/FileIcon';
+import { FileIcon } from '@/components/FileIcon';
 import type { DownloadTask } from '../types/downloads.types';
 
 interface RemoveDialogProps {

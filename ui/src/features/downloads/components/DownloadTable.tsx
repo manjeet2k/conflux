@@ -1,3 +1,4 @@
+import { GRID_ID } from '../utils/downloadGrid';
 // src/features/downloads/components/DownloadTable.tsx
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -31,10 +32,10 @@ import {
 import type { DownloadTask } from '../types/downloads.types';
 import { formatBytes, formatDate, formatEta, formatSpeed, progressOf } from '@/utils/formatters';
 import type { SpeedUnit } from '@/utils/formatters';
-import { FileIcon } from '@/components/ui/FileIcon';
-import { StatusLabel } from '@/components/ui/StatusLabel';
+import { FileIcon } from '@/components/FileIcon';
+import { StatusLabel } from '@/components/StatusLabel';
 import { DownloadProgress } from './DownloadProgress';
-import type { SortKey, SortState } from '../utils/sort';
+import type { SortKey, SortState } from '@/utils/sort';
 
 interface Column {
   key: SortKey;
@@ -47,7 +48,7 @@ interface Column {
 
 const NAME_MIN_WIDTH = 220;
 /** DOM id of the focusable grid, so callers can return focus to the list. */
-export const GRID_ID = 'download-grid';
+
 const columns: Column[] = [
   { key: 'name', label: 'Name' },
   { key: 'size', label: 'Size', width: 88, align: 'end', minListWidth: 640 },

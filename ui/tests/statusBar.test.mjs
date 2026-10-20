@@ -65,7 +65,7 @@ test('StatusBar renders bare tortoise toggle without dropdowns or labels', () =>
 });
 
 test('SettingsPage provides slow mode custom input field in MB/s with not-filled tortoise icon', () => {
-  const tsx = fs.readFileSync(new URL('../src/pages/SettingsPage.tsx', import.meta.url), 'utf8');
+  const tsx = fs.readFileSync(new URL('../src/features/settings/components/SettingsView.tsx', import.meta.url), 'utf8');
 
   // Verify SettingsCard with not-filled TurtleIcon
   assert.match(

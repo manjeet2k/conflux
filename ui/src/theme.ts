@@ -1,6 +1,6 @@
 import { createDarkTheme, createLightTheme, mergeClasses } from '@fluentui/react-components';
 import type { BrandVariants, ButtonState, FluentProviderProps, Theme } from '@fluentui/react-components';
-import type { Backdrop } from './types';
+import type { Backdrop } from '@/features/settings/types/settings.types';
 
 // Ramp around the Windows 11 default accent (#005FB8 light-mode accent fill at 80).
 const windowsBlue: BrandVariants = {

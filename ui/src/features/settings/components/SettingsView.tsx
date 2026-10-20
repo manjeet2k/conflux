@@ -17,11 +17,13 @@ import {
 import { open } from '@tauri-apps/plugin-dialog';
 import { downloadDir } from '@tauri-apps/api/path';
 import { getVersion } from '@tauri-apps/api/app';
-import { api, errorText } from '@/api';
+import { settingsApi } from '../api/settings.api';
+import { networkApi } from '@/features/network/api/network.api';
+import { errorText } from '@/utils/errors';
 import type { Backdrop, Settings, ThemePreference, UpdateInfo } from '../types/settings.types';
-import { Page, SectionHeader, SettingsCard } from '@/components/ui/Page';
-import { WindowsDropdown } from '@/components/ui/WindowsDropdown';
-import { TurtleIcon } from '@/components/ui/TurtleIcon';
+import { Page, SectionHeader, SettingsCard } from '@/components/Page';
+import { WindowsDropdown } from '@/components/WindowsDropdown';
+import { TurtleIcon } from '@/components/TurtleIcon';
 import chromeLogo from '@/assets/browsers/chrome.svg';
 import firefoxLogo from '@/assets/browsers/firefox.svg';
 
@@ -120,7 +122,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, loaded, on
     let current = true;
     downloadDir().then((d) => current && setOsDownloads(d)).catch(() => {});
     getVersion().then((v) => current && setVersion(v)).catch(() => {});
-    api
+    settingsApi
       .getBrowserIntegrationStatus()
       .then((s) => current && setBrowserHostRegistered(s.registered))
       .catch(() => current && setBrowserHostRegistered(false));
@@ -134,7 +136,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, loaded, on
     const dir = settings.default_save_dir;
     if (!dir) return;
     let current = true;
-    api
+    settingsApi
       .folderExists(dir)
       .then((exists) => current && setMissingDir(exists ? null : dir))
       .catch(() => current && setMissingDir(null));
@@ -148,7 +150,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, loaded, on
     setUpdateBusy('checking');
     setUpToDate(false);
     try {
-      const found = await api.checkForUpdate();
+      const found = await settingsApi.checkForUpdate();
       setUpdate(found);
       setUpToDate(found === null);
     } catch (e) {
@@ -162,7 +164,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, loaded, on
   const installUpdate = async () => {
     setUpdateBusy('installing');
     try {
-      await api.installUpdate();
+      await settingsApi.installUpdate();
     } catch (e) {
       onError(errorText(e));
     } finally {
@@ -171,12 +173,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, loaded, on
   };
 
   const openAbout = (target: 'licenses' | 'repo' | 'releases') => {
-    api.openAboutLink(target).catch((e) => onError(errorText(e)));
+    settingsApi.openAboutLink(target).catch((e) => onError(errorText(e)));
   };
 
   const copyDiagnostics = async () => {
     try {
-      const diagnostics = await api.getDiagnostics();
+      const diagnostics = await networkApi.getDiagnostics();
       await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2500);
@@ -186,7 +188,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, loaded, on
   };
 
   const openLogs = () => {
-    api.openLogsFolder().catch((e) => onError(`Couldn't open the log folder: ${errorText(e)}`));
+    networkApi.openLogsFolder().catch((e) => onError(`Couldn't open the log folder: ${errorText(e)}`));
   };
 
   const browse = async () => {
@@ -201,7 +203,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, loaded, on
   const handleRegisterHost = async () => {
     setRegisteringHost(true);
     try {
-      await api.registerBrowserExtension();
+      await settingsApi.registerBrowserExtension();
       setBrowserHostRegistered(true);
     } catch (e) {
       onError(`Failed to register browser host: ${errorText(e)}`);
@@ -280,6 +282,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, loaded, on
           description="Parallel connections opened on each network adapter (1–16). More helps on fast links; some servers limit connections."
         >
           <SpinButton
+            aria-label="Connections per adapter"
             value={settings.connections_per_adapter}
             min={1}
             max={16}
@@ -304,6 +307,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, loaded, on
             onChange={(_, d) => handleSlowModeMbChange(d.value)}
             onBlur={handleSlowModeMbBlur}
             contentAfter="MB/s"
+            aria-label="Slow mode speed limit in MB/s"
             style={{ width: 140 }}
           />
         </SettingsCard>
@@ -313,6 +317,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, loaded, on
           description="Windows notification when a download finishes"
         >
           <Switch
+            aria-label="Notifications"
             checked={settings.notify_on_complete}
             onChange={(_, d) => onChange({ notify_on_complete: d.checked })}
           />
@@ -322,7 +327,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, loaded, on
           title="Close button"
           description="Keep Conflux running in the notification area when the window is closed"
         >
-          <Switch checked={settings.close_to_tray} onChange={(_, d) => onChange({ close_to_tray: d.checked })} />
+          <Switch aria-label="Close to system tray" checked={settings.close_to_tray} onChange={(_, d) => onChange({ close_to_tray: d.checked })} />
         </SettingsCard>
       </div>
 
@@ -334,27 +339,42 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, loaded, on
           description="Use every active network adapter together on new downloads"
         >
           <Switch
+            aria-label="Aggregate all connections"
             checked={settings.auto_aggregate_adapters}
             onChange={(_, d) => onChange({ auto_aggregate_adapters: d.checked })}
           />
         </SettingsCard>
       </div>
 
-      <SectionHeader>Browser integration</SectionHeader>
+      <SettingsCard
+        icon={<ArrowSync20Regular />}
+        title="Check for updates on start"
+        description="Look for a new version shortly after Conflux starts. It only tells you; it never installs by itself. Contacts github.com and sends nothing else."
+      >
+        <Switch
+          aria-label="Check for updates on start"
+          checked={settings.check_updates_on_start}
+          onChange={(_, d) => onChange({ check_updates_on_start: d.checked })}
+          label={settings.check_updates_on_start ? 'On' : 'Off'}
+          labelPosition="before"
+        />
+      </SettingsCard>
+
+      <SectionHeader id="settings-browser">Browser integration</SectionHeader>
       <div className={styles.stack}>
         <SettingsCard
           icon={<img src={chromeLogo} alt="Chrome" className={styles.browserIcon} />}
           title="Chrome, Edge & Brave"
           description="Intercepts browser downloads and routes them to Conflux"
         >
-          <Button onClick={() => api.openAboutLink('extension-chrome')}>Get extension</Button>
+          <Button onClick={() => settingsApi.openAboutLink('extension-chrome')}>Get extension</Button>
         </SettingsCard>
         <SettingsCard
           icon={<img src={firefoxLogo} alt="Firefox" className={styles.browserIcon} />}
           title="Firefox"
           description="Intercepts browser downloads and routes them to Conflux"
         >
-          <Button onClick={() => api.openAboutLink('extension-firefox')}>Get add-on</Button>
+          <Button onClick={() => settingsApi.openAboutLink('extension-firefox')}>Get add-on</Button>
         </SettingsCard>
         <SettingsCard
           icon={<ArrowSync20Regular />}

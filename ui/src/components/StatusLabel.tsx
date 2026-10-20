@@ -1,3 +1,4 @@
+// src/components/ui/StatusLabel.tsx
 import React from 'react';
 import { makeStyles, tokens } from '@fluentui/react-components';
 import {
@@ -7,11 +8,16 @@ import {
   CheckmarkCircle16Filled,
   ErrorCircle16Filled,
 } from '@fluentui/react-icons';
-import type { TaskStatus } from '../types';
-import { statusText } from '../utils/status';
+import type { TaskStatus } from '@/features/downloads/types/downloads.types';
+import { statusText } from '@/utils/status';
 
 const useStyles = makeStyles({
-  root: { display: 'inline-flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' },
+  root: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    whiteSpace: 'nowrap',
+  },
   downloading: { color: tokens.colorBrandForeground1 },
   stopping: { color: tokens.colorPaletteMarigoldForeground1 },
   paused: { color: tokens.colorPaletteMarigoldForeground1 },
@@ -19,8 +25,18 @@ const useStyles = makeStyles({
   error: { color: tokens.colorPaletteRedForeground1 },
 });
 
-export const StatusLabel: React.FC<{ status: TaskStatus }> = ({ status }) => {
+export interface StatusLabelProps {
+  status: TaskStatus;
+}
+
+/**
+ * StatusLabel
+ *
+ * Visual indicator with matching icon and token color for download states.
+ */
+export const StatusLabel: React.FC<StatusLabelProps> = ({ status }) => {
   const styles = useStyles();
+
   const Icon = {
     downloading: ArrowCircleDown16Filled,
     stopping: PauseCircle16Regular,
@@ -28,6 +44,7 @@ export const StatusLabel: React.FC<{ status: TaskStatus }> = ({ status }) => {
     completed: CheckmarkCircle16Filled,
     error: ErrorCircle16Filled,
   }[status];
+
   return (
     <span className={styles.root}>
       <Icon className={styles[status]} />

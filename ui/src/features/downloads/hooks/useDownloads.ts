@@ -2,6 +2,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DownloadTask } from '../types/downloads.types';
 import { downloadsApi, type StartDownloadArgs } from '../api/downloads.api';
+import { downloadsRepository } from '../api/downloads.repository';
+import { StartDownloadUseCase } from '../utils/downloadValidation';
+
+const startDownload = new StartDownloadUseCase(downloadsRepository);
 
 export interface UseDownloadsReturn {
   tasks: DownloadTask[];
@@ -62,7 +66,9 @@ export function useDownloads(onError: (message: string) => void): UseDownloadsRe
 
   const start = useCallback(
     async (args: StartDownloadArgs) => {
-      const task = await downloadsApi.startDownload(args);
+      const result = await startDownload.execute(args);
+      if (!result.success) throw result.error;
+      const task = result.data;
       upsert(task, false);
       return task;
     },

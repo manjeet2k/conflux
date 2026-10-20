@@ -5,6 +5,8 @@ export type ThemePreference = 'system' | 'light' | 'dark';
 export type Backdrop = 'none' | 'mica' | 'acrylic' | 'mica_alt';
 
 export interface Settings {
+  /** On-disk schema version, owned by the backend. */
+  schema_version?: number;
   theme: ThemePreference;
   backdrop: Backdrop;
   default_save_dir: string | null;

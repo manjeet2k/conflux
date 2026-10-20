@@ -2,7 +2,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Settings } from '../types/settings.types';
 import { settingsApi } from '../api/settings.api';
-import { sanitizeSettings } from '../utils/settingsValidation';
+import { UpdateSettingsUseCase } from '../utils/settingsValidation';
+import { settingsRepository } from '../api/settings.repository';
+
+const updateSettings = new UpdateSettingsUseCase(settingsRepository);
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
@@ -75,11 +78,12 @@ export function useSettings(onError: (message: string) => void): UseSettingsRetu
 
       saveQueue.current = saveQueue.current
         .then(async () => {
-          const next: Settings = sanitizeSettings({
+          const result = await updateSettings.execute({
             ...(confirmed.current as Settings),
             ...patch,
           });
-          confirmed.current = await settingsApi.updateSettings(next);
+          if (!result.success) throw result.error;
+          confirmed.current = result.data;
         })
         .catch((e) => {
           onError(`Failed to save settings: ${String(e)}`);

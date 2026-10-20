@@ -1,17 +1,44 @@
 // src/features/downloads/components/DownloadsView.tsx
-import React from 'react';
+import React, { useMemo } from 'react';
 import { makeStyles, MessageBar, MessageBarBody } from '@fluentui/react-components';
-import { Search48Regular } from '@fluentui/react-icons';
+import { Search48Regular, ArrowDownload48Regular, CheckmarkCircle48Regular, ErrorCircle48Regular, PauseCircle48Regular } from '@fluentui/react-icons';
 import type { AdapterInfo } from '@/features/network/types/network.types';
 import type { DownloadTask, ViewId } from '../types/downloads.types';
-import type { ChunkMapColors } from './ChunkMap';
 import type { RowActions } from './DownloadTable';
-import type { SortState } from '../utils/sort';
+import type { SortState } from '@/utils/sort';
 import type { SpeedUnit } from '@/utils/formatters';
 import { CommandBar } from './CommandBar';
 import { DownloadTable } from './DownloadTable';
 import { DetailsPane } from './DetailsPane';
-import { EmptyState } from '@/components/ui/EmptyState';
+import { EmptyState } from '@/components/EmptyState';
+
+const emptyStates = {
+  all: {
+    icon: ArrowDownload48Regular,
+    title: 'No downloads yet',
+    body: 'Add a link, or copy one and press Ctrl+V anywhere in Conflux.',
+  },
+  active: {
+    icon: ArrowDownload48Regular,
+    title: 'Nothing downloading',
+    body: 'Active downloads show up here with live speed per adapter.',
+  },
+  paused: {
+    icon: PauseCircle48Regular,
+    title: 'No paused downloads',
+    body: 'Paused downloads keep their finished chunks and resume where they left off.',
+  },
+  completed: {
+    icon: CheckmarkCircle48Regular,
+    title: 'No completed downloads',
+    body: 'Finished files are verified with a SHA-256 checksum.',
+  },
+  failed: {
+    icon: ErrorCircle48Regular,
+    title: 'No failed downloads',
+    body: 'Downloads that fail after retries on every adapter appear here.',
+  },
+} as const;
 
 const useStyles = makeStyles({
   content: {
@@ -47,7 +74,7 @@ export interface DownloadsViewProps {
   onSort: (sort: SortState) => void;
   speedUnit: SpeedUnit;
   detailsOpen: boolean;
-  onToggleDetails: () => void;
+  onDetailsOpenChange: (open: boolean) => void;
   search: string;
   onSearch: (search: string) => void;
   searchRef?: React.RefObject<HTMLInputElement | null>;
@@ -55,14 +82,8 @@ export interface DownloadsViewProps {
   adapters: AdapterInfo[];
   taskHistory: Record<string, number[]>;
   dark: boolean;
-  chunkColors: ChunkMapColors;
   actions: RowActions;
   view: ViewId;
-  emptyState: {
-    icon: any;
-    title: string;
-    body: string;
-  };
   onAdd: () => void;
   onResume: (ids: string[]) => void;
   onPause: (ids: string[]) => void;
@@ -86,7 +107,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
   onSort,
   speedUnit,
   detailsOpen,
-  onToggleDetails,
+  onDetailsOpenChange,
   search,
   onSearch,
   searchRef,
@@ -94,10 +115,8 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
   adapters,
   taskHistory,
   dark,
-  chunkColors,
   actions,
   view,
-  emptyState,
   onAdd,
   onResume,
   onPause,
@@ -106,6 +125,14 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
   copy,
 }) => {
   const styles = useStyles();
+  const emptyState = view === 'network' || view === 'settings' ? emptyStates.all : emptyStates[view];
+  const chunkColors = useMemo(
+    () =>
+      dark
+        ? { done: '#60CDFF', active: '#C5A8F0', failed: '#FF99A4', pending: 'rgba(255,255,255,0.10)' }
+        : { done: '#005FB8', active: '#8764B8', failed: '#C42B1C', pending: 'rgba(0,0,0,0.08)' },
+    [dark]
+  );
 
   const selectedTasks = tasks.filter((t) => selected.has(t.id));
   const single = selectedTasks.length === 1 ? selectedTasks[0] : null;
@@ -136,7 +163,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
         onSearch={onSearch}
         searchRef={searchRef as React.RefObject<HTMLInputElement>}
         detailsOpen={detailsOpen}
-        onToggleDetails={onToggleDetails}
+        onToggleDetails={() => onDetailsOpenChange(!detailsOpen)}
       />
 
       {historyError && (
@@ -155,7 +182,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
             selected={selected}
             onSelectionChange={onSelectionChange}
             actions={actions}
-            onRowClick={() => onToggleDetails()}
+            onRowClick={() => onDetailsOpenChange(true)}
             emptyState={
               search.trim() ? (
                 <EmptyState
@@ -186,7 +213,7 @@ export const DownloadsView: React.FC<DownloadsViewProps> = ({
             onOpen={actions.onOpen}
             onReveal={actions.onReveal}
             onCopy={copy}
-            onClose={onToggleDetails}
+            onClose={() => onDetailsOpenChange(false)}
           />
         )}
       </div>

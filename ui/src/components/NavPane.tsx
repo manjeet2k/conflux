@@ -19,7 +19,7 @@ import {
   bundleIcon,
 } from '@fluentui/react-icons';
 import type { FluentIcon } from '@fluentui/react-icons';
-import type { ViewId } from '../types';
+import type { ViewId } from '@/features/downloads/types/downloads.types';
 
 const icons: Record<ViewId, FluentIcon> = {
   all: bundleIcon(Apps20Filled, Apps20Regular),

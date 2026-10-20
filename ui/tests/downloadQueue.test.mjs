@@ -1,3 +1,4 @@
+import { sourceLoader, jsx, react, fluent } from './helpers/loadSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -12,7 +13,7 @@ function load(source, require = () => { throw Error('Unexpected dependency'); })
   vm.runInNewContext(output, { module, exports: module.exports, require, URL });
   return module.exports;
 }
-const { enqueueDownload, advanceDownload, presentQueuedDownload } = load(new URL('../src/utils/downloadQueue.ts', import.meta.url));
+const { enqueueDownload, advanceDownload, presentQueuedDownload } = load(new URL('../src/features/downloads/utils/downloadQueue.ts', import.meta.url));
 const request = (id) => ({ id, payload: { url: 'https://example.com/' + id } });
 const empty = () => ({ current: null, queued: [] });
 
@@ -50,22 +51,19 @@ test('closing another modal presents queued downloads in order', () => {
   assert.equal(state.queued[0].id, 'B');
 });
 
-const jsx = (type, props, key) => ({ type, props, key });
-const react = { useState: (initial) => [initial, () => {}], useEffect: () => {} };
-const fluent = new Proxy({ makeStyles: () => () => ({}), tokens: {} }, { get: (object, key) => object[key] ?? key });
-const requireShim = (name) => {
-  if (name === 'react') return react;
-  if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx };
-  if (name === '@fluentui/react-components') return fluent;
-  if (name === '@fluentui/react-icons') return {};
-  if (name === '@tauri-apps/plugin-dialog') return { open: async () => null };
-  if (name === '@tauri-apps/api/path') return { downloadDir: async () => '/downloads' };
-  if (name === '../api') return { api: {}, errorText: String };
-  if (name === '../utils/formatters') return { formatBytes: String };
-  if (name === './FileIcon') return { FileIcon: 'FileIcon' };
-  throw Error('Unexpected dependency: ' + name);
-};
-const { AddDownloadDialog } = load(new URL('../src/components/AddDownloadDialog.tsx', import.meta.url), requireShim);
+const loadFeature = sourceLoader({
+  react,
+  'react/jsx-runtime': { jsx, jsxs: jsx },
+  '@fluentui/react-components': fluent,
+  '@fluentui/react-icons': {},
+  '@tauri-apps/plugin-dialog': { open: async () => null },
+  '@tauri-apps/api/path': { downloadDir: async () => '/downloads' },
+  '@tauri-apps/api/core': {},
+  '@tauri-apps/api/event': {},
+  '@/utils/formatters': { formatBytes: String },
+  '@/components/ui/FileIcon': { FileIcon: 'FileIcon' },
+});
+const { AddDownloadDialog } = loadFeature('features/downloads/components/AddDownloadDialog.tsx');
 const props = { open: true, requestId: 'A', initialUrl: 'https://example.com/A', defaultSaveDir: '/downloads', onStart: async () => {}, onClose: () => {} };
 
 test('actual Add form key is stable while the queue grows', () => {

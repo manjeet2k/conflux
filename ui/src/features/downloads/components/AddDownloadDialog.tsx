@@ -1,5 +1,5 @@
 // src/features/downloads/components/AddDownloadDialog.tsx
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import {
   Badge,
   Button,
@@ -19,12 +19,11 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { Folder20Regular, Link20Regular } from '@fluentui/react-icons';
-import { open } from '@tauri-apps/plugin-dialog';
-import { downloadDir } from '@tauri-apps/api/path';
-import { api, errorText } from '@/api';
-import type { ProbeResult, RequestHeaders } from '../types/downloads.types';
+import type { RequestHeaders } from '../types/downloads.types';
+import { useAddDownload } from '../hooks/useAddDownload';
+import type { StartDownloadParams } from '../utils/downloadValidation';
 import { formatBytes } from '@/utils/formatters';
-import { FileIcon } from '@/components/ui/FileIcon';
+import { FileIcon } from '@/components/FileIcon';
 
 const useStyles = makeStyles({
   surface: { width: '560px', maxWidth: 'calc(100vw - 48px)' },
@@ -45,23 +44,6 @@ const useStyles = makeStyles({
   folderInput: { flex: 1 },
 });
 
-const isHttpUrl = (s: string) => {
-  try {
-    const u = new URL(s.trim());
-    return u.protocol === 'http:' || u.protocol === 'https:';
-  } catch {
-    return false;
-  }
-};
-
-const sameOrigin = (a: string, b: string) => {
-  try {
-    return new URL(a.trim()).origin.toLowerCase() === new URL(b.trim()).origin.toLowerCase();
-  } catch {
-    return false;
-  }
-};
-
 interface AddDownloadDialogProps {
   open: boolean;
   requestId: string;
@@ -71,13 +53,7 @@ interface AddDownloadDialogProps {
   initialHeaders?: RequestHeaders | null;
   defaultSaveDir: string | null;
   queueCount?: number;
-  onStart: (args: {
-    url: string;
-    saveDir: string;
-    filename: string | null;
-    headers?: RequestHeaders | null;
-    handoffId?: string | null;
-  }) => Promise<void>;
+  onStart: (args: StartDownloadParams) => Promise<void>;
   onClose: (accepted?: boolean) => void;
   onCancelAll?: () => void;
 }
@@ -101,82 +77,13 @@ const AddDownloadForm: React.FC<AddDownloadDialogProps> = ({
   onCancelAll,
 }) => {
   const styles = useStyles();
-  const [url, setUrl] = useState(initialUrl);
-  // Outcome of the last finished probe, tagged with the URL it was for.
-  const [probeState, setProbeState] = useState<{ url: string; result?: ProbeResult; error?: string } | null>(null);
-  // null = not edited by the user -> follow the probe's suggestion.
-  const [filename, setFilename] = useState<string | null>(initialFilename ?? null);
-  const [saveDir, setSaveDir] = useState(defaultSaveDir ?? '');
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (defaultSaveDir) return;
-    downloadDir()
-      .then((dir) => setSaveDir((cur) => cur || dir))
-      .catch((e) => console.error('Failed to resolve Downloads folder:', e));
-  }, [defaultSaveDir]);
-
-  // Debounced probe: preview name, size and range support before starting. Results for a
-  // URL other than the current one are ignored, so stale responses never show.
-  const target = url.trim();
-  const targetValid = isHttpUrl(target);
-  // Only forward browser session cookies/headers if the target URL shares the same origin
-  // as the initial URL from the browser. This prevents accidental cookie leakage if the user
-  // edits the URL to point to a different host/domain.
-  const effectiveHeaders = initialHeaders && sameOrigin(initialUrl, target) ? initialHeaders : null;
-
-  useEffect(() => {
-    if (!targetValid) return;
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      api
-        .probeUrl(target, effectiveHeaders)
-        .then((result) => !cancelled && setProbeState({ url: target, result }))
-        .catch((e) => !cancelled && setProbeState({ url: target, error: errorText(e) }));
-    }, 450);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [target, targetValid, effectiveHeaders]);
-
-  const current = probeState?.url === target ? probeState : null;
-  const probe = current?.result ?? null;
-  const probeError = current?.error ?? null;
-  const probing = targetValid && !current;
-
-  const browse = async () => {
-    try {
-      const dir = await open({ directory: true, multiple: false, defaultPath: saveDir || undefined });
-      if (typeof dir === 'string') setSaveDir(dir);
-    } catch (e) {
-      console.error('Folder picker failed:', e);
-    }
-  };
-
-  const effectiveName = (filename ?? probe?.filename ?? '').trim();
-  const canSubmit = isHttpUrl(url) && saveDir.trim() !== '' && !submitting;
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canSubmit) return;
-    setSubmitting(true);
-    setSubmitError(null);
-    try {
-      await onStart({
-        url: url.trim(),
-        saveDir: saveDir.trim(),
-        filename: filename !== null && effectiveName ? effectiveName : null,
-        headers: effectiveHeaders,
-        handoffId: initialHandoffId ?? null,
-      });
-      onClose(true);
-    } catch (err) {
-      setSubmitError(errorText(err));
-      setSubmitting(false);
-    }
-  };
+  const {
+    url, setUrl, filename, setFilename, saveDir, setSaveDir, submitting,
+    submitError, effectiveName, canSubmit, probe, probeError, probing, browse, submit,
+  } = useAddDownload({
+    initialUrl, initialFilename, initialHeaders, initialHandoffId,
+    defaultSaveDir, onStart, onClose,
+  });
 
   return (
     <DialogSurface className={styles.surface}>

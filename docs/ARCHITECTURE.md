@@ -1,5 +1,41 @@
 # Conflux: Architecture & Channel Bonding Deep Dive
 
+## Desktop UI boundaries
+
+The React UI groups download, network, and settings code under `ui/src/features/`.
+Feature components own presentation; hooks own React state and event subscriptions.
+Download starts run through `StartDownloadUseCase`, and serialized settings saves run
+through `UpdateSettingsUseCase`. Both use repository interfaces returning `Result`;
+the adapters in each feature's `api/` directory translate throwing Tauri commands to
+that contract. The application layer preserves browser headers and handoff IDs and
+strips adapter overrides from general settings saves, since adapter toggles own them.
+
+`useAddDownload` owns the keyed dialog's form state, origin checks, debounced probes,
+and submission. Advancing the request key resets the form; arrivals in the queue do
+not reset edits. Cancelled probes cannot replace the current URL's preview, and
+browser session headers follow only URLs sharing the original origin.
+
+Shared controls live under `ui/src/components/ui/`. Components, hooks, and IPC types are imported directly from their owning
+modules. Forwarding-only entry points and feature barrels are removed; shared shell
+icon lookup invokes its native command directly. Event names live in `ui/src/utils/events.constants.ts` and retain
+the native `external-download` and `history-save-status` contracts. Tests load the
+production feature sources and verify those names against the Rust emitters.
+
+### App composition
+
+`App.tsx` composes the features and keeps the navigation and selection shared by
+navigation, download starts, and the active view. `app/AppShell.tsx` owns the themed
+window layout, navigation panel, status bar, and toaster. Download categories share
+the same view key so changing categories does not remount the table.
+
+Application hooks own global behavior: `useAppNotifications` handles startup and
+update toasts through `AppToast`; `useDesktopEvents` owns native subscriptions and
+cleanup; `useAppShortcuts` owns keyboard and clipboard listeners. Download-specific
+state stays with the feature: `useDownloadList` owns filtering, sorting, counts and
+details visibility, while `useDownloadDialogs` owns the handoff queue and modal
+exclusion. Its synchronous refs prevent consecutive browser requests from replacing
+the active form, and request identities reject stale completion callbacks.
+
 ## System Overview
 
 ```mermaid

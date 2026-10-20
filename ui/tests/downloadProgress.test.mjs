@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 
 test('DownloadProgress component defines vibrant pill hue-shift gradients and variants', () => {
-  const content = fs.readFileSync(new URL('../src/components/DownloadProgress.tsx', import.meta.url), 'utf8');
+  const content = fs.readFileSync(new URL('../src/features/downloads/components/DownloadProgress.tsx', import.meta.url), 'utf8');
 
   // Verify Option 1 Vibrant Pill Gradients (clean hue-shifts, reversed)
   assert.match(

@@ -3,8 +3,10 @@
 // main.tsx only imports it when running outside Tauri in dev mode.
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
-import type { AdapterInfo, Backdrop, Diagnostics, DownloadTask, Settings } from '../types';
-import { NETWORK_ADAPTERS_CHANGED_EVENT, PROGRESS_EVENT, UPDATE_AVAILABLE_EVENT } from '../types';
+import type { AdapterInfo, Diagnostics } from '@/features/network/types/network.types';
+import type { Backdrop, Settings } from '@/features/settings/types/settings.types';
+import type { DownloadTask } from '@/features/downloads/types/downloads.types';
+import { NETWORK_ADAPTERS_CHANGED_EVENT, PROGRESS_EVENT, UPDATE_AVAILABLE_EVENT } from '@/utils/events.constants';
 
 // Keep in sync with the real app version (Cargo.toml / tauri.conf.json / ui/package.json).
 const APP_VERSION = '0.2.0-beta.1';

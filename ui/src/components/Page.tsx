@@ -1,8 +1,12 @@
+// src/components/ui/Page.tsx
 import React from 'react';
 import { Caption1, Text, makeStyles, tokens } from '@fluentui/react-components';
 
 const useStyles = makeStyles({
-  scroller: { flex: 1, overflowY: 'auto' },
+  scroller: {
+    flex: 1,
+    overflowY: 'auto',
+  },
   inner: {
     maxWidth: '1000px',
     padding: '28px 36px 36px',
@@ -10,7 +14,12 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: '4px',
   },
-  titleRow: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' },
+  titleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    marginBottom: '20px',
+  },
   title: {
     flex: 1,
     fontSize: '28px',
@@ -33,10 +42,27 @@ const useStyles = makeStyles({
     border: '1px solid var(--cfx-stroke)',
     borderRadius: tokens.borderRadiusLarge,
   },
-  cardIcon: { fontSize: '20px', display: 'flex', color: tokens.colorNeutralForeground1, flexShrink: 0 },
-  cardText: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' },
-  muted: { color: tokens.colorNeutralForeground3 },
-  control: { flexShrink: 0, display: 'flex', alignItems: 'center', gap: '8px' },
+  cardIcon: {
+    fontSize: '20px',
+    display: 'flex',
+    color: tokens.colorNeutralForeground1,
+    flexShrink: 0,
+  },
+  cardText: {
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  muted: {
+    color: tokens.colorNeutralForeground3,
+  },
+  control: {
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
 });
 
 export const Page: React.FC<{ title: string; actions?: React.ReactNode; children: React.ReactNode }> = ({
@@ -45,6 +71,7 @@ export const Page: React.FC<{ title: string; actions?: React.ReactNode; children
   children,
 }) => {
   const styles = useStyles();
+
   return (
     <div className={styles.scroller}>
       <div className={styles.inner}>
@@ -62,6 +89,7 @@ export const Page: React.FC<{ title: string; actions?: React.ReactNode; children
 
 export const SectionHeader: React.FC<{ children: React.ReactNode; id?: string }> = ({ children, id }) => {
   const styles = useStyles();
+
   return (
     <Text as="h2" id={id} className={styles.section} block>
       {children}
@@ -69,7 +97,11 @@ export const SectionHeader: React.FC<{ children: React.ReactNode; id?: string }>
   );
 };
 
-/** Windows 11 Settings-style row: icon, title + description, control on the right. */
+/**
+ * SettingsCard
+ *
+ * Windows 11 style card component with left icon, stacked label, and right-aligned control.
+ */
 export const SettingsCard: React.FC<{
   icon?: React.ReactNode;
   title: React.ReactNode;
@@ -77,6 +109,7 @@ export const SettingsCard: React.FC<{
   children?: React.ReactNode;
 }> = ({ icon, title, description, children }) => {
   const styles = useStyles();
+
   return (
     <div className={styles.card}>
       {icon && <span className={styles.cardIcon}>{icon}</span>}

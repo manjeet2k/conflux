@@ -1,3 +1,4 @@
+// src/components/ui/EmptyState.tsx
 import React from 'react';
 import { Body1, Button, Subtitle1, makeStyles, tokens } from '@fluentui/react-components';
 import { Add20Regular } from '@fluentui/react-icons';
@@ -14,18 +15,40 @@ const useStyles = makeStyles({
     padding: '32px',
     textAlign: 'center',
   },
-  icon: { fontSize: '48px', color: tokens.colorNeutralForeground3, marginBottom: '8px' },
-  body: { color: tokens.colorNeutralForeground3, maxWidth: '380px' },
-  action: { marginTop: '12px' },
+  icon: {
+    fontSize: '48px',
+    color: tokens.colorNeutralForeground3,
+    marginBottom: '8px',
+  },
+  body: {
+    color: tokens.colorNeutralForeground3,
+    maxWidth: '380px',
+  },
+  action: {
+    marginTop: '12px',
+  },
 });
 
-export const EmptyState: React.FC<{ icon: FluentIcon; title: string; body: string; onAdd?: () => void }> = ({
+export interface EmptyStateProps {
+  icon: FluentIcon;
+  title: string;
+  body: string;
+  onAdd?: () => void;
+}
+
+/**
+ * EmptyState
+ *
+ * Generic presentation placeholder when lists or search queries have zero items.
+ */
+export const EmptyState: React.FC<EmptyStateProps> = ({
   icon: Icon,
   title,
   body,
   onAdd,
 }) => {
   const styles = useStyles();
+
   return (
     <div className={styles.root}>
       <Icon className={styles.icon} />

@@ -1,5 +1,7 @@
 // src/utils/shellIcons.ts
-import { api } from '../api';
+import { invoke } from '@tauri-apps/api/core';
+
+interface ShellIconPixels { width: number; height: number; rgba: number[] }
 
 // A promise is shared while it is pending, so a list of the same type makes one IPC call.
 const icons = new Map<string, Promise<string | null>>();
@@ -16,7 +18,7 @@ export function shellIconUrl(extension: string | null, folder: boolean): Promise
   const key = folder ? 'folder' : 'file:' + (extension ?? '');
   const cached = icons.get(key);
   if (cached) return cached;
-  const pending = api.getShellIcon(extension, folder).then(icon => {
+  const pending = invoke<ShellIconPixels>('get_shell_icon', { extension, folder }).then(icon => {
     if (!icon || icon.width < 1 || icon.width > 256 || icon.height < 1 || icon.height > 256
       || icon.rgba.length !== icon.width * icon.height * 4) return null;
     const canvas = document.createElement('canvas');

@@ -15,7 +15,7 @@ function historyFor(initialTasks) {
   const effects = [];
   const intervals = new Map();
   const module = { exports: {} };
-  const source = fs.readFileSync(new URL('../src/hooks/useSpeedHistory.ts', import.meta.url), 'utf8');
+  const source = fs.readFileSync(new URL('../src/features/downloads/hooks/useSpeedHistory.ts', import.meta.url), 'utf8');
   const output = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;

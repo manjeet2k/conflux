@@ -1,5 +1,5 @@
 // src/utils/sort.ts
-import type { DownloadTask } from '../types';
+import type { DownloadTask } from '@/features/downloads/types/downloads.types';
 import { progressOf } from './formatters';
 
 export type SortKey = 'name' | 'size' | 'progress' | 'speed' | 'eta' | 'status' | 'added';

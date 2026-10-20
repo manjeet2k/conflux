@@ -1,3 +1,4 @@
+// src/components/ui/TitleBar.tsx
 import React, { useEffect, useState } from 'react';
 import { makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -39,29 +40,36 @@ const useStyles = makeStyles({
   inactive: { color: tokens.colorNeutralForegroundDisabled },
 });
 
-// Glyphs drawn to match Segoe Fluent Icons' ChromeMinimize/Maximize/Restore/Close at 10px.
 const MinimizeGlyph = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
     <path d="M0 5h10" stroke="currentColor" strokeWidth="1" />
   </svg>
 );
+
 const MaximizeGlyph = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
     <rect x="0.5" y="0.5" width="9" height="9" rx="1" fill="none" stroke="currentColor" />
   </svg>
 );
+
 const RestoreGlyph = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
     <rect x="0.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" />
     <path d="M2.5 2.5V1.5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-1" fill="none" stroke="currentColor" />
   </svg>
 );
+
 const CloseGlyph = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
     <path d="M0.5 0.5l9 9M9.5 0.5l-9 9" stroke="currentColor" strokeWidth="1" />
   </svg>
 );
 
+/**
+ * TitleBar
+ *
+ * Native Windows-styled custom chrome titlebar with caption control buttons and window drag region.
+ */
 export const TitleBar: React.FC = () => {
   const styles = useStyles();
   const [maximized, setMaximized] = useState(false);

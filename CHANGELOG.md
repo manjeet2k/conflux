@@ -14,6 +14,10 @@ All notable changes to Conflux are documented here. The format follows
 - Slow mode on the right of the bottom bar, with download metrics grouped on the left. The turtle toggle and speed selector share one continuous button surface; the selected cap appears only in its menu (1 MB/s by default). Changes apply immediately to active and future downloads across all adapters, and the preference is saved between launches.
 
 ### Fixed
+- Split the application root into a window shell, notification and desktop event hooks, shortcut handling, and download list/dialog hooks. Shared toast rendering removes repeated markup while preserving modal queueing, selection, and category view identity.
+- Removed forwarding-only UI modules and CSS files, feature barrels, the compatibility API facade, and the duplicate download queue helper; consumers now import the implementations directly.
+- Restored browser download handoffs and history-save warnings after the UI refactor, kept download details open when selecting rows, restored the startup update-check preference, and named settings controls for assistive technology.
+- Routed download starts and settings saves through their feature use cases, moved the Add Download form behavior into its hook, and replaced duplicated UI implementations and IPC contracts with direct imports from their owning modules. Regression tests now exercise the feature implementations used by the app.
 - Hover feedback uses faint translucent fills across table headers, toolbar actions, menus, navigation, and list rows in both themes. Neutral actions keep neutral icons, and filled controls and Slow mode use quieter hover changes.
 - Table headers blend into the download list in both themes, using smaller muted labels and a transparent surface at rest. The pinned header gains a backing only while rows scroll underneath it.
 - The action bar uses one Resume/Pause button that switches its label, icon, and action with the selected downloads' state, keeping a stable width as downloads resume or pause.

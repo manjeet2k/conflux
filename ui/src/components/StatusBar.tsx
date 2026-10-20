@@ -3,8 +3,8 @@ import { Button, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowDown12Regular } from '@fluentui/react-icons';
 import { formatSpeed } from '../utils/formatters';
 import type { SpeedUnit } from '../utils/formatters';
-import type { Settings } from '../types';
-import { TurtleIcon } from './TurtleIcon';
+import type { Settings } from '@/features/settings/types/settings.types';
+import { TurtleIcon } from '@/components/TurtleIcon';
 import './StatusBar.css';
 
 const useStyles = makeStyles({
