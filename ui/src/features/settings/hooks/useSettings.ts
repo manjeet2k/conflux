@@ -1,9 +1,10 @@
 // src/features/settings/hooks/useSettings.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Settings } from '../types/settings.types';
 import { settingsApi } from '../api/settings.api';
 import { UpdateSettingsUseCase } from '../utils/settingsValidation';
 import { settingsRepository } from '../api/settings.repository';
+
+import type { Settings } from '../types/settings.types';
 
 const updateSettings = new UpdateSettingsUseCase(settingsRepository);
 

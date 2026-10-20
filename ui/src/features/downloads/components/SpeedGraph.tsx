@@ -2,8 +2,9 @@
 import React from 'react';
 import { makeStyles, tokens } from '@fluentui/react-components';
 import { formatSpeed } from '@/utils/formatters';
-import type { SpeedUnit } from '@/utils/formatters';
 import { SpeedSparkline } from './SpeedSparkline';
+
+import type { SpeedUnit } from '@/utils/formatters';
 
 export interface Series {
   key: string;

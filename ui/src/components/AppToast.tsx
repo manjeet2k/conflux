@@ -1,7 +1,8 @@
 import React from 'react';
 import { Button, Toast, ToastBody, ToastTitle, ToastTrigger } from '@fluentui/react-components';
-import type { ToastProps } from '@fluentui/react-components';
 import { Dismiss16Regular } from '@fluentui/react-icons';
+
+import type { ToastProps } from '@fluentui/react-components';
 
 interface AppToastProps extends Pick<ToastProps, 'onClick' | 'style'> {
   title: string;

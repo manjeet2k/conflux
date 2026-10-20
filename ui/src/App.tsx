@@ -6,19 +6,20 @@ import { useDesktopEvents } from '@/hooks/useDesktopEvents';
 import { AddDownloadDialog } from '@/features/downloads/components/AddDownloadDialog';
 import { DownloadsView } from '@/features/downloads/components/DownloadsView';
 import { RemoveDialog } from '@/features/downloads/components/RemoveDialog';
-import type { RowActions } from '@/features/downloads/components/DownloadTable';
 import { downloadsApi } from '@/features/downloads/api/downloads.api';
 import { useDownloads } from '@/features/downloads/hooks/useDownloads';
 import { useDownloadDialogs } from '@/features/downloads/hooks/useDownloadDialogs';
 import { useDownloadList } from '@/features/downloads/hooks/useDownloadList';
 import { useSpeedHistory } from '@/features/downloads/hooks/useSpeedHistory';
-import type { ViewId } from '@/features/downloads/types/downloads.types';
 import { NetworkView } from '@/features/network/components/NetworkView';
 import { useNetwork } from '@/features/network/hooks/useNetwork';
 import { SettingsView } from '@/features/settings/components/SettingsView';
 import { useSettings } from '@/features/settings/hooks/useSettings';
 import { useWindowTheme } from '@/features/settings/hooks/useWindowTheme';
 import { copyText } from '@/utils/files';
+
+import type { RowActions } from '@/features/downloads/components/DownloadTable';
+import type { ViewId } from '@/features/downloads/types/downloads.types';
 import type { SpeedUnit } from '@/utils/formatters';
 
 export const App: React.FC = () => {

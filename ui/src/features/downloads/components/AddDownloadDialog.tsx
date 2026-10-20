@@ -19,11 +19,12 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { Folder20Regular, Link20Regular } from '@fluentui/react-icons';
-import type { RequestHeaders } from '../types/downloads.types';
 import { useAddDownload } from '../hooks/useAddDownload';
-import type { StartDownloadParams } from '../utils/downloadValidation';
 import { formatBytes } from '@/utils/formatters';
 import { FileIcon } from '@/components/FileIcon';
+
+import type { RequestHeaders } from '../types/downloads.types';
+import type { StartDownloadParams } from '../utils/downloadValidation';
 
 const useStyles = makeStyles({
   surface: { width: '560px', maxWidth: 'calc(100vw - 48px)' },

@@ -105,7 +105,7 @@ test('desktop listeners forward payloads, ignore late pending reads and clean up
       return ready.promise;
     } },
   });
-  const { useDesktopEvents } = load('app/hooks/useDesktopEvents.ts');
+  const { useDesktopEvents } = load('hooks/useDesktopEvents.ts');
   const options = {
     onAdd: (...args) => adds.push(args), onSettings: (...args) => settings.push(args),
     onExternalDownload: (payload) => received.push(payload), onUpdate: (info) => updates.push(info),
@@ -149,7 +149,7 @@ test('shortcuts respect modal ownership, editable fields and listener cleanup', 
     window: surface(windows), document: surface(documentEvents), HTMLElement: Element,
     navigator: {},
   });
-  const { useAppShortcuts } = load('app/hooks/useAppShortcuts.ts');
+  const { useAppShortcuts } = load('hooks/useAppShortcuts.ts');
   let modal = false, searches = 0, refreshes = 0;
   const added = [], notices = [];
   harness.render(() => useAppShortcuts({
@@ -218,12 +218,12 @@ test('shell preserves the download view key across categories and keeps dialogs 
   const load = sourceLoader({
     react, 'react/jsx-runtime': { jsx, jsxs: jsx }, '@fluentui/react-components': fluent,
     '@/theme': { surfaceVars: () => ({}), windowsControlStyleHooks: {} },
-    '@/components/ui/TitleBar': { TitleBar: 'TitleBar' },
+    '@/components/TitleBar': { TitleBar: 'TitleBar' },
     '@/components/NavPane': { NavPane: 'NavPane' },
     '@/components/StatusBar': { StatusBar: 'StatusBar' },
     '@/hooks/usePref': { usePref: () => [false, () => {}] },
   }, { window: { innerWidth: 1200 } });
-  const { AppShell } = load('app/AppShell.tsx');
+  const { AppShell } = load('components/AppShell.tsx');
   const content = { type: 'Downloads' }, dialogs = { type: 'Dialogs' };
   for (const view of ['all', 'active', 'paused', 'completed', 'failed']) {
     const tree = AppShell({ navigation: { view }, status: {}, children: content, dialogs });
@@ -244,10 +244,10 @@ test('App composition shares selection with the list and selects new downloads a
   const noop = () => {};
   const load = sourceLoader({
     react: harness.hooks, 'react/jsx-runtime': { jsx, jsxs: jsx },
-    '@/app/AppShell': { AppShell: 'AppShell' },
-    '@/app/hooks/useAppNotifications': { useAppNotifications: () => ({ notify: noop, onError: noop, notifyUpdate: noop }) },
-    '@/app/hooks/useDesktopEvents': { useDesktopEvents: () => null },
-    '@/app/hooks/useAppShortcuts': { useAppShortcuts: (options) => { shortcutOptions = options; } },
+    '@/components/AppShell': { AppShell: 'AppShell' },
+    '@/hooks/useAppNotifications': { useAppNotifications: () => ({ notify: noop, onError: noop, notifyUpdate: noop }) },
+    '@/hooks/useDesktopEvents': { useDesktopEvents: () => null },
+    '@/hooks/useAppShortcuts': { useAppShortcuts: (options) => { shortcutOptions = options; } },
     '@/features/downloads/components/AddDownloadDialog': { AddDownloadDialog: 'AddDownloadDialog' },
     '@/features/downloads/components/RemoveDialog': { RemoveDialog: 'RemoveDialog' },
     '@/features/downloads/components/DownloadsView': { DownloadsView: 'DownloadsView' },
@@ -316,7 +316,7 @@ test('notification hook preserves startup warnings, action destinations and urge
     localStorage: { getItem: (key) => preferences.get(key), setItem: (key, value) => preferences.set(key, value) },
     window: { setTimeout: (callback) => { timers.set(1, callback); return 1; }, clearTimeout: (id) => timers.delete(id) },
   });
-  const { useAppNotifications } = load('app/hooks/useAppNotifications.tsx');
+  const { useAppNotifications } = load('hooks/useAppNotifications.tsx');
   const hook = harness.render(() => useAppNotifications(() => settings++, () => about++));
   await flushPromises();
   assert.equal(notifications[0].toast.props.title, 'Recovered history');
@@ -340,7 +340,7 @@ test('selecting toast text prevents dismissal and keeps the View action availabl
     react, 'react/jsx-runtime': { jsx, jsxs: jsx },
     '@fluentui/react-components': fluent, '@fluentui/react-icons': {},
   }, { window: { getSelection: () => ({ toString: () => selection }) } });
-  const { AppToast } = load('app/components/AppToast.tsx');
+  const { AppToast } = load('components/AppToast.tsx');
   const onView = () => {};
   const tree = AppToast({ title: 'Warning', onView });
   const toast = elements(tree).find((node) => node.type === 'Toast');
@@ -365,7 +365,7 @@ test('failed desktop registrations are handled before unmount', async () => {
     '@tauri-apps/api/core': { invoke: async () => null },
     '@tauri-apps/api/event': { listen: async () => { throw Error('Listener unavailable'); } },
   }, { console: { error: (...args) => errors.push(args) } });
-  const { useDesktopEvents } = load('app/hooks/useDesktopEvents.ts');
+  const { useDesktopEvents } = load('hooks/useDesktopEvents.ts');
   harness.render(() => useDesktopEvents({ onAdd() {}, onSettings() {}, onExternalDownload() {}, onUpdate() {} }));
   await flushPromises();
   assert.equal(errors.length, 5);

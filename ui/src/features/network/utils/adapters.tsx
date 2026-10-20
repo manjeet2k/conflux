@@ -7,10 +7,11 @@ import {
   ArrowRepeatAll20Regular,
   Globe20Regular,
 } from '@fluentui/react-icons';
+import { seriesColors, seriesColorsDark } from '@/theme';
+
 import type { FluentIcon } from '@fluentui/react-icons';
 import type { AdapterInfo, AdapterKind } from '../types/network.types';
 import type { AdapterStat } from '@/features/downloads/types/downloads.types';
-import { seriesColors, seriesColorsDark } from '@/theme';
 
 export const kindIcon: Record<AdapterKind, FluentIcon> = {
   ethernet: PlugConnected20Regular,

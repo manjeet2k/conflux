@@ -1,7 +1,8 @@
 import { ok, fail } from '@/types/Result';
 import { errorText } from '@/utils/errors';
-import type { SettingsRepository } from '../utils/settingsValidation';
 import { settingsApi } from './settings.api';
+
+import type { SettingsRepository } from '../utils/settingsValidation';
 
 export const settingsRepository: SettingsRepository = {
   async updateSettings(settings) {

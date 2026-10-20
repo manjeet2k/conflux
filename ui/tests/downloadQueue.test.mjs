@@ -61,7 +61,7 @@ const loadFeature = sourceLoader({
   '@tauri-apps/api/core': {},
   '@tauri-apps/api/event': {},
   '@/utils/formatters': { formatBytes: String },
-  '@/components/ui/FileIcon': { FileIcon: 'FileIcon' },
+  '@/components/FileIcon': { FileIcon: 'FileIcon' },
 });
 const { AddDownloadDialog } = loadFeature('features/downloads/components/AddDownloadDialog.tsx');
 const props = { open: true, requestId: 'A', initialUrl: 'https://example.com/A', defaultSaveDir: '/downloads', onStart: async () => {}, onClose: () => {} };

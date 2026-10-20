@@ -1,4 +1,6 @@
-import { fail, type Result } from '@/types/Result';
+import { fail } from '@/types/Result';
+
+import type { Result } from '@/types/Result';
 import type { DownloadTask, RequestHeaders } from '../types/downloads.types';
 
 export type DownloadErrorKind = 'INVALID_PARAMS' | 'NETWORK' | 'FILE_SYSTEM' | 'UNKNOWN';

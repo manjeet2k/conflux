@@ -1,9 +1,11 @@
 // src/features/downloads/hooks/useDownloads.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { DownloadTask } from '../types/downloads.types';
-import { downloadsApi, type StartDownloadArgs } from '../api/downloads.api';
+import { downloadsApi } from '../api/downloads.api';
 import { downloadsRepository } from '../api/downloads.repository';
 import { StartDownloadUseCase } from '../utils/downloadValidation';
+
+import type { DownloadTask } from '../types/downloads.types';
+import type { StartDownloadArgs } from '../api/downloads.api';
 
 const startDownload = new StartDownloadUseCase(downloadsRepository);
 

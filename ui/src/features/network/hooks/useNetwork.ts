@@ -1,7 +1,8 @@
 // src/features/network/hooks/useNetwork.ts
 import { useCallback, useEffect, useState } from 'react';
-import type { AdapterInfo, Diagnostics } from '../types/network.types';
 import { networkApi } from '../api/network.api';
+
+import type { AdapterInfo, Diagnostics } from '../types/network.types';
 
 export interface UseNetworkReturn {
   adapters: AdapterInfo[];

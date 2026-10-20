@@ -1,8 +1,10 @@
 import { useCallback, useEffect } from 'react';
-import { useId, useToastController, type ToastIntent } from '@fluentui/react-components';
+import { useId, useToastController } from '@fluentui/react-components';
 import { settingsApi } from '@/features/settings/api/settings.api';
-import type { UpdateInfo } from '@/features/settings/types/settings.types';
 import { AppToast } from '../components/AppToast';
+
+import type { ToastIntent } from '@fluentui/react-components';
+import type { UpdateInfo } from '@/features/settings/types/settings.types';
 
 export function useAppNotifications(onSettings: () => void, openAbout: () => void) {
   const toasterId = useId('toaster');

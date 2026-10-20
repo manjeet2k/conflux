@@ -1,6 +1,7 @@
 // src/utils/sort.ts
-import type { DownloadTask } from '@/features/downloads/types/downloads.types';
 import { progressOf } from './formatters';
+
+import type { DownloadTask } from '@/features/downloads/types/downloads.types';
 
 export type SortKey = 'name' | 'size' | 'progress' | 'speed' | 'eta' | 'status' | 'added';
 export interface SortState {

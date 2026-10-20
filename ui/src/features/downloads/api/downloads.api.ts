@@ -1,18 +1,18 @@
 // src/features/downloads/api/downloads.api.ts
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type {
-  DownloadTask,
-  ExternalDownloadPayload,
-  ProbeResult,
-  RequestHeaders,
-} from '../types/downloads.types';
 import {
   PROGRESS_EVENT,
   EXTERNAL_DOWNLOAD_EVENT,
   HISTORY_STATUS_EVENT,
 } from '@/utils/events.constants';
 
+import type {
+  DownloadTask,
+  ExternalDownloadPayload,
+  ProbeResult,
+  RequestHeaders,
+} from '../types/downloads.types';
 import type { StartDownloadParams } from '../utils/downloadValidation';
 
 export type StartDownloadArgs = StartDownloadParams;

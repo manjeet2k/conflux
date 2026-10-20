@@ -1,11 +1,13 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { downloadDir } from '@tauri-apps/api/path';
 import { errorText } from '@/utils/errors';
-import type { ProbeResult, RequestHeaders } from '../types/downloads.types';
-import type { StartDownloadParams } from '../utils/downloadValidation';
 import { isHttpUrl, sameOrigin } from '../utils/downloadValidation';
 import { downloadsApi } from '../api/downloads.api';
+
+import type { FormEvent } from 'react';
+import type { ProbeResult, RequestHeaders } from '../types/downloads.types';
+import type { StartDownloadParams } from '../utils/downloadValidation';
 
 export interface UseAddDownloadOptions {
   initialUrl: string;

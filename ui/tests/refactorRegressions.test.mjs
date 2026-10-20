@@ -44,7 +44,7 @@ test('selecting downloads opens details without toggling an already open pane', 
     './CommandBar': { CommandBar: 'CommandBar' },
     './DownloadTable': { DownloadTable: 'DownloadTable' },
     './DetailsPane': { DetailsPane: 'DetailsPane' },
-    '@/components/ui/EmptyState': { EmptyState: 'EmptyState' },
+    '@/components/EmptyState': { EmptyState: 'EmptyState' },
   });
   const { DownloadsView } = load('features/downloads/components/DownloadsView.tsx');
   const task = { id: 'task-1', status: 'paused' };
@@ -72,9 +72,9 @@ test('selecting downloads opens details without toggling an already open pane', 
 
 test('settings expose the startup update preference and name each editable control', () => {
   const load = sourceLoader({ ...uiMocks,
-    '@/components/ui/Page': { Page: 'Page', SettingsCard: 'SettingsCard', SectionHeader: 'SectionHeader' },
-    '@/components/ui/WindowsDropdown': { WindowsDropdown: 'WindowsDropdown' },
-    '@/components/ui/TurtleIcon': { TurtleIcon: 'TurtleIcon' },
+    '@/components/Page': { Page: 'Page', SettingsCard: 'SettingsCard', SectionHeader: 'SectionHeader' },
+    '@/components/WindowsDropdown': { WindowsDropdown: 'WindowsDropdown' },
+    '@/components/TurtleIcon': { TurtleIcon: 'TurtleIcon' },
     '@tauri-apps/plugin-dialog': {}, '@tauri-apps/api/path': {}, '@tauri-apps/api/app': {},
     '@/api': {},
     '../api/settings.api': {}, '@/features/network/api/network.api': {}, '@/utils/errors': {},

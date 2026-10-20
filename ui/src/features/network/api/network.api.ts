@@ -1,8 +1,9 @@
 // src/features/network/api/network.api.ts
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { AdapterInfo, Diagnostics } from '../types/network.types';
 import { NETWORK_ADAPTERS_CHANGED_EVENT } from '@/utils/events.constants';
+
+import type { AdapterInfo, Diagnostics } from '../types/network.types';
 
 /**
  * Network API

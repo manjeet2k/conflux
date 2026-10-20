@@ -8,8 +8,9 @@ import {
   CheckmarkCircle16Filled,
   ErrorCircle16Filled,
 } from '@fluentui/react-icons';
-import type { TaskStatus } from '@/features/downloads/types/downloads.types';
 import { statusText } from '@/utils/status';
+
+import type { TaskStatus } from '@/features/downloads/types/downloads.types';
 
 const useStyles = makeStyles({
   root: {

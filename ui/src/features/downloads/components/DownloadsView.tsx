@@ -2,15 +2,16 @@
 import React, { useMemo } from 'react';
 import { makeStyles, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import { Search48Regular, ArrowDownload48Regular, CheckmarkCircle48Regular, ErrorCircle48Regular, PauseCircle48Regular } from '@fluentui/react-icons';
+import { CommandBar } from './CommandBar';
+import { DownloadTable } from './DownloadTable';
+import { DetailsPane } from './DetailsPane';
+import { EmptyState } from '@/components/EmptyState';
+
 import type { AdapterInfo } from '@/features/network/types/network.types';
 import type { DownloadTask, ViewId } from '../types/downloads.types';
 import type { RowActions } from './DownloadTable';
 import type { SortState } from '@/utils/sort';
 import type { SpeedUnit } from '@/utils/formatters';
-import { CommandBar } from './CommandBar';
-import { DownloadTable } from './DownloadTable';
-import { DetailsPane } from './DetailsPane';
-import { EmptyState } from '@/components/EmptyState';
 
 const emptyStates = {
   all: {

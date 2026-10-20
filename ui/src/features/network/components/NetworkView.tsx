@@ -10,14 +10,15 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { ArrowClockwise20Regular } from '@fluentui/react-icons';
-import type { AdapterInfo, DisabledReason } from '../types/network.types';
-import type { DownloadTask } from '@/features/downloads/types/downloads.types';
-import type { SpeedSample } from '@/features/downloads/hooks/useSpeedHistory';
 import { HISTORY_SECONDS, adapterKey } from '@/features/downloads/hooks/useSpeedHistory';
 import { Page, SectionHeader } from '@/components/Page';
 import { SpeedGraph } from '@/features/downloads/components/SpeedGraph';
 import { adapterColor, adapterProblem, kindIcon, kindLabel, usableAdapters } from '../utils/adapters';
 import { formatBytes, formatSpeed } from '@/utils/formatters';
+
+import type { AdapterInfo, DisabledReason } from '../types/network.types';
+import type { DownloadTask } from '@/features/downloads/types/downloads.types';
+import type { SpeedSample } from '@/features/downloads/hooks/useSpeedHistory';
 import type { SpeedUnit } from '@/utils/formatters';
 
 const useStyles = makeStyles({

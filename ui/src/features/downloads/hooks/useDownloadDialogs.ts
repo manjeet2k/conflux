@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { DownloadQueue, DownloadRequest, DownloadTask, ExternalDownloadPayload, RequestHeaders } from '../types/downloads.types';
 import { advanceDownload, enqueueDownload, presentQueuedDownload } from '../utils/downloadQueue';
 import { downloadsApi } from '../api/downloads.api';
 import { GRID_ID } from '../utils/downloadGrid';
+
+import type { DownloadQueue, DownloadRequest, DownloadTask, ExternalDownloadPayload, RequestHeaders } from '../types/downloads.types';
 
 interface DownloadDialogOptions {
   tasks: DownloadTask[];

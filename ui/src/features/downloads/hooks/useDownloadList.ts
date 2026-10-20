@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
 import { usePref } from '@/hooks/usePref';
-import { sortTasks, type SortState } from '@/utils/sort';
+import { sortTasks } from '@/utils/sort';
+
+import type { SortState } from '@/utils/sort';
 import type { DownloadTask, TaskStatus, ViewId } from '../types/downloads.types';
 
 const viewStatuses: Partial<Record<ViewId, TaskStatus[]>> = {

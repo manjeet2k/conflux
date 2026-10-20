@@ -2,10 +2,11 @@ import React from 'react';
 import { Button, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowDown12Regular } from '@fluentui/react-icons';
 import { formatSpeed } from '../utils/formatters';
-import type { SpeedUnit } from '../utils/formatters';
-import type { Settings } from '@/features/settings/types/settings.types';
 import { TurtleIcon } from '@/components/TurtleIcon';
 import './StatusBar.css';
+
+import type { SpeedUnit } from '../utils/formatters';
+import type { Settings } from '@/features/settings/types/settings.types';
 
 const useStyles = makeStyles({
   root: {

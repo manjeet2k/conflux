@@ -20,12 +20,13 @@ import { getVersion } from '@tauri-apps/api/app';
 import { settingsApi } from '../api/settings.api';
 import { networkApi } from '@/features/network/api/network.api';
 import { errorText } from '@/utils/errors';
-import type { Backdrop, Settings, ThemePreference, UpdateInfo } from '../types/settings.types';
 import { Page, SectionHeader, SettingsCard } from '@/components/Page';
 import { WindowsDropdown } from '@/components/WindowsDropdown';
 import { TurtleIcon } from '@/components/TurtleIcon';
 import chromeLogo from '@/assets/browsers/chrome.svg';
 import firefoxLogo from '@/assets/browsers/firefox.svg';
+
+import type { Backdrop, Settings, ThemePreference, UpdateInfo } from '../types/settings.types';
 
 const useStyles = makeStyles({
   stack: { display: 'flex', flexDirection: 'column', gap: '4px' },

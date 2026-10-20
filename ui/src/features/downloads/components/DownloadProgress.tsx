@@ -1,8 +1,9 @@
 // src/features/downloads/components/DownloadProgress.tsx
 import React from 'react';
 import { makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
-import type { TaskStatus } from '../types/downloads.types';
 import { statusText } from '@/utils/status';
+
+import type { TaskStatus } from '../types/downloads.types';
 
 const useStyles = makeStyles({
   track: {

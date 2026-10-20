@@ -1,10 +1,12 @@
-import React, { type ComponentProps } from 'react';
+import React from 'react';
 import { FluentProvider, Toaster, makeStyles, tokens } from '@fluentui/react-components';
 import { darkTheme, lightTheme, surfaceVars, windowsControlStyleHooks } from '@/theme';
 import { TitleBar } from '@/components/TitleBar';
 import { NavPane } from '@/components/NavPane';
 import { StatusBar } from '@/components/StatusBar';
 import { usePref } from '@/hooks/usePref';
+
+import type { ComponentProps } from 'react';
 import type { Backdrop } from '@/features/settings/types/settings.types';
 
 const useStyles = makeStyles({

@@ -1,13 +1,14 @@
 // src/features/settings/api/settings.api.ts
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { UPDATE_AVAILABLE_EVENT } from '@/utils/events.constants';
+
 import type {
   Backdrop,
   BrowserIntegrationStatus,
   Settings,
   UpdateInfo,
 } from '../types/settings.types';
-import { UPDATE_AVAILABLE_EVENT } from '@/utils/events.constants';
 
 export type AboutLink =
   | 'licenses'

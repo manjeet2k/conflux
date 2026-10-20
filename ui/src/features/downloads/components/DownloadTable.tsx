@@ -29,12 +29,13 @@ import {
   Play20Regular,
   SelectAllOn20Regular,
 } from '@fluentui/react-icons';
-import type { DownloadTask } from '../types/downloads.types';
 import { formatBytes, formatDate, formatEta, formatSpeed, progressOf } from '@/utils/formatters';
-import type { SpeedUnit } from '@/utils/formatters';
 import { FileIcon } from '@/components/FileIcon';
 import { StatusLabel } from '@/components/StatusLabel';
 import { DownloadProgress } from './DownloadProgress';
+
+import type { DownloadTask } from '../types/downloads.types';
+import type { SpeedUnit } from '@/utils/formatters';
 import type { SortKey, SortState } from '@/utils/sort';
 
 interface Column {

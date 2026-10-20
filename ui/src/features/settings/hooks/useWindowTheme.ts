@@ -1,7 +1,8 @@
 // src/features/settings/hooks/useWindowTheme.ts
 import { useEffect, useState } from 'react';
-import type { Backdrop, ThemePreference } from '../types/settings.types';
 import { settingsApi } from '../api/settings.api';
+
+import type { Backdrop, ThemePreference } from '../types/settings.types';
 
 const darkQuery = '(prefers-color-scheme: dark)';
 

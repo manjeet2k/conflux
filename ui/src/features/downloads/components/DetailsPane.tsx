@@ -8,11 +8,8 @@ import {
   Copy16Regular, Dismiss16Regular, FolderOpen20Regular, MoreHorizontal20Regular,
   Open20Regular, Pause20Regular, Play20Regular, ShieldCheckmark16Regular,
 } from '@fluentui/react-icons';
-import type { AdapterInfo } from '@/features/network/types/network.types';
-import type { AdapterStat, DownloadTask } from '../types/downloads.types';
 import { HISTORY_SECONDS } from '../hooks/useSpeedHistory';
 import { formatBytes, formatDate, formatDuration, formatEta, formatSpeed, progressOf } from '@/utils/formatters';
-import type { SpeedUnit } from '@/utils/formatters';
 import { fileKind, fileTypeLabels } from '@/utils/fileTypes';
 import { adapterColor, adapterProblem } from '@/features/network/utils/adapters';
 import { speedWindowStats } from '@/utils/sparkline';
@@ -20,9 +17,13 @@ import { FileIcon } from '@/components/FileIcon';
 import { StatusLabel } from '@/components/StatusLabel';
 import { DownloadProgress } from './DownloadProgress';
 import { ChunkMap } from './ChunkMap';
-import type { ChunkMapColors } from './ChunkMap';
 import { SpeedGraph } from './SpeedGraph';
 import './DetailsPane.css';
+
+import type { AdapterInfo } from '@/features/network/types/network.types';
+import type { AdapterStat, DownloadTask } from '../types/downloads.types';
+import type { SpeedUnit } from '@/utils/formatters';
+import type { ChunkMapColors } from './ChunkMap';
 
 interface DetailsPaneProps {
   speedUnit: SpeedUnit;
