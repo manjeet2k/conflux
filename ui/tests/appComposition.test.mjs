@@ -87,7 +87,7 @@ test('cancel all dismisses every queued handoff exactly once', async () => {
   await flushPromises();
 });
 
-test('desktop listeners forward payloads, ignore late pending reads and clean up delayed registrations', async () => {
+test('desktop listeners subscribe before draining requests and clean up delayed registrations', async () => {
   const harness = hookHarness();
   const pendingDownload = deferred();
   const records = [], received = [], updates = [], adds = [], settings = [];
@@ -97,7 +97,7 @@ test('desktop listeners forward payloads, ignore late pending reads and clean up
     '@tauri-apps/api/core': { invoke: (command) => {
       assert.equal(command, 'take_pending_download');
       reads++;
-      return pendingDownload.promise;
+      return reads === 1 ? pendingDownload.promise : Promise.resolve(null);
     } },
     '@tauri-apps/api/event': { listen: (name, callback) => {
       const ready = deferred();
@@ -112,11 +112,16 @@ test('desktop listeners forward payloads, ignore late pending reads and clean up
   };
   harness.render(() => useDesktopEvents(options));
   harness.render(() => useDesktopEvents(options));
-  assert.equal(reads, 1);
+  assert.equal(reads, 0, 'requests must stay buffered until listener registration completes');
   assert.equal(records.length, 5);
   const emit = (name, payload) => records.find((record) => record.name === name).callback({ payload });
   const payload = { url: 'https://example.com/a' };
-  emit('external-download', payload);
+  const external = records.find((record) => record.name === 'external-download');
+  external.ready.resolve(() => { external.removed = true; });
+  await flushPromises();
+  assert.equal(reads, 1);
+  pendingDownload.resolve(payload);
+  await flushPromises();
   assert.equal(received[0], payload);
   emit('open-add-dialog', null);
   emit('open-settings', null);
@@ -130,11 +135,45 @@ test('desktop listeners forward payloads, ignore late pending reads and clean up
   emit('update-available', update);
   assert.equal(updates[0], update);
   harness.dispose();
-  pendingDownload.resolve({ url: 'https://example.com/late' });
   for (const record of records) record.ready.resolve(() => { record.removed = true; });
   await flushPromises();
   assert.equal(received.length, 1);
   assert.ok(records.every((record) => record.removed));
+});
+
+test('startup and live browser requests drain once in order despite repeated wakeups', async () => {
+  const harness = hookHarness();
+  const registration = deferred();
+  const queue = [{ url: 'https://example.com/first' }, { url: 'https://example.com/second' }];
+  const received = [];
+  let wake, removed = false, reads = 0;
+  const load = sourceLoader({
+    react: harness.hooks,
+    '@tauri-apps/api/core': { invoke: async (command) => {
+      assert.equal(command, 'take_pending_download');
+      reads++;
+      return queue.shift() ?? null;
+    } },
+    '@tauri-apps/api/event': { listen: (name, callback) => {
+      if (name === 'external-download') { wake = callback; return registration.promise; }
+      return Promise.resolve(() => {});
+    } },
+  });
+  const { useDesktopEvents } = load('hooks/useDesktopEvents.ts');
+  harness.render(() => useDesktopEvents({ onAdd() {}, onSettings() {}, onExternalDownload: (payload) => received.push(payload.url), onUpdate() {} }));
+  await flushPromises();
+  assert.equal(reads, 0);
+  registration.resolve(() => { removed = true; });
+  await flushPromises();
+  assert.deepEqual(received, ['https://example.com/first', 'https://example.com/second']);
+  queue.push({ url: 'https://example.com/live' });
+  wake({ payload: null });
+  wake({ payload: null });
+  await flushPromises();
+  assert.deepEqual(received, ['https://example.com/first', 'https://example.com/second', 'https://example.com/live']);
+  harness.dispose();
+  await flushPromises();
+  assert.equal(removed, true);
 });
 
 test('shortcuts respect modal ownership, editable fields and listener cleanup', () => {

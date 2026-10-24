@@ -241,6 +241,12 @@ Conflux uses **sparse file pre-allocation**:
 
 ## Browser confirmation and dialog requests
 
+Automatic interception rejects terminal or paused browser downloads before contacting the native host and rechecks the live item before forwarding. A local storage entry records only the browser download id and start time before each handoff; duplicate events and worker/browser restarts cannot present that item again, including after dismissal or native-host failure. Erasing browser history clears its entry. Context-menu downloads remain available for deliberate retries.
+
+The desktop buffers all browser/CLI requests in a process-local FIFO managed before plugins initialize. The external-download event is a wake-up signal, not a second delivery path. The UI subscribes before draining the queue and serializes subsequent drains, preserving requests received before the window is ready.
+
 Automatic interception includes a correlation id. The native host launches the desktop and waits up to ten minutes for an accepted/cancelled receipt. The desktop acknowledges acceptance only after a task handle exists (or the task has already completed). Dismissal preserves the original browser transfer. Receipts contain only the decision, use UUID-constrained temporary paths, and are cleaned when the host finishes. Completed browser transfers retain their history; a queued response alone is never a cancellation acknowledgement. Context-menu handoffs remain confirmation requests without automatic browser cancellation.
 
 Each Add request has a stable UI identity independent of queue length. Queued arrivals retain current edits and submission state. A delayed completion advances only its originating current request; queued links are presented when a blocking Remove modal closes. Cancel/Skip remain available while a submission is pending.
+
+After probing, a cancelled or expired browser handoff cannot create a task. If dismissal wins between that check and task acceptance, the desktop stops and removes its newly created transfer using the controller's ownership checks, leaving Chrome's original transfer running. Receipt decisions are published atomically, with the first decision winning; timeout closes the decision before the native host removes the pending marker.

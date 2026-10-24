@@ -14,6 +14,7 @@ All notable changes to Conflux are documented here. The format follows
 - Slow mode on the right of the bottom bar, with download metrics grouped on the left. The turtle toggle and speed selector share one continuous button surface; the selected cap appears only in its menu (1 MB/s by default). Changes apply immediately to active and future downloads across all adapters, and the preference is saved between launches.
 
 ### Fixed
+- Browser extension 0.2.4 ignores restored completed/interrupted downloads and remembers automatic handoffs across browser restarts, preventing old links from reopening Add Download. Desktop handoffs are buffered through startup; cancelled or expired submissions stop and clean up any duplicate desktop transfer.
 - Split the application root into a window shell, notification and desktop event hooks, shortcut handling, and download list/dialog hooks. Shared toast rendering removes repeated markup while preserving modal queueing, selection, and category view identity.
 - Removed forwarding-only UI modules and CSS files, feature barrels, the compatibility API facade, and the duplicate download queue helper; consumers now import the implementations directly.
 - Restored browser download handoffs and history-save warnings after the UI refactor, kept download details open when selecting rows, restored the startup update-check preference, and named settings controls for assistive technology.

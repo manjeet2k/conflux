@@ -138,7 +138,56 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
 });
 
 // Automatic download interception (opt-in)
+const pendingCaptures = new Set();
+
+function captureKey(id) {
+  return `conflux.capture.${id}`;
+}
+
+// Persist only browser identity, never download URLs or request headers. Retain a
+// dismissed/failed handoff so restoring Chrome cannot prompt for it again.
+async function claimCapture(downloadItem) {
+  const key = captureKey(downloadItem.id);
+  const stored = await new Promise((resolve, reject) => {
+    chrome.storage.local.get(key, (values) => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve(values);
+    });
+  });
+  if (stored[key] === downloadItem.startTime) return false;
+  const current = await new Promise((resolve) => {
+    chrome.downloads.search({ id: downloadItem.id }, (items) => {
+      resolve(chrome.runtime.lastError ? null : items?.[0]);
+    });
+  });
+  if (current?.state !== "in_progress" || current.paused || current.startTime !== downloadItem.startTime) return false;
+  await new Promise((resolve, reject) => {
+    chrome.storage.local.set({ [key]: downloadItem.startTime }, () => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve();
+    });
+  });
+  return true;
+}
+
+chrome.downloads.onErased.addListener((id) => {
+  chrome.storage.local.remove(captureKey(id));
+});
+
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
+  // onCreated also fires as Chrome reconstructs persisted history. These are
+  // not new download requests, even when their URL matches the capture filter.
+  if (downloadItem.state !== "in_progress" || downloadItem.paused || !downloadItem.startTime) return;
+  if (pendingCaptures.has(downloadItem.id)) return;
+  pendingCaptures.add(downloadItem.id);
+  try {
+    await interceptDownload(downloadItem);
+  } finally {
+    pendingCaptures.delete(downloadItem.id);
+  }
+});
+
+async function interceptDownload(downloadItem) {
   const settings = await getSettings();
   console.log("[Conflux] onCreated event:", downloadItem.url, "| Intercept enabled:", settings.interceptDownloads);
   if (!settings.interceptDownloads) {
@@ -205,6 +254,7 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   };
 
   try {
+    if (!await claimCapture(downloadItem)) return;
     const response = await sendDownloadToConflux({ ...payload, wait_for_acceptance: true });
     if (response?.status !== "accepted") return;
     // A finished browser download must retain its file and history entry.
@@ -218,7 +268,7 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   } catch (e) {
     console.error("[Conflux] Failed to auto-intercept download to Conflux; leaving browser download running:", e);
   }
-});
+}
 
 // Communication with popup & options pages
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

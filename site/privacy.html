@@ -68,7 +68,7 @@
         <div class="doc-row">
           <h3>Data storage</h3>
           <div class="doc-text">
-          <p>Your extension settings (auto-interception on or off, file extension filters, excluded domains) are kept in browser extension storage (<code>chrome.storage.sync</code>). Download URLs are never written to persistent storage by the extension.</p>
+          <p>Your extension settings (auto-interception on or off, file extension filters, excluded domains) are kept in browser extension storage (<code>chrome.storage.sync</code>). To prevent repeated download prompts after a browser restart, the extension also stores download IDs and start times locally; these entries are removed when the corresponding browser download history is erased. Download URLs are never written to persistent storage by the extension.</p>
           </div>
         </div>
         <div class="doc-row">

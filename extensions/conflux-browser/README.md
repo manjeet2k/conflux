@@ -7,6 +7,7 @@ The official browser companion for **Conflux Download Accelerator**. Seamlessly 
 - **Context Menu Integration**: Right-click any link, video, or audio file and choose **"Download with Conflux"**.
 - **Request Context Preservation**: Forwards the page `Referer` and `User-Agent` so servers that validate them accept the hand-off.
 - **Automatic Interception (Opt-in)**: Intercepts browser downloads matching configurable file extensions (`.zip`, `.iso`, `.exe`, `.tar.gz`, `.mp4`, etc.) and optional minimum file size thresholds, routing them to Conflux.
+- **No Repeated Startup Prompts**: Completed/interrupted history items are ignored, and automatic handoffs are remembered across browser restarts. Use the context menu to deliberately retry a dismissed or failed handoff.
 - **Zero Background Daemons**: Uses the Windows Native Messaging API and Conflux's single-instance IPC bridge (`conflux-desktop.exe --from-browser <payload>`) to wake the desktop app in under 20ms with zero persistent background servers or listening ports.
 - **Zero-Extension Fallback**: Works alongside `conflux://` protocol links for environments without extension support.
 

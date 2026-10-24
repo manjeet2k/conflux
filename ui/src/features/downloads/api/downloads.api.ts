@@ -61,8 +61,8 @@ export const downloadsApi = {
   onProgress: (callback: (task: DownloadTask) => void) =>
     listen<DownloadTask>(PROGRESS_EVENT, (event) => callback(event.payload)),
 
-  onExternalDownload: (callback: (payload: ExternalDownloadPayload) => void) =>
-    listen<ExternalDownloadPayload>(EXTERNAL_DOWNLOAD_EVENT, (event) => callback(event.payload)),
+  onExternalDownload: (callback: () => void) =>
+    listen(EXTERNAL_DOWNLOAD_EVENT, () => callback()),
 
   onHistoryStatus: (callback: (status: string | null) => void) =>
     listen<string | null>(HISTORY_STATUS_EVENT, (event) => callback(event.payload)),

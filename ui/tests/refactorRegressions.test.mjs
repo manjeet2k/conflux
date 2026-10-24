@@ -24,13 +24,12 @@ test('browser handoffs and history persistence warnings use the Rust event contr
   const commands = fs.readFileSync(new URL('../../crates/conflux-desktop/src/commands.rs', import.meta.url), 'utf8');
   const externalEvent = lib.match(/app\.emit\("(external-download)"/)[1];
   const historyEvent = commands.match(/HISTORY_STATUS_EVENT: &str = "([^"]+)"/)[1];
-  const handoff = { url: 'https://example.com/file.zip', handoff_id: 'handoff-1' };
-  let received, warning;
-  const offExternal = await downloadsApi.onExternalDownload((payload) => { received = payload; });
+  let signals = 0, warning;
+  const offExternal = await downloadsApi.onExternalDownload(() => { signals++; });
   const offHistory = await downloadsApi.onHistoryStatus((payload) => { warning = payload; });
-  listeners.get(externalEvent)?.({ payload: handoff });
+  listeners.get(externalEvent)?.({ payload: null });
   listeners.get(historyEvent)?.({ payload: 'Disk full' });
-  assert.equal(received, handoff);
+  assert.equal(signals, 1);
   assert.equal(warning, 'Disk full');
   listeners.get(historyEvent)({ payload: null });
   assert.equal(warning, null);

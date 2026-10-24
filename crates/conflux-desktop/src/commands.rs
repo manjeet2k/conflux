@@ -200,6 +200,17 @@ pub async fn start_download(
             .await
             .map_err(|e| format!("Probe failed: {}", redact_error(&format!("{e:#}"))))?;
 
+        if let Some(id) = handoff_id.as_deref() {
+            if !crate::browser_bridge::handoff_is_pending(id)
+                .map_err(|_| "Could not check browser handoff".to_string())?
+            {
+                return Err(
+                    "Browser handoff was cancelled or expired; the browser transfer was preserved"
+                        .into(),
+                );
+            }
+        }
+
         let requested_name = filename
             .map(|f| sanitize_filename(&f))
             .filter(|f| !f.is_empty())
@@ -276,13 +287,30 @@ pub async fn start_download(
             .ok_or_else(|| {
                 "Download was not started; the browser transfer was preserved".to_string()
             })?;
-        if let Some(id) = handoff_id {
-            crate::browser_bridge::acknowledge_handoff(&id, true)
-                .map_err(|_| "Download started, but browser acknowledgement failed".to_string())?;
-        }
+        finish_browser_handoff(&state, &task_id, handoff_id.as_deref()).await?;
         Ok(task)
     })
     .await
+}
+
+async fn finish_browser_handoff(
+    state: &AppState,
+    task_id: &str,
+    handoff_id: Option<&str>,
+) -> Result<(), String> {
+    let Some(id) = handoff_id else { return Ok(()) };
+    if matches!(
+        crate::browser_bridge::acknowledge_handoff(id, true),
+        Ok(true)
+    ) {
+        return Ok(());
+    }
+    // Dismissal/expiry can win after the probe and before acceptance. Do not
+    // leave a second transfer running when Chrome retains the original.
+    state.tasks.remove(task_id, true).await.map_err(|error| {
+        format!("Browser handoff was not accepted; desktop task cleanup failed: {error}")
+    })?;
+    Err("Browser handoff was cancelled or expired; the browser transfer was preserved".into())
 }
 
 // ─── 4. Pause ───────────────────────────────────────────────
@@ -609,10 +637,12 @@ pub fn take_startup_notices(state: State<'_, AppState>) -> Vec<String> {
     state.take_notices()
 }
 
-/// Returns any pending external download request from the browser extension or CLI (on cold start).
+/// Drains browser/CLI requests, including arrivals before frontend readiness.
 #[tauri::command]
-pub fn take_pending_download(state: State<'_, AppState>) -> Option<ExternalDownloadPayload> {
-    state.take_pending_download()
+pub fn take_pending_download(
+    state: State<'_, crate::browser_bridge::PendingDownloads>,
+) -> Option<ExternalDownloadPayload> {
+    state.take()
 }
 
 #[tauri::command]
@@ -1334,6 +1364,82 @@ fn prepare_resume_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unaccepted_browser_handoffs_stop_and_remove_the_desktop_transfer() {
+        for decision in ["cancelled", "expired", "accepted"] {
+            let directory =
+                std::env::temp_dir().join(format!("conflux-handoff-test-{}", Uuid::new_v4()));
+            std::fs::create_dir(&directory).unwrap();
+            let path = directory.join("download.zip.part");
+            std::fs::write(&path, b"partial").unwrap();
+            let task: DownloadTaskState = serde_json::from_value(serde_json::json!({
+                "id": "handoff", "url": "https://example.com/download.zip",
+                "filename": "download.zip", "save_dir": directory, "save_path": path,
+                "file_identity": conflux_core::FileIdentity::at(&path).unwrap(),
+                "total_bytes": 100, "supports_ranges": true, "downloaded_bytes": 7,
+                "status": "downloading", "speed_bytes_sec": 0.0, "eta_seconds": 0,
+                "active_chunks": 0, "completed_chunks": 0, "total_chunks": 1,
+                "created_at_ms": 1
+            }))
+            .unwrap();
+            let state = AppState::new(
+                Settings::default(),
+                None,
+                crate::history::HistoryStore::new(None),
+                vec![],
+                Arc::new(crate::controller::NoEvents),
+            );
+            let generation = state.tasks.insert_new(task).await;
+            let (cancel_tx, mut cancel_rx) = watch::channel(false);
+            let channels = WorkerChannels {
+                cancel_tx,
+                adapter_tx: None,
+                names: Arc::new(RwLock::new(HashMap::new())),
+            };
+            assert!(
+                state
+                    .tasks
+                    .spawn_worker(
+                        "handoff",
+                        generation,
+                        path.clone(),
+                        None,
+                        channels,
+                        async move {
+                            cancel_rx.wait_for(|cancelled| *cancelled).await.unwrap();
+                            WorkerExit::paused()
+                        }
+                    )
+                    .await
+            );
+            let id = Uuid::new_v4().to_string();
+            let pending = std::env::temp_dir().join(format!("conflux-receipt-{id}.pending"));
+            if decision != "expired" {
+                std::fs::write(&pending, []).unwrap();
+            }
+            if decision == "cancelled" {
+                assert!(crate::browser_bridge::acknowledge_handoff(&id, false).unwrap());
+            }
+            let outcome = finish_browser_handoff(&state, "handoff", Some(&id)).await;
+            if decision == "accepted" {
+                assert!(outcome.is_ok());
+                assert_eq!(
+                    state.tasks.get("handoff").await.unwrap().status,
+                    TaskStatus::Downloading
+                );
+                state.tasks.remove("handoff", true).await.unwrap();
+            } else {
+                assert!(outcome.is_err());
+                assert!(state.tasks.get("handoff").await.is_none());
+            }
+            assert!(!path.exists(), "owned partial output must be cleaned up");
+            let _ = std::fs::remove_file(&pending);
+            let _ = std::fs::remove_file(pending.with_extension("txt"));
+            state.tasks.flush_history().await.unwrap();
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
 
     #[cfg(windows)]
     #[tokio::test]

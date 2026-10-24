@@ -28,12 +28,23 @@ export function useDesktopEvents({ onAdd, onSettings, onExternalDownload, onUpda
 
   useEffect(() => {
     let disposed = false;
-    const cleanup = cleanupSubscription(downloadsApi.onExternalDownload((payload) => {
-      if (!disposed) onExternalDownload(payload);
+    let pending = Promise.resolve();
+    const drain = () => {
+      pending = pending.then(async () => {
+        while (!disposed) {
+          const payload = await downloadsApi.takePendingDownload();
+          if (!payload) break;
+          if (!disposed) onExternalDownload(payload);
+        }
+      }).catch((error) => console.error('Failed to take pending download:', error));
+    };
+    // The event is a wake-up signal. Subscribe before draining the native queue
+    // so requests arriving during registration or draining cannot be lost/doubled.
+    const registration = downloadsApi.onExternalDownload(drain);
+    const cleanup = cleanupSubscription(registration.then((off) => {
+      if (!disposed) drain();
+      return off;
     }));
-    downloadsApi.takePendingDownload()
-      .then((payload) => { if (!disposed && payload) onExternalDownload(payload); })
-      .catch((error) => console.error('Failed to take pending download:', error));
     return () => {
       disposed = true;
       cleanup();

@@ -63,6 +63,7 @@ pub fn run() {
     logging::install_panic_hook();
 
     tauri::Builder::default()
+        .manage(browser_bridge::PendingDownloads::default())
         // Registered first so a second launch exits before touching shared data files.
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // Args are logged redacted (they may be a download URL or hex payload) and forwarded to the UI
@@ -89,7 +90,8 @@ pub fn run() {
             );
             tray::show_main_window(app);
             if let Some(payload) = browser_bridge::parse_cli_download_args(&args) {
-                let _ = app.emit("external-download", payload);
+                app.state::<browser_bridge::PendingDownloads>().push(payload);
+                let _ = app.emit("external-download", ());
             }
             let _ = app.emit("second-instance", args);
         }))
@@ -144,7 +146,7 @@ pub fn run() {
             let cli_args: Vec<String> = std::env::args().collect();
             if let Some(payload) = browser_bridge::parse_cli_download_args(&cli_args) {
                 info!(url = %redact::redact_url(&payload.url), "Cold start with external download request");
-                app.state::<AppState>().set_pending_download(payload);
+                app.state::<browser_bridge::PendingDownloads>().push(payload);
             }
 
             if let Err(e) = tray::setup_tray(app.handle()) {

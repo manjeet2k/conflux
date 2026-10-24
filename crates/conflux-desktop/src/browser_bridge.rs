@@ -22,6 +22,27 @@ pub struct ExternalDownloadPayload {
     pub headers: Option<RequestHeaders>,
 }
 
+/// Available before setup and frontend subscription, so simultaneous browser
+/// launches cannot lose a request while the first window is loading.
+#[derive(Default)]
+pub struct PendingDownloads(std::sync::Mutex<std::collections::VecDeque<ExternalDownloadPayload>>);
+
+impl PendingDownloads {
+    pub fn push(&self, payload: ExternalDownloadPayload) {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push_back(payload);
+    }
+
+    pub fn take(&self) -> Option<ExternalDownloadPayload> {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pop_front()
+    }
+}
+
 /// Raw message payload received from the browser extension via stdio native messaging.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ExtensionMessage {
@@ -168,19 +189,23 @@ fn receipt_path(id: &str) -> std::io::Result<std::path::PathBuf> {
     Ok(std::env::temp_dir().join(format!("conflux-receipt-{id}.txt")))
 }
 
-struct HandoffReceipt(std::path::PathBuf);
+struct HandoffReceipt(std::path::PathBuf, std::fs::File);
 impl HandoffReceipt {
     fn prepare(id: &str) -> std::io::Result<Self> {
         let path = receipt_path(id)?;
-        std::fs::OpenOptions::new()
+        let pending = std::fs::OpenOptions::new()
+            .read(true)
             .write(true)
             .create_new(true)
             .open(path.with_extension("pending"))?;
-        Ok(Self(path))
+        Ok(Self(path, pending))
     }
 }
 impl Drop for HandoffReceipt {
     fn drop(&mut self) {
+        // Serialize cleanup with decision writers. A writer that opened the
+        // pending marker before cleanup must not recreate an accepted receipt.
+        let _ = self.1.lock();
         let _ = std::fs::remove_file(self.0.with_extension("pending"));
         let _ = std::fs::remove_file(&self.0);
     }
@@ -189,20 +214,42 @@ impl Drop for HandoffReceipt {
 /// First decision wins: a dismissed request must never later cancel its browser transfer.
 pub fn acknowledge_handoff(id: &str, accepted: bool) -> std::io::Result<bool> {
     let path = receipt_path(id)?;
+    let pending = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path.with_extension("pending"))
+    {
+        Ok(pending) => pending,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    pending.lock()?;
     if !path.with_extension("pending").try_exists()? {
         return Ok(false);
     }
-    let mut file = match std::fs::OpenOptions::new()
+    // Publish the fully written decision atomically. Creating the receipt first
+    // would let the host see an empty file at the timeout boundary.
+    let decision = path.with_extension(format!("decision-{}", uuid::Uuid::new_v4()));
+    let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(path)
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
-        Err(error) => return Err(error),
-    };
-    file.write_all(if accepted { b"accepted" } else { b"cancelled" })?;
-    Ok(true)
+        .open(&decision)?;
+    let result = (|| {
+        file.write_all(if accepted { b"accepted" } else { b"cancelled" })?;
+        drop(file);
+        match std::fs::hard_link(&decision, path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(error),
+        }
+    })();
+    let _ = std::fs::remove_file(decision);
+    result
+}
+
+pub fn handoff_is_pending(id: &str) -> std::io::Result<bool> {
+    let path = receipt_path(id)?;
+    Ok(path.with_extension("pending").try_exists()? && !path.try_exists()?)
 }
 
 fn wait_for_handoff(id: &str, timeout: std::time::Duration) -> std::io::Result<&'static str> {
@@ -217,6 +264,12 @@ fn wait_for_handoff(id: &str, timeout: std::time::Duration) -> std::io::Result<&
             Err(error) => break Err(error),
         }
         if started.elapsed() >= timeout {
+            // Close the decision before removing the pending marker. A desktop
+            // finishing its probe concurrently must not accept an expired handoff.
+            acknowledge_handoff(id, false)?;
+            if std::fs::read(&path)? == b"accepted" {
+                break Ok("accepted");
+            }
             break Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "handoff not accepted",
@@ -513,12 +566,83 @@ mod tests {
         let id = uuid::Uuid::new_v4().to_string();
         let _receipt = HandoffReceipt::prepare(&id).unwrap();
         assert!(wait_for_handoff(&id, std::time::Duration::ZERO).is_err());
+        assert!(!acknowledge_handoff(&id, true).unwrap());
+        assert!(!handoff_is_pending(&id).unwrap());
+        let id = uuid::Uuid::new_v4().to_string();
+        let _accepted_receipt = HandoffReceipt::prepare(&id).unwrap();
+        assert!(handoff_is_pending(&id).unwrap());
         assert!(acknowledge_handoff(&id, true).unwrap());
         assert_eq!(
             wait_for_handoff(&id, std::time::Duration::ZERO).unwrap(),
             "accepted"
         );
         assert!(acknowledge_handoff("../invalid", true).is_err());
+    }
+
+    #[test]
+    fn startup_downloads_are_drained_in_order_once() {
+        let pending = PendingDownloads::default();
+        for name in ["first", "second"] {
+            pending.push(ExternalDownloadPayload {
+                url: format!("https://example.com/{name}.zip"),
+                handoff_id: None,
+                filename: None,
+                headers: None,
+            });
+        }
+        assert!(pending.take().unwrap().url.ends_with("first.zip"));
+        assert!(pending.take().unwrap().url.ends_with("second.zip"));
+        assert!(pending.take().is_none());
+    }
+
+    #[test]
+    fn concurrent_handoff_decisions_publish_one_complete_receipt() {
+        for _ in 0..20 {
+            let id = uuid::Uuid::new_v4().to_string();
+            let _receipt = HandoffReceipt::prepare(&id).unwrap();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let decisions: Vec<_> = [false, true]
+                .into_iter()
+                .map(|accepted| {
+                    let id = id.clone();
+                    let barrier = barrier.clone();
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        acknowledge_handoff(&id, accepted).unwrap()
+                    })
+                })
+                .collect();
+            let winners = decisions
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .filter(|won| *won)
+                .count();
+            assert_eq!(winners, 1);
+            let result = wait_for_handoff(&id, std::time::Duration::from_secs(1)).unwrap();
+            assert!(["accepted", "cancelled"].contains(&result));
+        }
+    }
+
+    #[test]
+    fn receipt_cleanup_cannot_turn_a_dismissal_into_acceptance() {
+        for _ in 0..20 {
+            let id = uuid::Uuid::new_v4().to_string();
+            let receipt = HandoffReceipt::prepare(&id).unwrap();
+            assert!(acknowledge_handoff(&id, false).unwrap());
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let writer = {
+                let id = id.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    acknowledge_handoff(&id, true).unwrap()
+                })
+            };
+            barrier.wait();
+            drop(receipt);
+            assert!(!writer.join().unwrap());
+            assert!(!receipt_path(&id).unwrap().exists());
+        }
     }
 
     #[test]
