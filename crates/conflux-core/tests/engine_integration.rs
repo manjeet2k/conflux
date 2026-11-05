@@ -56,14 +56,28 @@ async fn run_download(
     server: &TestServer,
     adapters: &[NetworkAdapter],
 ) -> Outcome {
+    run_download_with_drop_gate(engine, server, adapters, None).await
+}
+
+async fn run_download_with_drop_gate(
+    engine: &DownloadEngine,
+    server: &TestServer,
+    adapters: &[NetworkAdapter],
+    drop_gate: Option<watch::Sender<bool>>,
+) -> Outcome {
     let dir = tempfile::tempdir().unwrap();
     let probe = engine.probe(&server.url("/files/data.bin")).await.unwrap();
     let path = dir.path().join(&probe.suggested_filename);
 
-    let (tx, mut rx) = mpsc::channel(1024);
+    let (tx, mut rx) = mpsc::channel::<ProgressUpdate>(1024);
     let collector = tokio::spawn(async move {
         let mut all = Vec::new();
         while let Some(p) = rx.recv().await {
+            if p.adapters.iter().any(|adapter| adapter.dropped) {
+                if let Some(gate) = &drop_gate {
+                    gate.send_replace(true);
+                }
+            }
             all.push(p);
         }
         all
@@ -407,10 +421,19 @@ async fn failing_adapter_is_dropped_and_others_finish() {
     let data = payload(PAYLOAD_LEN, 10);
     let mut cfg = ServerConfig::new(Arc::clone(&data));
     cfg.fail_peer_ip = Some("127.0.0.2".parse().unwrap());
+    let (gate_tx, gate_rx) = watch::channel(false);
+    cfg.healthy_chunk_gate = Some(gate_rx);
     let server = TestServer::start(cfg).await;
 
     let adapters = [fake_adapter("127.0.0.2"), fake_adapter("127.0.0.1")];
-    let out = run_download(&test_engine(), &server, &adapters).await;
+    // Keep healthy workers from finishing before the failure threshold is reached.
+    // Release them only after progress confirms the failing adapter was dropped.
+    let out = tokio::time::timeout(
+        Duration::from_secs(10),
+        run_download_with_drop_gate(&test_engine(), &server, &adapters, Some(gate_tx)),
+    )
+    .await
+    .expect("failed adapter must be dropped before healthy responses are released");
     assert_file_matches(&out, &data);
     assert_progress_sane(&out.progress, PAYLOAD_LEN as u64);
     // Socket binding really used 127.0.0.2 (server saw that peer), and the bad adapter

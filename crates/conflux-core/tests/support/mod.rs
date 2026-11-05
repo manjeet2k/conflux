@@ -58,6 +58,8 @@ pub struct ServerConfig {
     pub request_bucket: Option<(f64, Duration)>,
     /// Respond 503 to chunk requests coming from this peer IP.
     pub fail_peer_ip: Option<IpAddr>,
+    /// Hold healthy chunk responses until the test observes the failed adapter drop.
+    pub healthy_chunk_gate: Option<tokio::sync::watch::Receiver<bool>>,
     /// Stall the first N chunk requests from `fail_peer_ip` before failing subsequent requests.
     pub stall_peer_first_n_chunks: usize,
     /// Sleep this long after each body write of `write_piece` bytes (throttling).
@@ -121,6 +123,7 @@ impl ServerConfig {
             retry_after: None,
             request_bucket: None,
             fail_peer_ip: None,
+            healthy_chunk_gate: None,
             stall_peer_first_n_chunks: 0,
             throttle: None,
             range_body_throttles: Vec::new(),
@@ -547,6 +550,11 @@ async fn handle(
             }
             send_simple(&mut sock, 503).await?;
             return sock.shutdown().await;
+        }
+        if let Some(mut gate) = config.healthy_chunk_gate.clone() {
+            gate.wait_for(|released| *released)
+                .await
+                .map_err(std::io::Error::other)?;
         }
         if n < config.stall_first_n_chunks {
             if let Ok((start, end)) = parse_range(&range, len) {
