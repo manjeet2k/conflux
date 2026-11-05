@@ -9,6 +9,37 @@ All notable changes to Conflux are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-11-06
+
+Replacement for 0.5.3, which was published without installer assets.
+
+### Security
+- Updated ZIP extraction, certificate validation, certificate roots, Tokio, and Vite dependencies to address reported advisories. Backported the GLib iterator pointer fix for the WSL test environment.
+- Documented specific maintenance exceptions for Linux-only upstream dependencies while retaining vulnerability checks.
+
+### Added
+- Segmented MB/s / Mb/s speed unit selector to the left of Slow mode, with a subtle inset track, sliding glass selection matching the app's buttons, and white active label. Changes apply to all speed displays and the choice is remembered between launches; reduced-motion preferences disable the slide.
+- Slow mode on the right of the bottom bar, with download metrics grouped on the left. The turtle toggle and speed selector share one continuous button surface; the selected cap appears only in its menu (1 MB/s by default). Changes apply immediately to active and future downloads across all adapters, and the preference is saved between launches.
+
+### Fixed
+- Browser extension 0.2.4 ignores restored completed/interrupted downloads and remembers automatic handoffs across browser restarts, preventing old links from reopening Add Download. Desktop handoffs are buffered through startup; cancelled or expired submissions stop and clean up any duplicate desktop transfer.
+- Split the application root into a window shell, notification and desktop event hooks, shortcut handling, and download list/dialog hooks. Shared toast rendering removes repeated markup while preserving modal queueing, selection, and category view identity.
+- Removed forwarding-only UI modules and CSS files, feature barrels, the compatibility API facade, and the duplicate download queue helper; consumers now import the implementations directly.
+- Restored browser download handoffs and history-save warnings after the UI refactor, kept download details open when selecting rows, restored the startup update-check preference, and named settings controls for assistive technology.
+- Routed download starts and settings saves through their feature use cases, moved the Add Download form behavior into its hook, and replaced duplicated UI implementations and IPC contracts with direct imports from their owning modules. Regression tests now exercise the feature implementations used by the app.
+- Hover feedback uses faint translucent fills across table headers, toolbar actions, menus, navigation, and list rows in both themes. Neutral actions keep neutral icons, and filled controls and Slow mode use quieter hover changes.
+- Table headers blend into the download list in both themes, using smaller muted labels and a transparent surface at rest. The pinned header gains a backing only while rows scroll underneath it.
+- The action bar uses one Resume/Pause button that switches its label, icon, and action with the selected downloads' state, keeping a stable width as downloads resume or pause.
+- Download categories keep the table and action bar mounted while switching, including empty results, eliminating repeated entrance fades and column flashes. Narrow action bars move commands into More actions instead of clipping them, with a flexible search field and consistent details toggle.
+- Clicking empty space in the download list keeps the current selection and details pane open.
+- Inactive downloads retain the normal connection rows and columns with zero streams, received bytes, and speed. Tasks without a connection snapshot use the currently enabled adapters, keeping the panel populated while paused.
+- The bottom bar shows active downloads and total speed, including “0 downloading” and “0 KB/s” when idle. Queued link counts appear only when links are waiting; total item and selection counts are hidden.
+- Download details only appear for a single selected file in the current list. The pane can be resized with its top divider or arrow keys and scrolled. Only completed downloads use the minimal file summary; other statuses retain progress, speed history, and connection sections with status-specific messages and historical data.
+- Slow mode uses a softer hover outline and a vertical divider before the dropdown. Press feedback stays within each action; the arrow turns upward and its section stays highlighted while the speed menu is open.
+- Download resume JSON files now live in `%APPDATA%\com.conflux.desktop\resume` instead of the download folder. Existing sidecars remain resumable and move into app data when progress is saved.
+- New desktop downloads use `filename.part` until completion, then publish without replacing existing files. Temporary file locks are retried; failed publishes can resume without contacting the server, and publication interrupted by an app restart is recovered by file identity. Existing paused downloads retain their paths.
+- Downloads use a rolling per-segment speed that decays during silence, allowing idle workers to rescue crawling tails as small as one block. Streams silent for ten seconds are retried only when peers on the same adapter are still receiving; completed blocks are preserved.
+
 ## [0.5.3] - 2026-11-06
 
 ### Security
