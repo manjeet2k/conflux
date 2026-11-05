@@ -8,9 +8,15 @@ targets = [
 [advisories]
 # Vulnerabilities and unmaintained crates fail the check; yanked crates warn.
 yanked = "warn"
-# Build-time-only proc macro pulled in by Tauri's toolchain; no runtime exposure.
-# Remove once Tauri drops it.
+# Exceptions are specific maintenance advisories, not blanket vulnerability exemptions.
 ignore = [
+    # These standalone crates merged into zbus 6. Tauri plugins still require zbus 5
+    # on Linux; none are present in either Windows dependency graph. Linux exists
+    # only for core testing on WSL. Remove when the upstream plugins adopt zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: Linux-only transitive Tauri dependency; remove after upstream zbus 6 migration" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: Linux-only transitive Tauri dependency; remove after upstream zbus 6 migration" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: Linux-only transitive Tauri dependency; remove after upstream zbus 6 migration" },
+    # Build-time-only macro; remove once Tauri drops it.
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is unmaintained; transitive build-time dep of tauri" },
 ]
 
