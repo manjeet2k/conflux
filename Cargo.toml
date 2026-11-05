@@ -7,7 +7,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 authors = ["Manjeet Singh <manjeetsgh11@gmail.com>"]
 license = "MIT OR Apache-2.0"
@@ -30,3 +30,8 @@ clap = { version = "4.5", features = ["derive"] }
 local-ip-address = "0.6"
 futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
+
+# Security patches; see vendor/README.md for provenance and removal criteria.
+[patch.crates-io]
+tauri-plugin-updater = { path = "vendor/tauri-plugin-updater-2.13.1" }
+glib = { path = "vendor/glib-0.18.5" }

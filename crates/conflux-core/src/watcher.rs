@@ -384,7 +384,9 @@ mod os {
                 );
             }
 
-            let async_fd = AsyncFd::new(owned_fd)?;
+            // SAFETY: OwnedFd keeps the descriptor open and stable until AsyncFd drops it.
+            // No code closes or replaces the descriptor while it is registered.
+            let async_fd = unsafe { AsyncFd::register(owned_fd) }?;
             let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
 
             tokio::spawn(async move {

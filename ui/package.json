@@ -1,7 +1,7 @@
 {
   "name": "conflux-ui",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Conflux Desktop - Multi-Interface Download Accelerator",
   "author": "Manjeet Singh <manjeetsgh11@gmail.com>",
   "license": "MIT OR Apache-2.0",
@@ -41,6 +41,6 @@
     "@vitejs/plugin-react": "^6.1.1",
     "oxlint": "^1.81.0",
     "typescript": "~6.0.2",
-    "vite": "^8.3.0"
+    "vite": "^8.3.6"
   }
 }
