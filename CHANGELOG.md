@@ -9,6 +9,12 @@ All notable changes to Conflux are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-06
+
+### Security
+- Updated ZIP extraction, certificate validation, certificate roots, Tokio, and Vite dependencies to address reported advisories. Backported the GLib iterator pointer fix for the WSL test environment.
+- Documented specific maintenance exceptions for Linux-only upstream dependencies while retaining vulnerability checks.
+
 ### Added
 - Segmented MB/s / Mb/s speed unit selector to the left of Slow mode, with a subtle inset track, sliding glass selection matching the app's buttons, and white active label. Changes apply to all speed displays and the choice is remembered between launches; reduced-motion preferences disable the slide.
 - Slow mode on the right of the bottom bar, with download metrics grouped on the left. The turtle toggle and speed selector share one continuous button surface; the selected cap appears only in its menu (1 MB/s by default). Changes apply immediately to active and future downloads across all adapters, and the preference is saved between launches.
